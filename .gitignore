@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+
+/build/
+/.cache/
+*.o
+*.a
+*.so
+*.elf
+*.bin
+*.img
+*.cpio
+*.cpio.gz
+*.dtb
+*.dtb.dts.tmp
