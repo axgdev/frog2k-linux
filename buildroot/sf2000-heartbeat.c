@@ -63,17 +63,21 @@ static void mmio_write8(uint32_t off, uint8_t value)
 
 static void backlight_set(int on)
 {
-	uint32_t out = mmio_read32(GPIO_R_OUT_OFF);
-	uint32_t dir = mmio_read32(GPIO_R_DIR_OFF);
+	uint32_t bit = BACKLIGHT_R05;
+	uint32_t out;
+	uint32_t dir;
 
+	mmio_write8(PINMUX_R_OFF + PIN_R05, 0);
+	dir = mmio_read32(GPIO_R_DIR_OFF);
+	mmio_write32(GPIO_R_DIR_OFF, dir | bit);
+
+	out = mmio_read32(GPIO_R_OUT_OFF);
 	if (on)
-		out &= ~BACKLIGHT_R05;
+		out &= ~bit;
 	else
-		out |= BACKLIGHT_R05;
+		out |= bit;
 
 	mmio_write32(GPIO_R_OUT_OFF, out);
-	mmio_write32(GPIO_R_DIR_OFF, dir | BACKLIGHT_R05);
-	mmio_write8(PINMUX_R_OFF + PIN_R05, 0);
 }
 
 static void pulse_backlight(unsigned count, unsigned on_ms, unsigned off_ms)

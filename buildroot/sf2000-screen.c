@@ -279,7 +279,6 @@ static const uint8_t st7789_dy12_init[] = {
 static const uint8_t st7789_sf2000_init[] = {
 	0, 1, ST7789_SLPOUT,
 	99, 2, ST7789_MADCTL, 0x70,
-	0, 2, ST7789_TEON, 0x00,
 	0, 2, ST7789_COLMOD, 0x55,
 	0, 4, 0xb1, 0x40, 0x04, 0x14,
 	0, 6, 0xb2, 0x0c, 0x0c, 0x00, 0x33, 0x33,
@@ -456,16 +455,20 @@ static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
 
 static void backlight_set(int on)
 {
-	uint32_t out = mmio_read32(sysio, GPIO_R_OUT_OFF);
-	uint32_t dir = mmio_read32(sysio, GPIO_R_DIR_OFF);
+	uint32_t bit = BACKLIGHT_R05;
+	uint32_t out;
+	uint32_t dir;
 
+	mmio_write8(sysio, PINMUX_R_OFF + PIN_R05, PINMUX_GPIO);
+	dir = mmio_read32(sysio, GPIO_R_DIR_OFF);
+	mmio_write32(sysio, GPIO_R_DIR_OFF, dir | bit);
+
+	out = mmio_read32(sysio, GPIO_R_OUT_OFF);
 	if (on)
-		out &= ~BACKLIGHT_R05;
+		out &= ~bit;
 	else
-		out |= BACKLIGHT_R05;
+		out |= bit;
 	mmio_write32(sysio, GPIO_R_OUT_OFF, out);
-	mmio_write32(sysio, GPIO_R_DIR_OFF, dir | BACKLIGHT_R05);
-	mmio_write8(sysio, PINMUX_R_OFF + PIN_R05, 0);
 }
 
 static int publish_marker(const char *path, const char *text)
@@ -571,6 +574,27 @@ static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
 	}
 	backlight_set(1);
 	status_led_set(0);
+}
+
+static void startup_backlight_diagnostic(void)
+{
+	log_line("sf2000-screen: startup backlight off/on diagnostic begin\n");
+	append_file_log("sf2000-screen: startup backlight off/on diagnostic begin\n");
+
+	backlight_set(0);
+	status_led_set(0);
+	sleep_ms(4000);
+	backlight_set(1);
+	status_led_set(1);
+	sleep_ms(3000);
+	backlight_set(0);
+	status_led_set(0);
+	sleep_ms(4000);
+	backlight_set(1);
+	status_led_set(0);
+
+	log_line("sf2000-screen: startup backlight off/on diagnostic end\n");
+	append_file_log("sf2000-screen: startup backlight off/on diagnostic end\n");
 }
 
 static void panel_control_pinmux(void)
@@ -769,18 +793,6 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 	}
 }
 
-static void panel_set_brightness(uint8_t brightness, uint8_t cabc)
-{
-	if (!panel_enabled)
-		return;
-	panel_cmd(0x53);
-	panel_data(0x2c);
-	panel_cmd(0x51);
-	panel_data(brightness);
-	panel_cmd(0x55);
-	panel_data(cabc);
-}
-
 static void panel_set_madctl(uint8_t madctl)
 {
 	if (!panel_enabled)
@@ -804,9 +816,8 @@ static int panel_init_variant(const struct panel_variant *variant)
 	sleep_ms(120);
 	panel_id = panel_read_id();
 	panel_apply_init_sequence(variant->init);
-	panel_set_brightness(0xff, 0x00);
-	panel_restart_frame();
 	panel_cmd(ST7789_DISPON);
+	panel_restart_frame();
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: panel init done id=0x%06x init=%s\n",
@@ -1150,10 +1161,8 @@ int main(void)
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 
-	backlight_set(1);
 	publish_marker("/run/sf2000-screen-own-backlight", "owned\n");
-	sleep_ms(1300);
-	diagnostic_pulse(5, 1000, 1000);
+	startup_backlight_diagnostic();
 
 	build_gma_descriptor();
 	panel_init_variant(first_variant);
