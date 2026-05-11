@@ -1,0 +1,370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 21:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace exec handoff path
+
+The hardware reaches run-init-before but does not return from kernel_execve
+and does not enter the first userspace syscall. Add granular breadcrumbs
+through kernel_execve, binfmt dispatch, ELF loading, and MIPS start_thread
+to locate whether the stop is file exec, ELF mapping, or return-to-user setup.
+
+--- a/fs/exec.c	2021-05-14 08:53:07.000000000 +0000
++++ b/fs/exec.c	2026-05-11 18:12:04.806131005 +0000
+@@ -75,6 +75,26 @@
+ 
+ #include <trace/events/sched.h>
+ 
++#ifdef CONFIG_MIPS
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
++static void sf2000_exec_mark(const char *name)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 7, 0);
++}
++
++static void sf2000_exec_value(const char *name, unsigned int value)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 7, value);
++}
++#else
++static inline void sf2000_exec_mark(const char *name) { }
++static inline void sf2000_exec_value(const char *name, unsigned int value) { }
++#endif
++
+ static int bprm_creds_from_file(struct linux_binprm *bprm);
+ 
+ int suid_dumpable = 0;
+@@ -1701,11 +1721,18 @@
+ 	struct linux_binfmt *fmt;
+ 	int retval;
+ 
++	sf2000_exec_value("exec-search-entry",
++		((unsigned int)bprm->buf[0] << 24) |
++		((unsigned int)bprm->buf[1] << 16) |
++		((unsigned int)bprm->buf[2] << 8) |
++		(unsigned int)bprm->buf[3]);
+ 	retval = prepare_binprm(bprm);
++	sf2000_exec_value("exec-after-prepare", (unsigned int)retval);
+ 	if (retval < 0)
+ 		return retval;
+ 
+ 	retval = security_bprm_check(bprm);
++	sf2000_exec_value("exec-after-security", (unsigned int)retval);
+ 	if (retval)
+ 		return retval;
+ 
+@@ -1717,7 +1744,9 @@
+ 			continue;
+ 		read_unlock(&binfmt_lock);
+ 
++		sf2000_exec_value("exec-before-loadbin", (unsigned int)fmt->load_binary);
+ 		retval = fmt->load_binary(bprm);
++		sf2000_exec_value("exec-after-loadbin", (unsigned int)retval);
+ 
+ 		read_lock(&binfmt_lock);
+ 		put_binfmt(fmt);
+@@ -1746,6 +1775,7 @@
+ 	pid_t old_pid, old_vpid;
+ 	int ret, depth;
+ 
++	sf2000_exec_mark("exec-binprm-entry");
+ 	/* Need to fetch pid before load_binary changes it */
+ 	old_pid = current->pid;
+ 	rcu_read_lock();
+@@ -1758,7 +1788,9 @@
+ 		if (depth > 5)
+ 			return -ELOOP;
+ 
++		sf2000_exec_value("exec-binprm-depth", (unsigned int)depth);
+ 		ret = search_binary_handler(bprm);
++		sf2000_exec_value("exec-binprm-search-ret", (unsigned int)ret);
+ 		if (ret < 0)
+ 			return ret;
+ 		if (!bprm->interpreter)
+@@ -1783,6 +1815,7 @@
+ 	trace_sched_process_exec(current, old_pid, bprm);
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
++	sf2000_exec_mark("exec-binprm-done");
+ 	return 0;
+ }
+ 
+@@ -1795,7 +1828,9 @@
+ 	struct file *file;
+ 	int retval;
+ 
++	sf2000_exec_mark("bprm-exec-entry");
+ 	retval = prepare_bprm_creds(bprm);
++	sf2000_exec_value("bprm-after-creds", (unsigned int)retval);
+ 	if (retval)
+ 		return retval;
+ 
+@@ -1804,10 +1839,13 @@
+ 
+ 	file = do_open_execat(fd, filename, flags);
+ 	retval = PTR_ERR(file);
++	sf2000_exec_value("bprm-after-open", IS_ERR(file) ?
++		(unsigned int)retval : (unsigned int)file);
+ 	if (IS_ERR(file))
+ 		goto out_unmark;
+ 
+ 	sched_exec();
++	sf2000_exec_mark("bprm-after-sched");
+ 
+ 	bprm->file = file;
+ 	/*
+@@ -1824,14 +1862,18 @@
+ 
+ 	/* Set the unchanging part of bprm->cred */
+ 	retval = security_bprm_creds_for_exec(bprm);
++	sf2000_exec_value("bprm-after-creds-exec", (unsigned int)retval);
+ 	if (retval)
+ 		goto out;
+ 
++	sf2000_exec_mark("bprm-before-binprm");
+ 	retval = exec_binprm(bprm);
++	sf2000_exec_value("bprm-after-binprm", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out;
+ 
+ 	/* execve succeeded */
++	sf2000_exec_mark("bprm-exec-success");
+ 	current->fs->in_exec = 0;
+ 	current->in_execve = 0;
+ 	rseq_execve(current);
+@@ -1933,48 +1975,63 @@
+ 	int fd = AT_FDCWD;
+ 	int retval;
+ 
++	sf2000_exec_value("kexec-entry", (unsigned int)kernel_filename);
+ 	filename = getname_kernel(kernel_filename);
++	sf2000_exec_value("kexec-after-getname", IS_ERR(filename) ?
++		(unsigned int)PTR_ERR(filename) : (unsigned int)filename);
+ 	if (IS_ERR(filename))
+ 		return PTR_ERR(filename);
+ 
+ 	bprm = alloc_bprm(fd, filename);
++	sf2000_exec_value("kexec-after-alloc-bprm", IS_ERR(bprm) ?
++		(unsigned int)PTR_ERR(bprm) : (unsigned int)bprm);
+ 	if (IS_ERR(bprm)) {
+ 		retval = PTR_ERR(bprm);
+ 		goto out_ret;
+ 	}
+ 
+ 	retval = count_strings_kernel(argv);
++	sf2000_exec_value("kexec-after-argc", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 	bprm->argc = retval;
+ 
+ 	retval = count_strings_kernel(envp);
++	sf2000_exec_value("kexec-after-envc", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 	bprm->envc = retval;
+ 
+ 	retval = bprm_stack_limits(bprm);
++	sf2000_exec_value("kexec-after-stack-limits", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 
+ 	retval = copy_string_kernel(bprm->filename, bprm);
++	sf2000_exec_value("kexec-after-copy-file", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 	bprm->exec = bprm->p;
+ 
+ 	retval = copy_strings_kernel(bprm->envc, envp, bprm);
++	sf2000_exec_value("kexec-after-copy-env", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 
+ 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
++	sf2000_exec_value("kexec-after-copy-argv", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free;
+ 
++	sf2000_exec_mark("kexec-before-bprm-exec");
+ 	retval = bprm_execve(bprm, fd, filename, 0);
++	sf2000_exec_value("kexec-after-bprm-exec", (unsigned int)retval);
+ out_free:
+ 	free_bprm(bprm);
++	sf2000_exec_mark("kexec-after-free-bprm");
+ out_ret:
+ 	putname(filename);
++	sf2000_exec_value("kexec-return", (unsigned int)retval);
+ 	return retval;
+ }
+ 
+--- a/fs/binfmt_elf.c	2021-05-14 08:53:07.000000000 +0000
++++ b/fs/binfmt_elf.c	2026-05-11 18:12:32.862201003 +0000
+@@ -49,6 +49,26 @@
+ #include <asm/param.h>
+ #include <asm/page.h>
+ 
++#ifdef CONFIG_MIPS
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
++static void sf2000_elf_mark(const char *name)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 8, 0);
++}
++
++static void sf2000_elf_value(const char *name, unsigned int value)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 8, value);
++}
++#else
++static inline void sf2000_elf_mark(const char *name) { }
++static inline void sf2000_elf_value(const char *name, unsigned int value) { }
++#endif
++
+ #ifndef ELF_COMPAT
+ #define ELF_COMPAT 0
+ #endif
+@@ -843,6 +863,7 @@
+ 	struct mm_struct *mm;
+ 	struct pt_regs *regs;
+ 
++	sf2000_elf_value("elf-entry", (unsigned int)elf_ex->e_entry);
+ 	retval = -ENOEXEC;
+ 	/* First of all, some simple consistency checks */
+ 	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
+@@ -858,6 +879,8 @@
+ 		goto out;
+ 
+ 	elf_phdata = load_elf_phdrs(elf_ex, bprm->file);
++	sf2000_elf_value("elf-after-phdrs", elf_phdata ?
++		(unsigned int)elf_phdata : (unsigned int)-ENOMEM);
+ 	if (!elf_phdata)
+ 		goto out;
+ 
+@@ -983,6 +1006,7 @@
+ 
+ 	retval = parse_elf_properties(interpreter ?: bprm->file,
+ 				      elf_property_phdata, &arch_state);
++	sf2000_elf_value("elf-after-properties", (unsigned int)retval);
+ 	if (retval)
+ 		goto out_free_dentry;
+ 
+@@ -994,11 +1018,14 @@
+ 	retval = arch_check_elf(elf_ex,
+ 				!!interpreter, interp_elf_ex,
+ 				&arch_state);
++	sf2000_elf_value("elf-after-arch-check", (unsigned int)retval);
+ 	if (retval)
+ 		goto out_free_dentry;
+ 
+ 	/* Flush all traces of the currently running executable */
++	sf2000_elf_mark("elf-before-begin-new");
+ 	retval = begin_new_exec(bprm);
++	sf2000_elf_value("elf-after-begin-new", (unsigned int)retval);
+ 	if (retval)
+ 		goto out_free_dentry;
+ 
+@@ -1012,11 +1039,13 @@
+ 		current->flags |= PF_RANDOMIZE;
+ 
+ 	setup_new_exec(bprm);
++	sf2000_elf_mark("elf-after-setup-new");
+ 
+ 	/* Do this so that we can load the interpreter, if need be.  We will
+ 	   change some of these later */
+ 	retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
+ 				 executable_stack);
++	sf2000_elf_value("elf-after-arg-pages", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out_free_dentry;
+ 	
+@@ -1040,6 +1069,7 @@
+ 		if (elf_ppnt->p_type != PT_LOAD)
+ 			continue;
+ 
++		sf2000_elf_value("elf-before-map", (unsigned int)elf_ppnt->p_vaddr);
+ 		if (unlikely (elf_brk > elf_bss)) {
+ 			unsigned long nbyte;
+ 	            
+@@ -1140,6 +1170,7 @@
+ 
+ 		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
+ 				elf_prot, elf_flags, total_size);
++		sf2000_elf_value("elf-after-map", (unsigned int)error);
+ 		if (BAD_ADDR(error)) {
+ 			retval = IS_ERR((void *)error) ?
+ 				PTR_ERR((void*)error) : -EINVAL;
+@@ -1204,6 +1235,7 @@
+ 	 * up getting placed where the bss needs to go.
+ 	 */
+ 	retval = set_brk(elf_bss, elf_brk, bss_prot);
++	sf2000_elf_value("elf-after-set-brk", (unsigned int)retval);
+ 	if (retval)
+ 		goto out_free_dentry;
+ 	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
+@@ -1250,12 +1282,14 @@
+ 
+ #ifdef ARCH_HAS_SETUP_ADDITIONAL_PAGES
+ 	retval = ARCH_SETUP_ADDITIONAL_PAGES(bprm, elf_ex, !!interpreter);
++	sf2000_elf_value("elf-after-add-pages", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out;
+ #endif /* ARCH_HAS_SETUP_ADDITIONAL_PAGES */
+ 
+ 	retval = create_elf_tables(bprm, elf_ex,
+ 			  load_addr, interp_load_addr, e_entry);
++	sf2000_elf_value("elf-after-tables", (unsigned int)retval);
+ 	if (retval < 0)
+ 		goto out;
+ 
+@@ -1310,7 +1344,10 @@
+ #endif
+ 
+ 	finalize_exec(bprm);
++	sf2000_elf_mark("elf-after-finalize");
++	sf2000_elf_value("elf-before-start-thread", (unsigned int)elf_entry);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
++	sf2000_elf_value("elf-after-start-thread", (unsigned int)bprm->p);
+ 	retval = 0;
+ out:
+ 	return retval;
+--- a/arch/mips/kernel/process.c	2021-05-14 08:53:07.000000000 +0000
++++ b/arch/mips/kernel/process.c	2026-05-11 18:12:41.042201007 +0000
+@@ -49,10 +49,20 @@
+ asmlinkage void ret_from_fork(void);
+ asmlinkage void ret_from_kernel_thread(void);
+ 
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
+ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ {
+ 	unsigned long status;
+ 
++	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++		sf2000_progress_mark("mips-start-thread-pc", 9, pc);
++		sf2000_progress_mark("mips-start-thread-sp", 9, sp);
++		sf2000_progress_mark("mips-start-thread-status-before", 9,
++			regs->cp0_status);
++	}
++
+ 	/* New thread loses kernel privileges. */
+ 	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_CU2|ST0_FR|KU_MASK);
+ 	status |= KU_USER;
+@@ -66,6 +76,9 @@
+ 	init_dsp();
+ 	regs->cp0_epc = pc;
+ 	regs->regs[29] = sp;
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark("mips-start-thread-status-after", 9,
++			regs->cp0_status);
+ }
+ 
+ void exit_thread(struct task_struct *tsk)
+
+-- 
+2.50.1
