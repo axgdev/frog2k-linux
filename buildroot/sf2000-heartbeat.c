@@ -128,6 +128,12 @@ int main(void)
 	pulse_backlight(3, 180, 180);
 
 	while (!stopping) {
+		if (access("/run/sf2000-screen-ready", F_OK) == 0) {
+			backlight_set(1);
+			sleep_ms(2000);
+			continue;
+		}
+
 		backlight_set(1);
 		sleep_ms(1200);
 		backlight_set(0);

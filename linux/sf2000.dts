@@ -50,6 +50,17 @@
 		reg = <0x00000000 0x08000000>;
 	};
 
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		gma_scratch: framebuffer@f00000 {
+			reg = <0x00f00000 0x00100000>;
+			no-map;
+		};
+	};
+
 	cpuintc: interrupt-controller {
 		#address-cells = <0>;
 		#interrupt-cells = <1>;

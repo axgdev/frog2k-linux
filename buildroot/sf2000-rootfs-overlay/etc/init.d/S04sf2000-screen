@@ -1,0 +1,14 @@
+#!/bin/sh
+
+case "$1" in
+	start)
+		[ "${SF2000_SCREEN:-1}" = 0 ] && exit 0
+		echo "Starting sf2000-screen: "
+		/usr/sbin/sf2000-screen &
+		echo "OK"
+		;;
+	stop)
+		killall sf2000-screen 2>/dev/null || true
+		rm -f /run/sf2000-screen-ready
+		;;
+esac

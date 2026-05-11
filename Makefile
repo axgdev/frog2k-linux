@@ -38,6 +38,8 @@ BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
+BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
+BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -85,7 +87,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
 	smoke-linux-buildroot-asd run-linux-buildroot-rom \
-	smoke-linux-buildroot-rom run-linux-input smoke-linux-input \
+	smoke-linux-buildroot-rom run-linux-buildroot-display \
+	smoke-linux-buildroot-display run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input clean
 
 all: status
@@ -184,7 +187,12 @@ $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_CC) Makefile
 	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
 	'$(BUILDROOT_STRIP)' '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_OVERLAY_FILES)
+$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_CC) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_STRIP)' '$@'
+
+$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_OVERLAY_FILES)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
@@ -472,6 +480,8 @@ smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-asd
 	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
@@ -481,6 +491,29 @@ smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
 	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-rom.log
+
+run-linux-buildroot-display: qemu
+	$(MAKE) ROOTFS=buildroot linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots/linux-buildroot-gma
+	rm -f '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-*.ppm \
+		'$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+	SF2000_TRACE_GMA=1 \
+	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-buildroot-gma \
+	SF2000_GMA_DUMP_LIMIT=8 \
+	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-display.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-display.console 2>&1 || test $$? -eq 124
+
+smoke-linux-buildroot-display: run-linux-buildroot-display
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-display.console
+	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel-pixel n=1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
 
 run-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot run-linux-input
