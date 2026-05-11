@@ -34,6 +34,8 @@ BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
 BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
+BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
+BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -169,7 +171,12 @@ $(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) Makefile
 		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
 	'$(STRIP_MIPS)' '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_OVERLAY_FILES)
+$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_CC) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_STRIP)' '$@'
+
+$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_OVERLAY_FILES)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
@@ -253,7 +260,10 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(ROOTFS_CPIO) Makefile
 		--disable SYSVIPC \
 		--disable POSIX_MQUEUE \
 		--disable KEYS \
-		--disable INPUT \
+		--enable INPUT \
+		--enable INPUT_EVDEV \
+		--enable INPUT_MISC \
+		--enable INPUT_UINPUT \
 		--disable HID \
 		--disable USB_SUPPORT \
 		--disable USB \

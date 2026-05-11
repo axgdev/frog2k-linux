@@ -1,0 +1,12 @@
+#!/bin/sh
+
+case "$1" in
+	start)
+		echo "Starting sf2000-pad: "
+		SF2000_PAD_PROFILE="${SF2000_PAD_PROFILE:-sf2000}" /usr/sbin/sf2000-pad &
+		echo "OK"
+		;;
+	stop)
+		killall sf2000-pad 2>/dev/null || true
+		;;
+esac
