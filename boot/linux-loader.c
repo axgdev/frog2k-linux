@@ -54,7 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-11 direct-entry-install"
+#define LOADER_BUILD_TAG "2026-05-11 prime-entry-tlb"
 
 typedef unsigned long long u64;
 
