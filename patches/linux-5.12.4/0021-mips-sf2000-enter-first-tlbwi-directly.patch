@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000021 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 14:20:00 +0000
+Subject: [PATCH] mips: sf2000: enter first TLBWI directly
+
+The physical unit still reaches the "wired skip/read" diagnostic and then
+does not show the following marker. At this point the following generated code
+is another diagnostic call before any TLB write, so remove that call boundary
+from the SF2000 early flush path. The next visible TLB marker now means the
+first indexed TLB write has completed.
+
+Also use low kuseg VPN2 values for the SF2000 invalid entries instead of
+CKSEG0 VPN2 values. These entries have invalid EntryLo values either way, but
+low VPN2 values avoid relying on this core accepting TLB EntryHi values from an
+unmapped segment during the bring-up flush.
+---
+ arch/mips/mm/tlb-r4k.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index be2a375cc5dc..a727fbe8376a 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -184,9 +184,8 @@ void local_flush_tlb_all(void)
+ 	sf2000_tlb_tick("tlb-flush-after-wired-read");
+ 
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
+-		sf2000_tlb_tick("tlb-flush-before-first-write");
+ 		while (entry < 16) {
+-			write_c0_entryhi(CKSEG0 + (entry << (PAGE_SHIFT + 1)));
++			write_c0_entryhi(entry << (PAGE_SHIFT + 1));
+ 			write_c0_index(entry);
+ 			write_c0_entrylo0(0);
+ 			write_c0_entrylo1(0);
+-- 
+2.50.1
