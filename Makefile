@@ -36,6 +36,8 @@ BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
+BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
+BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -177,7 +179,12 @@ $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_CC) Makefile
 	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
 	'$(BUILDROOT_STRIP)' '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_OVERLAY_FILES)
+$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_CC) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_STRIP)' '$@'
+
+$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_OVERLAY_FILES)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
@@ -464,6 +471,7 @@ run-linux-buildroot-asd:
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-asd
+	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
@@ -472,6 +480,7 @@ run-linux-buildroot-rom:
 smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
+	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-rom.log
 
 run-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot run-linux-input

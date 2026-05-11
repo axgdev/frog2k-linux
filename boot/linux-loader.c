@@ -24,6 +24,11 @@ typedef unsigned long uintptr;
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
 #define CACHE_LINE 16u
+#define PINMUX_R05 0xb88004e5u
+#define GPIO_R_OUT 0xb88000f4u
+#define GPIO_R_DIR 0xb88000f8u
+#define BACKLIGHT_R05 (1u << 5)
+#define BACKLIGHT_PULSE_DELAY 50000000u
 
 struct elf32_ehdr {
 	u8 e_ident[EI_NIDENT];
@@ -87,6 +92,50 @@ static void uart_hex(u32 value)
 	uart_puts("0x");
 	for (shift = 28; shift >= 0; shift -= 4)
 		uart_putc(digits[(value >> shift) & 0xf]);
+}
+
+static u32 mmio_read32(uintptr addr)
+{
+	return *(volatile u32 *)addr;
+}
+
+static void mmio_write32(uintptr addr, u32 value)
+{
+	*(volatile u32 *)addr = value;
+}
+
+static void mmio_write8(uintptr addr, u8 value)
+{
+	*(volatile u8 *)addr = value;
+}
+
+static void delay_cycles(u32 count)
+{
+	while (count-- != 0)
+		__asm__ volatile("nop");
+}
+
+static void backlight_set(int on)
+{
+	u32 out = mmio_read32(GPIO_R_OUT);
+	u32 dir = mmio_read32(GPIO_R_DIR);
+
+	if (on)
+		out &= ~BACKLIGHT_R05;
+	else
+		out |= BACKLIGHT_R05;
+
+	mmio_write32(GPIO_R_OUT, out);
+	mmio_write32(GPIO_R_DIR, dir | BACKLIGHT_R05);
+	mmio_write8(PINMUX_R05, 0);
+}
+
+static void backlight_loader_mark(void)
+{
+	backlight_set(0);
+	delay_cycles(BACKLIGHT_PULSE_DELAY);
+	backlight_set(1);
+	delay_cycles(BACKLIGHT_PULSE_DELAY);
 }
 
 static void clear_bss(void)
@@ -310,6 +359,7 @@ void linux_loader_main(void)
 
 	clear_bss();
 	disable_interrupts();
+	backlight_loader_mark();
 
 	kernel_size = (usize)(linux_vmlinux_end - linux_vmlinux_start);
 	dtb_size = (usize)(linux_dtb_end - linux_dtb_start);
@@ -350,6 +400,7 @@ void linux_loader_main(void)
 	cache_flush_range(load_min, (usize)(load_max - load_min));
 	cache_flush_range(dtb_dest, dtb_size);
 	disable_interrupts();
+	backlight_set(1);
 	jump_to_kernel(eh->e_entry, dtb_dest);
 
 	for (;;)
