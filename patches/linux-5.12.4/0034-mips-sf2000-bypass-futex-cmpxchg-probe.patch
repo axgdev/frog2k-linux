@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 19:10:00 +0000
+Subject: [PATCH] mips: sf2000: bypass futex cmpxchg probe
+
+The SF2000 hardware log still stops at futex_init() even after the forced CPU
+profile stopped advertising MIPS_CPU_LLSC. On MIPS the cpu_has_llsc helper can
+still resolve true from the selected MIPS32r1 ISA level, so
+futex_detect_cmpxchg() continues to run the NULL user-pointer LL/SC probe.
+
+That probe relies on a recoverable exception-table fault path. The current
+SF2000 bring-up is not ready for that path and hangs before returning from the
+initcall. Skip cmpxchg detection on SF2000 for now. This leaves
+futex_cmpxchg_enabled disabled, which avoids the broken probe and lets boot
+continue while the exception/TLB behaviour is investigated separately.
+---
+ kernel/futex.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/kernel/futex.c b/kernel/futex.c
+index ae97e3d3f..d6c7a7418 100644
+--- a/kernel/futex.c
++++ b/kernel/futex.c
+@@ -3995,6 +3995,9 @@ static void __init futex_detect_cmpxchg(void)
+ #ifndef CONFIG_HAVE_FUTEX_CMPXCHG
+ 	u32 curval;
+ 
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
+ 	/*
+ 	 * This will fail and we want it. Some arch implementations do
+ 	 * runtime detection of the futex_atomic_cmpxchg_inatomic()
+-- 
+2.50.1
+

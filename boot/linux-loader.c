@@ -54,6 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
+#define LOADER_BUILD_TAG "2026-05-11 futex-bypass"
 
 typedef unsigned long long u64;
 
@@ -570,6 +571,9 @@ static void bootlog_init(void)
 	log_fat_lba = 0xffffffffu;
 	log_sector_index = 0xffffffffu;
 	bootlog_puts("sf2000-linux loader bootlog\n");
+	bootlog_puts("loader build=");
+	bootlog_puts(LOADER_BUILD_TAG);
+	bootlog_puts("\n");
 	bootlog_dump_previous_progress();
 	bootlog_flush();
 }
