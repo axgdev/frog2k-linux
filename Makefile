@@ -83,7 +83,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
 	smoke-linux-buildroot-asd run-linux-buildroot-rom \
-	smoke-linux-buildroot-rom clean
+	smoke-linux-buildroot-rom run-linux-input smoke-linux-input \
+	run-linux-buildroot-input smoke-linux-buildroot-input clean
 
 all: status
 
@@ -427,6 +428,20 @@ smoke-linux-asd: run-linux-asd
 	grep -q 'sf2000: uart: .*linux-loader: jump entry=' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q '$(SMOKE_INIT_PATTERN)' '$(BUILD_DIR)'/logs/linux-asd.log
 
+run-linux-input: qemu linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 3; printf 'sendkey right 1000\n'; sleep 2; \
+		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-input.log \
+		> '$(BUILD_DIR)'/logs/linux-input.console 2>&1
+
+smoke-linux-input: run-linux-input
+	grep -q 'sf2000-pad: userspace input bridge ready' '$(BUILD_DIR)'/logs/linux-input.log
+	grep -q 'sf2000-pad: state=.*RIGHT' '$(BUILD_DIR)'/logs/linux-input.log
+	grep -q 'sf2000-pad: state=.*A' '$(BUILD_DIR)'/logs/linux-input.log
+
 run-linux-rom: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -457,6 +472,12 @@ run-linux-buildroot-rom:
 smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
+
+run-linux-buildroot-input:
+	$(MAKE) ROOTFS=buildroot run-linux-input
+
+smoke-linux-buildroot-input:
+	$(MAKE) ROOTFS=buildroot smoke-linux-input
 
 clean:
 	rm -rf '$(BUILD_DIR)'
