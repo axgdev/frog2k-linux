@@ -1,0 +1,190 @@
+From 0000000000000000000000000000000000000016 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 10:45:00 +0000
+Subject: [PATCH] mips: sf2000: add early GMA screen markers
+
+Blink counting is error-prone on physical units. The ROM has already brought
+up enough display state on many boards for GMA presents to be visible, and the
+Linux DT reserves the 0x00f00000 framebuffer diagnostic area. Use that memory
+from kseg1 during the existing visible stage/tick calls and present a simple
+RGB565 marker through the GMA doorbell.
+
+The screen marker intentionally uses only large seven-segment digits:
+kind 1 means a counted stage, kind 2 means a single tick, the large center
+number is the monotonic visible-event number, and the lower-right number is the
+stage pulse count for kind 1.
+---
+ arch/mips/kernel/setup.c | 138 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 138 insertions(+)
+
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index c395ef1a03fb..57d35b34d77a 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -90,6 +90,21 @@
+ #define SF2000_TICK_OFF_TICKS 0x03000000u
+ #define SF2000_TICK_GAP_TICKS 0x08000000u
+ #define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
++#define SF2000_GMA_KSEG1 ((volatile unsigned char *)CKSEG1ADDR(0x18808000))
++#define SF2000_GMA_DESC_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x00f00000))
++#define SF2000_GMA_FB_KSEG1 ((volatile unsigned short *)CKSEG1ADDR(0x00f10000))
++#define SF2000_GMA_CTL 0x300
++#define SF2000_GMA_DMBA 0x304
++#define SF2000_GMA_K 0x308
++#define SF2000_GMA_MASK 0x350
++#define SF2000_GMA_LINEBUF 0x3b8
++#define SF2000_GMA_DESC_PHYS 0x00f00000u
++#define SF2000_GMA_FB_PHYS 0x00f10000u
++#define SF2000_SCREEN_W 320
++#define SF2000_SCREEN_H 240
++#define SF2000_SCREEN_PITCH (SF2000_SCREEN_W * 2)
++
++static unsigned int sf2000_screen_seq;
+ 
+ static unsigned int sf2000_cp0_count(void)
+ {
+@@ -135,6 +150,127 @@ static void sf2000_write8(unsigned int off, unsigned char value)
+ 	*(volatile unsigned char *)(SF2000_SYSIO_KSEG1 + off) = value;
+ }
+ 
++static void sf2000_gma_write32(unsigned int off, unsigned int value)
++{
++	*(volatile unsigned int *)(SF2000_GMA_KSEG1 + off) = value;
++}
++
++static unsigned int sf2000_gma_read32(unsigned int off)
++{
++	return *(volatile unsigned int *)(SF2000_GMA_KSEG1 + off);
++}
++
++static void sf2000_screen_fill(unsigned short color)
++{
++	volatile unsigned short *fb = SF2000_GMA_FB_KSEG1;
++	unsigned int i;
++
++	for (i = 0; i < SF2000_SCREEN_W * SF2000_SCREEN_H; i++)
++		fb[i] = color;
++}
++
++static void sf2000_screen_rect(unsigned int x, unsigned int y,
++	unsigned int w, unsigned int h, unsigned short color)
++{
++	volatile unsigned short *fb = SF2000_GMA_FB_KSEG1;
++	unsigned int yy;
++
++	if (x >= SF2000_SCREEN_W || y >= SF2000_SCREEN_H)
++		return;
++	if (x + w > SF2000_SCREEN_W)
++		w = SF2000_SCREEN_W - x;
++	if (y + h > SF2000_SCREEN_H)
++		h = SF2000_SCREEN_H - y;
++
++	for (yy = 0; yy < h; yy++) {
++		unsigned int xx;
++		volatile unsigned short *line = fb + (y + yy) * SF2000_SCREEN_W + x;
++
++		for (xx = 0; xx < w; xx++)
++			line[xx] = color;
++	}
++}
++
++static void sf2000_screen_digit(unsigned int x, unsigned int y,
++	unsigned int digit, unsigned short color, unsigned short dim,
++	unsigned int scale)
++{
++	static const unsigned char segments[16] = {
++		0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07,
++		0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71,
++	};
++	unsigned char bits = segments[digit & 0xf];
++	unsigned int t = scale;
++	unsigned int l = 6 * scale;
++	unsigned int v = 10 * scale;
++
++	sf2000_screen_rect(x, y, l, t, (bits & 0x01) ? color : dim);
++	sf2000_screen_rect(x + l, y, t, v, (bits & 0x02) ? color : dim);
++	sf2000_screen_rect(x + l, y + v + t, t, v, (bits & 0x04) ? color : dim);
++	sf2000_screen_rect(x, y + 2 * v + 2 * t, l, t,
++		(bits & 0x08) ? color : dim);
++	sf2000_screen_rect(x - t, y + v + t, t, v,
++		(bits & 0x10) ? color : dim);
++	sf2000_screen_rect(x - t, y, t, v, (bits & 0x20) ? color : dim);
++	sf2000_screen_rect(x, y + v + t, l, t,
++		(bits & 0x40) ? color : dim);
++}
++
++static void sf2000_screen_present(void)
++{
++	volatile unsigned int *desc = SF2000_GMA_DESC_KSEG1;
++	unsigned int ctl;
++
++	desc[0] = (6u << 4) | (1u << 8) | (32u << 16) | (170u << 24);
++	desc[1] = 0;
++	desc[2] = ((SF2000_SCREEN_W - 1u) << 16);
++	desc[3] = ((SF2000_SCREEN_H - 1u) << 16);
++	desc[4] = (SF2000_SCREEN_H << 16) | SF2000_SCREEN_W;
++	desc[5] = 0xffu | (SF2000_SCREEN_PITCH << 16);
++	desc[6] = 0;
++	desc[7] = SF2000_GMA_FB_PHYS;
++
++	sf2000_write32(0x094, sf2000_read32(0x094) | (1u << 16));
++	sf2000_gma_write32(SF2000_GMA_MASK, 1);
++	sf2000_gma_write32(SF2000_GMA_LINEBUF, 0x0a);
++	sf2000_gma_write32(SF2000_GMA_K, 0xff);
++	ctl = sf2000_gma_read32(SF2000_GMA_CTL) | 1u;
++	sf2000_gma_write32(SF2000_GMA_CTL, ctl);
++	sf2000_gma_write32(SF2000_GMA_DMBA, SF2000_GMA_DESC_PHYS);
++	sf2000_gma_write32(SF2000_GMA_MASK, 0);
++	sf2000_gma_write32(SF2000_GMA_MASK, 1);
++	sf2000_gma_write32(SF2000_GMA_CTL, ctl & ~(1u << 19));
++	sf2000_gma_write32(SF2000_GMA_MASK, 0);
++	sf2000_gma_write32(SF2000_GMA_MASK, 1);
++	sf2000_gma_write32(SF2000_GMA_CTL, (ctl & ~(1u << 19)) | (1u << 18));
++	sf2000_gma_write32(SF2000_GMA_MASK, 0);
++}
++
++static void sf2000_screen_mark(unsigned int kind, unsigned int detail)
++{
++	unsigned int seq = ++sf2000_screen_seq;
++	unsigned short bg = kind == 1 ? 0x0186 : 0x2808;
++	unsigned short fg = kind == 1 ? 0xffe0 : 0x07ff;
++	unsigned short dim = kind == 1 ? 0x03ef : 0x4924;
++	unsigned int i;
++
++	sf2000_screen_fill(bg);
++	sf2000_screen_rect(0, 0, SF2000_SCREEN_W, 18, fg);
++	sf2000_screen_rect(0, 222, SF2000_SCREEN_W, 18, fg);
++	for (i = 0; i < 8; i++)
++		sf2000_screen_rect(12 + i * 38, 196, 26, 16,
++			(i & 1) ? 0xf800 : ((i & 2) ? 0x07e0 : 0x001f));
++
++	sf2000_screen_digit(26, 36, kind, 0xffff, dim, 4);
++	sf2000_screen_digit(104, 54, (seq / 100) % 10, fg, dim, 7);
++	sf2000_screen_digit(168, 54, (seq / 10) % 10, fg, dim, 7);
++	sf2000_screen_digit(232, 54, seq % 10, fg, dim, 7);
++	sf2000_screen_digit(210, 154, (detail / 10) % 10, 0xffff, dim, 4);
++	sf2000_screen_digit(252, 154, detail % 10, 0xffff, dim, 4);
++
++	sf2000_screen_present();
++}
++
+ static void sf2000_status_led_set(int on)
+ {
+ 	unsigned int out;
+@@ -174,6 +310,7 @@ void sf2000_visible_stage(const char *name, unsigned int pulses)
+ 	unsigned int i;
+ 
+ 	pr_info("sf2000: visible stage %s pulses=%u\n", name, pulses);
++	sf2000_screen_mark(1, pulses);
+ 	sf2000_backlight_set(1);
+ 	sf2000_status_led_set(0);
+ 	sf2000_stage_delay(SF2000_STAGE_GAP_TICKS);
+@@ -198,5 +335,6 @@ void sf2000_visible_tick(const char *name)
+ {
+ 	pr_info("sf2000: visible tick %s\n", name);
++	sf2000_screen_mark(2, 0);
+ 	sf2000_backlight_set(1);
+ 	sf2000_status_led_set(0);
+ 	sf2000_stage_delay(SF2000_TICK_GAP_TICKS);
+-- 
+2.50.1

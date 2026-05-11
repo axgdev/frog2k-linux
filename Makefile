@@ -516,6 +516,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  2 pulses: loader is jumping to the kernel\n'; \
 		printf '  log.txt records CP0 EBase before/after the loader normalizes it for Linux.\n'; \
 		printf '  log.txt also records the handoff words used to decide whether ROM helpers are present.\n'; \
+		printf '  If the LCD marker appears, large center digits are the monotonic visible event number.\n'; \
+		printf '  Top-left digit 1 means counted stage, 2 means tick; lower-right digits are stage pulses.\n'; \
 		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
 		printf '  after 3 pulses, count single ticks inside setup_arch:\n'; \
 		printf '    1 cpu_probe, 2 mips_cm_probe skipped/done, 3 prom_init\n'; \
@@ -536,6 +538,10 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '      1 entry, 2 hwrena, 3 exception vector, 4 IRQ select, 5 ASID\n'; \
 		printf '      6 mm context, 7 lazy TLB, 8 before tlb_init, 9 after tlb_init\n'; \
 		printf '      10 TLBMISS setup, 11 Status/BEV normalized\n'; \
+		printf '    inside tlb_init, ticks are: entry, config entry, pagemask write/read\n'; \
+		printf '      wired zero, before flush, flush entry, irq save, entrylo clear\n'; \
+		printf '      wired read, before/after first TLB write, flush loop done\n'; \
+		printf '      flush done, config done, refill build before/after\n'; \
 		printf '    next trap ticks: 5 per_cpu returned, 6 generic vector copied, 7 default vectors\n'; \
 		printf '    8 watch vector, 9 parity setup, 10 board bus-error setup\n'; \
 		printf '    11 main exception vectors, 12 icache flush, 13 DBE extable sort, 14 CU2 notifier\n'; \

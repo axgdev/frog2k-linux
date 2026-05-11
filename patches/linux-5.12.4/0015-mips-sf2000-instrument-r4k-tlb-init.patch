@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000015 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 10:35:00 +0000
+Subject: [PATCH] mips: sf2000: instrument r4k TLB init
+
+The physical unit now reaches per_cpu_trap_init() and appears to stop at the
+tick immediately before tlb_init(). Add breadcrumbs inside tlb_init(),
+r4k_tlb_configure(), and the first local_flush_tlb_all() pass so a single
+hardware run can distinguish a PageMask/Wired CP0 problem from the first TLBWI
+or refill-handler generation.
+---
+ arch/mips/mm/tlb-r4k.c | 37 ++++++++++++++++++++++++++++++++++---
+ 1 file changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 3ac9dd9ab01f..6c6f997bdc4b 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -25,6 +25,13 @@
+ #include <asm/tlbmisc.h>
+ 
+ extern void build_tlb_refill_handler(void);
++extern void sf2000_visible_tick(const char *name);
++
++static void sf2000_tlb_tick(const char *name)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_visible_tick(name);
++}
+ 
+ /*
+  * LOONGSON-2 has a 4 entry itlb which is a subset of jtlb, LOONGSON-3 has
+@@ -55,16 +62,21 @@ void local_flush_tlb_all(void)
+ {
+ 	unsigned long flags;
+ 	unsigned long old_ctx;
+-	int entry, ftlbhighset;
++	int entry, first_entry, ftlbhighset;
+ 
++	sf2000_tlb_tick("tlb-flush-entry");
+ 	local_irq_save(flags);
++	sf2000_tlb_tick("tlb-flush-after-irq-save");
+ 	/* Save old context and create impossible VPN2 value */
+ 	old_ctx = read_c0_entryhi();
+ 	htw_stop();
+ 	write_c0_entrylo0(0);
+ 	write_c0_entrylo1(0);
++	sf2000_tlb_tick("tlb-flush-after-entrylo-clear");
+ 
+ 	entry = num_wired_entries();
++	first_entry = entry;
++	sf2000_tlb_tick("tlb-flush-after-wired-read");
+ 
+ 	/*
+ 	 * Blast 'em all away.
+@@ -88,18 +100,24 @@ void local_flush_tlb_all(void)
+ 	} else {
+ 		while (entry < current_cpu_data.tlbsize) {
+ 			/* Make sure all entries differ. */
++			if (entry == first_entry)
++				sf2000_tlb_tick("tlb-flush-before-first-write");
+ 			write_c0_entryhi(UNIQUE_ENTRYHI(entry));
+ 			write_c0_index(entry);
+ 			mtc0_tlbw_hazard();
+ 			tlb_write_indexed();
++			if (entry == first_entry)
++				sf2000_tlb_tick("tlb-flush-after-first-write");
+ 			entry++;
+ 		}
+ 	}
+ 	tlbw_use_hazard();
++	sf2000_tlb_tick("tlb-flush-after-loop");
+ 	write_c0_entryhi(old_ctx);
+ 	htw_start();
+ 	flush_micro_tlb();
+ 	local_irq_restore(flags);
++	sf2000_tlb_tick("tlb-flush-done");
+ }
+ EXPORT_SYMBOL(local_flush_tlb_all);
+ 
+@@ -510,12 +528,16 @@ static void r4k_tlb_configure(void)
+ 	 *   - The entire mm handling assumes the c0_pagemask register to
+ 	 *     be set to fixed-size pages.
+ 	 */
++	sf2000_tlb_tick("tlb-config-entry");
+ 	write_c0_pagemask(PM_DEFAULT_MASK);
+ 	back_to_back_c0_hazard();
++	sf2000_tlb_tick("tlb-config-after-pagemask-write");
+ 	if (read_c0_pagemask() != PM_DEFAULT_MASK)
+ 		panic("MMU doesn't support PAGE_SIZE=0x%lx", PAGE_SIZE);
++	sf2000_tlb_tick("tlb-config-after-pagemask-read");
+ 
+ 	write_c0_wired(0);
++	sf2000_tlb_tick("tlb-config-after-wired-zero");
+ 	if (current_cpu_type() == CPU_R10000 ||
+ 	    current_cpu_type() == CPU_R12000 ||
+ 	    current_cpu_type() == CPU_R14000 ||
+@@ -535,16 +557,20 @@ static void r4k_tlb_configure(void)
+ 	}
+ 
+ 	temp_tlb_entry = current_cpu_data.tlbsize - 1;
++	sf2000_tlb_tick("tlb-config-before-flush");
+ 
+ 	/* From this point on the ARC firmware is dead.	 */
+ 	local_flush_tlb_all();
++	sf2000_tlb_tick("tlb-config-after-flush");
+ 
+ 	/* Did I tell you that ARC SUCKS?  */
+ }
+ 
+ void tlb_init(void)
+ {
++	sf2000_tlb_tick("tlb-init-entry");
+ 	r4k_tlb_configure();
++	sf2000_tlb_tick("tlb-init-after-configure");
+ 
+ 	if (ntlb) {
+ 		if (ntlb > 1 && ntlb <= current_cpu_data.tlbsize) {
+@@ -556,7 +582,9 @@ void tlb_init(void)
+ 			printk("Ignoring invalid argument ntlb=%d\n", ntlb);
+ 	}
+ 
++	sf2000_tlb_tick("tlb-init-before-refill-build");
+ 	build_tlb_refill_handler();
++	sf2000_tlb_tick("tlb-init-after-refill-build");
+ }
+ 
+ static int r4k_tlb_pm_notifier(struct notifier_block *self, unsigned long cmd,
+-- 
+2.50.1
