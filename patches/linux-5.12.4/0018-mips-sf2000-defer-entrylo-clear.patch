@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000018 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 12:05:00 +0000
+Subject: [PATCH] mips: sf2000: defer EntryLo clear
+
+The physical unit still stops at the marker immediately after EntryLo0 and
+EntryLo1 are cleared, even after the CP0 Wired read was skipped. With the
+current generated code the next two operations are both diagnostic marker
+calls, so the most likely problem is leaving EntryLo staged as zero while
+running the heavier marker path.
+
+For SF2000, keep diagnostics before the EntryLo writes and move the EntryLo
+clear into the tight TLBWI sequence. That still invalidates entries with zero
+EntryLo values, but no C call or display MMIO path runs in the middle of the
+EntryLo staging window.
+---
+ arch/mips/mm/tlb-r4k.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 72e874d6af54..01f9ce11e6fb 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -71,9 +71,13 @@ void local_flush_tlb_all(void)
+ 	/* Save old context and create impossible VPN2 value */
+ 	old_ctx = read_c0_entryhi();
+ 	htw_stop();
+-	write_c0_entrylo0(0);
+-	write_c0_entrylo1(0);
+-	sf2000_tlb_tick("tlb-flush-after-entrylo-clear");
++	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++		sf2000_tlb_tick("tlb-flush-before-entrylo-clear");
++	} else {
++		write_c0_entrylo0(0);
++		write_c0_entrylo1(0);
++		sf2000_tlb_tick("tlb-flush-after-entrylo-clear");
++	}
+ 
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
+ 		/* r4k_tlb_configure() has just written CP0 Wired to zero. */
+@@ -108,6 +112,10 @@ void local_flush_tlb_all(void)
+ 				sf2000_tlb_tick("tlb-flush-before-first-write");
+ 			write_c0_entryhi(UNIQUE_ENTRYHI(entry));
+ 			write_c0_index(entry);
++			if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++				write_c0_entrylo0(0);
++				write_c0_entrylo1(0);
++			}
+ 			mtc0_tlbw_hazard();
+ 			tlb_write_indexed();
+ 			if (entry == first_entry)
+-- 
+2.50.1
