@@ -30,11 +30,13 @@ typedef unsigned long uintptr;
 #define GPIO_L_DIR 0xb8800058u
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
+#define BOOTROM_BASE 0xbfc00000u
 #define BACKLIGHT_R05 (1u << 5)
 #define STATUS_L25 (1u << 25)
-#define BACKLIGHT_OFF_TICKS 0x06000000u
-#define BACKLIGHT_ON_TICKS 0x03000000u
-#define BACKLIGHT_STAGE_GAP_TICKS 0x20000000u
+#define BACKLIGHT_OFF_TICKS 0x04000000u
+#define BACKLIGHT_ON_TICKS 0x02000000u
+#define BACKLIGHT_STAGE_GAP_TICKS 0x08000000u
+#define QEMU_DIRECT_DELAY_SHIFT 12
 #define LOG_SECTOR_SIZE 512u
 #define LOG_LIMIT 65536u
 #define FA_READ 0x01u
@@ -456,6 +458,11 @@ static u32 cp0_count(void)
 static void delay_count_ticks(u32 ticks)
 {
 	u32 start = cp0_count();
+
+	if (mmio_read32(BOOTROM_BASE) == 0)
+		ticks >>= QEMU_DIRECT_DELAY_SHIFT;
+	if (ticks == 0)
+		return;
 
 	while ((u32)(cp0_count() - start) < ticks)
 		__asm__ volatile("nop");

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000_linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 06:35:00 +0000
+Subject: [PATCH] mips: skip EBase WG probing on SF2000
+
+The HC15xx/SF2000 bring-up intentionally treats the CPU as MIPS32r1 first.
+Some devices may expose pieces of later MIPS revisions, and QEMU's 24K model
+does, but the early EBase.WG probe writes CP0 EBase while temporarily changing
+BEV. That is not needed for this single-core board and it can stall before the
+first post-entry diagnostic marker.
+---
+ arch/mips/kernel/cpu-probe.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -737,7 +737,7 @@ static void decode_configs(struct cpuinfo_mips *c)
+ 	}
+ 
+ 	/* Probe the EBase.WG bit */
+-	if (cpu_has_mips_r2_r6) {
++	if (cpu_has_mips_r2_r6 && !IS_ENABLED(CONFIG_MIPS_SF2000)) {
+ 		u64 ebase;
+ 		unsigned int status;
+ 
+-- 
+2.50.1

@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000_linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 06:10:00 +0000
+Subject: [PATCH] mips: add SF2000 platform and post-setup ticks
+
+The generic MIPS board option selects CM, CPC, GIC, MIPSr2 interrupt helpers,
+secondary-cache support and high-memory assumptions that are not appropriate
+for an initial HC15xx/SF2000 bring-up. Add a tiny SF2000 machine option which
+keeps the generic FDT/UHI plumbing but only selects the MIPS32r1 CPU interrupt
+and R4K timer pieces needed by this board.
+
+Also add single-pulse ticks after the existing 5-pulse post-setup_arch marker.
+If physical hardware still stops before mm_init, the number of ticks seen after
+the 5-pulse marker identifies the last completed start_kernel step.
+---
+ arch/mips/Kconfig        | 18 ++++++++++
+ arch/mips/kernel/setup.c | 15 ++++++++
+ init/main.c              | 60 +++++++++++++++++++++++++++++++
+ 3 files changed, 93 insertions(+)
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+@@ -253,6 +253,24 @@
+ 	help
+ 	  Support for the Atheros AR71XX/AR724X/AR913X SoCs.
+ 
++config MIPS_SF2000
++	bool "Data Frog SF2000 / HC15xx"
++	select BOOT_RAW
++	select BUILTIN_DTB
++	select CEVT_R4K
++	select CSRC_R4K
++	select DMA_NONCOHERENT
++	select IRQ_MIPS_CPU
++	select MIPS_GENERIC
++	select NO_EXCEPT_FILL
++	select SYS_HAS_CPU_MIPS32_R1
++	select SYS_SUPPORTS_32BIT_KERNEL
++	select SYS_SUPPORTS_LITTLE_ENDIAN
++	select USE_OF
++	help
++	  Minimal HC15xx/SF2000 bring-up target using MIPS32r1, UHI/FDT entry,
++	  CPU-local interrupts and the CP0 count/compare timer.
++
+ config BMIPS_GENERIC
+ 	bool "Broadcom Generic BMIPS kernel"
+ 	select ARCH_HAS_RESET_CONTROLLER
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+@@ -86,6 +86,8 @@
+ #define SF2000_STAGE_OFF_TICKS 0x06000000u
+ #define SF2000_STAGE_ON_TICKS 0x03000000u
+ #define SF2000_STAGE_GAP_TICKS 0x20000000u
++#define SF2000_TICK_OFF_TICKS 0x03000000u
++#define SF2000_TICK_GAP_TICKS 0x08000000u
+ 
+ static unsigned int __init sf2000_cp0_count(void)
+ {
+@@ -177,6 +179,20 @@
+ 	sf2000_visible_stage(name, pulses);
+ }
+ 
++void __init sf2000_visible_tick(const char *name)
++{
++	pr_info("sf2000: visible tick %s\n", name);
++	sf2000_backlight_set(1);
++	sf2000_status_led_set(0);
++	sf2000_stage_delay(SF2000_TICK_GAP_TICKS);
++	sf2000_backlight_set(0);
++	sf2000_status_led_set(1);
++	sf2000_stage_delay(SF2000_TICK_OFF_TICKS);
++	sf2000_backlight_set(1);
++	sf2000_status_led_set(0);
++	sf2000_stage_delay(SF2000_TICK_GAP_TICKS);
++}
++
+ /*
+  * mips_io_port_base is the begin of the address space to which x86 style
+  * I/O ports are mapped.
+diff --git a/init/main.c b/init/main.c
+@@ -120,6 +120,7 @@
+ 		unsigned int pulses);
+ extern void __init sf2000_visible_stage_nolog(const char *name,
+ 		unsigned int pulses);
++extern void __init sf2000_visible_tick(const char *name);
+ #endif
+ 
+ /*
+@@ -883,23 +884,56 @@
+ 	sf2000_visible_stage("post-setup-arch", 5);
+ #endif
+ 	setup_boot_config(command_line);
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("setup-boot-config");
++#endif
+ 	setup_command_line(command_line);
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("setup-command-line");
++#endif
+ 	setup_nr_cpu_ids();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("setup-nr-cpu-ids");
++#endif
+ 	setup_per_cpu_areas();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("setup-per-cpu-areas");
++#endif
+ 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("smp-prepare-boot-cpu");
++#endif
+ 	boot_cpu_hotplug_init();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("boot-cpu-hotplug-init");
++#endif
+ 
+ 	build_all_zonelists(NULL);
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("build-all-zonelists");
++#endif
+ 	page_alloc_init();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("page-alloc-init");
++#endif
+ 
+ 	pr_notice("Kernel command line: %s\n", saved_command_line);
+ 	/* parameters may set static keys */
+ 	jump_label_init();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("jump-label-init");
++#endif
+ 	parse_early_param();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("parse-early-param");
++#endif
+ 	after_dashes = parse_args("Booting kernel",
+ 				  static_command_line, __start___param,
+ 				  __stop___param - __start___param,
+ 				  -1, -1, NULL, &unknown_bootoption);
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("parse-boot-args");
++#endif
+ 	if (!IS_ERR_OR_NULL(after_dashes))
+ 		parse_args("Setting init args", after_dashes, NULL, 0, -1, -1,
+ 			   NULL, set_init_arg);
+@@ -912,9 +946,21 @@
+ 	 * kmem_cache_init()
+ 	 */
+ 	setup_log_buf(0);
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("setup-log-buf");
++#endif
+ 	vfs_caches_init_early();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("vfs-caches-init-early");
++#endif
+ 	sort_main_extable();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("sort-main-extable");
++#endif
+ 	trap_init();
++#ifdef CONFIG_MIPS
++	sf2000_visible_tick("trap-init");
++#endif
+ 	mm_init();
+ #ifdef CONFIG_MIPS
+ 	sf2000_visible_stage("mm-ready", 6);
+-- 
+2.50.1

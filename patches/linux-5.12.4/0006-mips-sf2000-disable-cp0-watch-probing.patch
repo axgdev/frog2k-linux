@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 05:39:00 +0000
+Subject: [PATCH] mips: disable CP0 watch probing on SF2000
+
+The SF2000 bring-up kernel does not need hardware watchpoints, and probing
+optional CP0 watch registers is another early boot hazard on partially matched
+HC15xx/SF2000 emulation. Clear the watch capability before the generic probe
+loop so both QEMU and hardware can continue through CPU setup using the
+MIPS32r1-first path.
+---
+ arch/mips/kernel/cpu-probe.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index 65db45fc5a99..b072a7c2d14e 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -778,6 +778,9 @@ static void decode_configs(struct cpuinfo_mips *c)
+ 		}
+ 	}
+ 
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		c->options &= ~MIPS_CPU_WATCH;
++
+ 	/* configure the FTLB write probability */
+ 	set_ftlb_enable(c, (mips_ftlb_disabled ? 0 : FTLB_EN) | FTLB_SET_PROB);
+ 
+-- 
+2.47.3
+

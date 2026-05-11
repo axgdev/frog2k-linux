@@ -10,6 +10,10 @@ GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
 QEMU_BIN := $(QEMU_DIR)/.cache/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
+QEMU_CPU ?= 4Kc
+QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
+QEMU_ROM_CPU ?=
+QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 HOSTCC ?= cc
 TOOLCHAIN_DIR ?= /opt/gdb-mips-toolchain
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-mti-elf-
@@ -22,7 +26,7 @@ ROOTFS ?= tiny
 LINUX_VERSION := 5.12.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v5.x/$(LINUX_TARBALL)
-LINUX_SRC := $(BUILD_DIR)/linux-$(LINUX_VERSION)
+LINUX_SRC ?= /tmp/sf2000_linux-kernel-$(LINUX_VERSION)
 BUILDROOT_VERSION := 2024.02.12
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
 BUILDROOT_URL := https://buildroot.org/downloads/$(BUILDROOT_TARBALL)
@@ -113,6 +117,8 @@ status:
 	@printf '  jobs:    %s\n' '$(JOBS)'
 	@printf '  qemu bin exists: '
 	@test -x '$(QEMU_BIN)' && printf 'yes\n' || printf 'no\n'
+	@printf '  qemu cpu: %s\n' '$(QEMU_CPU)'
+	@printf '  qemu rom cpu: %s\n' '$(if $(QEMU_ROM_CPU),$(QEMU_ROM_CPU),default)'
 	@printf '  initramfs exists: '
 	@test -f '$(INITRAMFS)' && printf 'yes\n' || printf 'no\n'
 	@printf '  linux vmlinux exists: '
@@ -251,6 +257,13 @@ $(LINUX_SRC)/Makefile:
 	tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1
 
 $(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
+	@if test -e '$@'; then \
+		printf 'linux patch series changed; re-extracting %s\n' '$(LINUX_SRC)'; \
+		test -f '.cache/$(LINUX_TARBALL)' || curl -L -o '.cache/$(LINUX_TARBALL)' '$(LINUX_URL)'; \
+		rm -rf '$(LINUX_SRC)'; \
+		mkdir -p '$(LINUX_SRC)'; \
+		tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1; \
+	fi
 	@for patch in $(LINUX_PATCHES); do \
 		if patch -d '$(LINUX_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'applying %s\n' "$$patch"; \
@@ -277,6 +290,10 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
 		--enable CMDLINE_BOOL \
 		--set-str CMDLINE '$(LINUX_CMDLINE)' \
+		--disable MIPS_GENERIC_KERNEL \
+		--enable MIPS_SF2000 \
+		--disable MIPS_CMDLINE_FROM_DTB \
+		--enable MIPS_CMDLINE_BUILTIN_EXTEND \
 		--disable MODULES \
 		--disable DEBUG_INFO \
 		--disable DEBUG_INFO_REDUCED \
@@ -299,11 +316,20 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 		--disable SERIAL_8250_PCI \
 		--disable SMP \
 		--disable SMP_UP \
+		--disable HIGHMEM \
+		--disable JUMP_LABEL \
+		--disable HARDWARE_WATCHPOINTS \
 		--disable MIPS_CPS \
 		--disable MIPS_CPS_PM \
 		--disable MIPS_CM \
 		--disable MIPS_CPC \
 		--disable MIPS_CMP \
+		--disable MIPS_CPU_SCACHE \
+		--disable MIPS_GIC \
+		--disable CLKSRC_MIPS_GIC \
+		--disable CPU_MIPSR2_IRQ_VI \
+		--disable CPU_MIPSR2_IRQ_EI \
+		--disable SWAP_IO_SPACE \
 		--disable MIPS_MT \
 		--disable MIPS_MT_SMP \
 		--disable MIPS_MT_FPAFF \
@@ -483,11 +509,18 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Preallocated early boot log. Keep this fixed-size file in the SD root.\n'; \
 		printf '  The ROM has disk_write but no f_write, so Linux overwrites this file in place.\n\n'; \
 		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
+		printf '  Direct QEMU blank-ROM runs compress these delays automatically.\n'; \
 		printf '  1 pulse: Linux loader entered\n'; \
 		printf '  2 pulses: loader is jumping to the kernel\n'; \
 		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
 		printf '  4 pulses: kernel finished MIPS setup_arch\n'; \
 		printf '  5 pulses: start_kernel resumed after setup_arch\n'; \
+		printf '  after 5 pulses, count single ticks for the post-setup_arch ladder:\n'; \
+		printf '    1 setup_boot_config, 2 setup_command_line, 3 setup_nr_cpu_ids\n'; \
+		printf '    4 setup_per_cpu_areas, 5 smp_prepare_boot_cpu, 6 cpu hotplug init\n'; \
+		printf '    7 build_all_zonelists, 8 page_alloc_init, 9 jump_label_init\n'; \
+		printf '    10 parse_early_param, 11 parse_args, 12 setup_log_buf\n'; \
+		printf '    13 vfs_caches_init_early, 14 sort_main_extable, 15 trap_init\n'; \
 		printf '  6 pulses: mm_init completed\n'; \
 		printf '  7 pulses: time_init completed\n'; \
 		printf '  8 pulses: kernel is about to enable IRQs\n'; \
@@ -523,7 +556,7 @@ linux-buildroot-rom-sd:
 
 run-linux: qemu linux
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_VMLINUX)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_VMLINUX)' \
 		-dtb '$(SF2000_DTB)' -append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux.log \
@@ -536,7 +569,7 @@ smoke-linux: run-linux
 
 run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-asd.log \
 		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
@@ -550,7 +583,7 @@ run-linux-input: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 70; printf 'sendkey right 1000\n'; sleep 2; \
 		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
-		'$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
+			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-input.log \
 		> '$(BUILD_DIR)'/logs/linux-input.console 2>&1
@@ -563,7 +596,7 @@ smoke-linux-input: run-linux-input
 run-linux-rom: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -bios '$(BOOTROM_BUGFIX)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_ROM_CPU_ARGS) -bios '$(BOOTROM_BUGFIX)' \
 		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-rom.log \
@@ -605,7 +638,7 @@ run-linux-buildroot-display: qemu
 	SF2000_TRACE_GMA=1 \
 	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-buildroot-gma \
 	SF2000_GMA_DUMP_LIMIT=8 \
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-display.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-display.console 2>&1 || test $$? -eq 124
@@ -625,4 +658,4 @@ smoke-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot smoke-linux-input
 
 clean:
-	rm -rf '$(BUILD_DIR)'
+	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'

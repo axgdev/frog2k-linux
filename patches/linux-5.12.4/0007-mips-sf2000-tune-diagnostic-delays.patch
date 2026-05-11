@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 05:48:00 +0000
+Subject: [PATCH] mips: tune SF2000 diagnostic delays
+
+The visual stage markers must remain human-visible on physical hardware, but
+the same CP0-count delay loops make direct ASD QEMU runs spend most of their
+smoke-test timeout blinking. Detect QEMU's blank direct-ASD boot ROM mapping
+and compress the delay loop only for that path.
+
+Also keep hardware watchpoints off by default for the SF2000 profile. The
+platform clears the probed watch capability too, but avoiding the default keeps
+the bring-up config consistent with the minimal MIPS32r1-first target.
+---
+ arch/mips/Kconfig        |  2 +-
+ arch/mips/kernel/setup.c | 14 +++++++++++---
+ 2 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index 2b4d207eaf11..82af222651e6 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -2229,7 +2229,7 @@ config MIPS_PGD_C0_CONTEXT
+ #
+ config HARDWARE_WATCHPOINTS
+ 	bool
+-	default y if CPU_MIPSR1 || CPU_MIPSR2 || CPU_MIPSR6
++	default y if (CPU_MIPSR1 || CPU_MIPSR2 || CPU_MIPSR6) && !MIPS_SF2000
+ 
+ menu "Kernel type"
+ 
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index 39af5fda9728..dddf0f78ce44 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -73,6 +73,7 @@ static const char builtin_cmdline[] __initconst = "";
+ #endif
+ 
+ #define SF2000_SYSIO_KSEG1 ((volatile unsigned char *)CKSEG1ADDR(0x18800000))
++#define SF2000_BOOTROM_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x1fc00000))
+ #define SF2000_PINMUX_L_OFF 0x4a0
+ #define SF2000_PINMUX_R_OFF 0x4e0
+ #define SF2000_GPIO_L_OUT_OFF 0x54
+@@ -83,11 +84,12 @@ static const char builtin_cmdline[] __initconst = "";
+ #define SF2000_PIN_R05 5
+ #define SF2000_STATUS_L25 (1u << SF2000_PIN_L25)
+ #define SF2000_BACKLIGHT_R05 (1u << SF2000_PIN_R05)
+-#define SF2000_STAGE_OFF_TICKS 0x06000000u
+-#define SF2000_STAGE_ON_TICKS 0x03000000u
+-#define SF2000_STAGE_GAP_TICKS 0x20000000u
++#define SF2000_STAGE_OFF_TICKS 0x04000000u
++#define SF2000_STAGE_ON_TICKS 0x02000000u
++#define SF2000_STAGE_GAP_TICKS 0x08000000u
+ #define SF2000_TICK_OFF_TICKS 0x03000000u
+ #define SF2000_TICK_GAP_TICKS 0x08000000u
++#define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
+ 
+ static unsigned int __init sf2000_cp0_count(void)
+ {
+@@ -99,8 +101,14 @@ static unsigned int __init sf2000_cp0_count(void)
+ 
+ static void __init sf2000_stage_delay(unsigned int ticks)
+ {
+ 	unsigned int start = sf2000_cp0_count();
++
++	if (*SF2000_BOOTROM_KSEG1 == 0)
++		ticks >>= SF2000_QEMU_DIRECT_DELAY_SHIFT;
+ 
++	if (!ticks)
++		return;
++
+ 	while ((unsigned int)(sf2000_cp0_count() - start) < ticks)
+ 		asm volatile("nop");
+ }
+-- 
+2.47.3
