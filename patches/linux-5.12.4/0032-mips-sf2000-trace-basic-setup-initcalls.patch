@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000032 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace basic setup initcalls
+
+Hardware reaches kernel-freeable-before-basic, so PID 1 is running and
+the remaining stop is inside do_basic_setup(). Add RAM markers around each
+basic setup step and record initcall function pointers before and after
+each call so the next watchdog reboot identifies the exact failing phase.
+Expand the RAM progress ring to keep the added initcall trace entries.
+
+--- a/arch/mips/kernel/setup.c	2026-05-11 16:50:10.850269046 +0000
++++ b/arch/mips/kernel/setup.c	2026-05-11 16:49:54.186342012 +0000
+@@ -107,7 +107,7 @@
+ #define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
+ #define SF2000_PROGRESS_MAGIC 0x52504653u
+ #define SF2000_PROGRESS_VERSION 1u
+-#define SF2000_PROGRESS_ENTRIES 256u
++#define SF2000_PROGRESS_ENTRIES 384u
+ #define SF2000_PROGRESS_NAME_LEN 32u
+ #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
+ #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
+--- a/init/main.c	2026-05-11 16:50:10.851685755 +0000
++++ b/init/main.c	2026-05-11 16:49:54.194342012 +0000
+@@ -160,6 +160,14 @@
+ 
+ 	sf2000_progress_mark(name, 4, 0);
+ }
++
++static void sf2000_init_value(const char *name, unsigned int value)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	sf2000_progress_mark(name, 5, value);
++}
+ #endif
+ 
+ /*
+@@ -1544,9 +1552,16 @@
+ 	if (initcall_blacklisted(fn))
+ 		return -EPERM;
+ 
++#ifdef CONFIG_MIPS
++	sf2000_init_value("initcall-before", (unsigned int)fn);
++#endif
+ 	do_trace_initcall_start(fn);
+ 	ret = fn();
+ 	do_trace_initcall_finish(fn, ret);
++#ifdef CONFIG_MIPS
++	sf2000_init_value("initcall-after", (unsigned int)fn);
++	sf2000_init_value("initcall-ret", (unsigned int)ret);
++#endif
+ 
+ 	msgbuf[0] = 0;
+ 
+@@ -1610,6 +1625,9 @@
+ {
+ 	initcall_entry_t *fn;
+ 
++#ifdef CONFIG_MIPS
++	sf2000_init_value("initcall-level-before", (unsigned int)level);
++#endif
+ 	parse_args(initcall_level_names[level],
+ 		   command_line, __start___param,
+ 		   __stop___param - __start___param,
+@@ -1619,6 +1637,9 @@
+ 	trace_initcall_level(initcall_level_names[level]);
+ 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
+ 		do_one_initcall(initcall_from_entry(fn));
++#ifdef CONFIG_MIPS
++	sf2000_init_value("initcall-level-after", (unsigned int)level);
++#endif
+ }
+ 
+ static void __init do_initcalls(void)
+@@ -1627,9 +1648,15 @@
+ 	size_t len = strlen(saved_command_line) + 1;
+ 	char *command_line;
+ 
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("do-initcalls-entry");
++#endif
+ 	command_line = kzalloc(len, GFP_KERNEL);
+ 	if (!command_line)
+ 		panic("%s: Failed to allocate %zu bytes\n", __func__, len);
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("do-initcalls-after-alloc");
++#endif
+ 
+ 	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
+ 		/* Parser modifies command_line, restore it each time */
+@@ -1638,6 +1665,9 @@
+ 	}
+ 
+ 	kfree(command_line);
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("do-initcalls-done");
++#endif
+ }
+ 
+ /*
+@@ -1649,12 +1679,38 @@
+  */
+ static void __init do_basic_setup(void)
+ {
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-entry");
++#endif
+ 	cpuset_init_smp();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-cpuset");
++	sf2000_init_mark("basic-before-driver");
++#endif
+ 	driver_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-driver");
++	sf2000_init_mark("basic-before-irq-proc");
++#endif
+ 	init_irq_proc();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-irq-proc");
++	sf2000_init_mark("basic-before-ctors");
++#endif
+ 	do_ctors();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-ctors");
++	sf2000_init_mark("basic-before-usermodehelper");
++#endif
+ 	usermodehelper_enable();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-usermodehelper");
++	sf2000_init_mark("basic-before-initcalls");
++#endif
+ 	do_initcalls();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("basic-after-initcalls");
++#endif
+ }
+ 
+ static void __init do_pre_smp_initcalls(void)

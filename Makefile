@@ -95,7 +95,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
 	-Wall -Wextra
 
-.PHONY: all status qemu rootfs buildroot linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all status qemu rootfs buildroot buildroot-reconfigure linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -141,6 +141,10 @@ $(QEMU_MKSD): $(QEMU_DIR)/tools/mksf2000sd.c
 rootfs: $(ROOTFS_CPIO)
 buildroot: $(BUILDROOT_CPIO)
 
+buildroot-reconfigure:
+	rm -f '$(BUILDROOT_OUT)/.config'
+	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
+
 $(INIT_BIN): init/sf2000-init.c Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding \
@@ -176,7 +180,7 @@ $(BUILDROOT_GENERATED_OVERLAY_STAMP):
 	mkdir -p '$(dir $@)' '$(BUILDROOT_GENERATED_OVERLAY)'
 	touch '$@'
 
-$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) Makefile $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
+$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	mkdir -p '$(BUILDROOT_OUT)'
 	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
 	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
@@ -575,7 +579,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 
 $(SDCARD_LOG_TXT): Makefile
 	mkdir -p '$(dir $@)'
-	dd if=/dev/zero of='$@' bs=65536 count=1 >/dev/null 2>&1
+	dd if=/dev/zero of='$@' bs=131072 count=1 >/dev/null 2>&1
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32

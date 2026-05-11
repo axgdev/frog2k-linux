@@ -47,12 +47,12 @@ typedef unsigned long uintptr;
 #define MAPPING_LINUX_BIT (1u << 24)
 #define QEMU_DIRECT_DELAY_SHIFT 12
 #define LOG_SECTOR_SIZE 512u
-#define LOG_LIMIT 65536u
+#define LOG_LIMIT 131072u
 #define FA_READ 0x01u
 #define PROGRESS_ADDR 0xa13f0000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
-#define PROGRESS_ENTRIES 256u
+#define PROGRESS_ENTRIES 384u
 #define PROGRESS_NAME_LEN 32u
 
 typedef unsigned long long u64;
