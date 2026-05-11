@@ -95,7 +95,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
 	-Wall -Wextra
 
-.PHONY: all status qemu rootfs buildroot linux linux-reextract linux-asd linux-buildroot \
+.PHONY: all status qemu rootfs buildroot linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -282,7 +282,7 @@ $(SF2000_DTB): linux/sf2000.dts
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
 
-$(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
+$(LINUX_OUT)/.config: $(LINUX_SRC)/Makefile | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
@@ -433,7 +433,7 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 
-$(LINUX_VMLINUX): $(LINUX_OUT)/.config $(ROOTFS_CPIO)
+$(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_OUT)/.config $(ROOTFS_CPIO)
 	$(MAKE) -j'$(JOBS)' -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 
@@ -441,6 +441,10 @@ linux: $(LINUX_VMLINUX) $(SF2000_DTB)
 
 linux-reextract:
 	rm -rf '$(LINUX_SRC)' '$(LINUX_OUT)'
+
+linux-reconfigure:
+	rm -f '$(LINUX_OUT)/.config'
+	$(MAKE) ROOTFS='$(ROOTFS)' linux
 
 $(ASDPACK): tools/asdpack.c Makefile
 	mkdir -p '$(dir $@)'
@@ -622,7 +626,7 @@ smoke-linux-asd: run-linux-asd
 
 run-linux-input: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 70; printf 'sendkey right 1000\n'; sleep 2; \
+	(sleep 35; printf 'sendkey right 1000\n'; sleep 2; \
 		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor stdio \
@@ -637,7 +641,7 @@ smoke-linux-input: run-linux-input
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 100; printf 'sendkey backspace 1000\n'; sleep 20; \
+	(sleep 35; printf 'sendkey backspace 1000\n'; sleep 10; \
 		printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_ROM_CPU_ARGS) -bios '$(BOOTROM_BUGFIX)' \
 		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
