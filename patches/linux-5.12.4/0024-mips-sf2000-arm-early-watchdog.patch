@@ -4,25 +4,27 @@ Date: Mon, 11 May 2026 18:10:00 +0000
 Subject: [PATCH] mips: sf2000: arm early watchdog
 
 Physical bring-up can still hang before /init reaches userspace. Arm WDT0 as
-soon as SF2000 setup_arch starts, then pet it from every RAM progress marker.
-If the kernel stops before userspace disables the watchdog, the chip reboots and
-the next loader run dumps the retained progress ring to log.txt.
+soon as SF2000 setup_arch starts, then pet it from every RAM progress marker
+with a near-overflow counter value. If the kernel stops before userspace
+disables the watchdog, the chip reboots and the next loader run dumps the
+retained progress ring to log.txt.
 
 Add a built-in cmdline test hook so QEMU can prove the pre-userspace timeout
 path without changing normal boot behaviour.
 ---
- arch/mips/kernel/setup.c | 57 ++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 57 insertions(+)
+ arch/mips/kernel/setup.c | 58 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
 
 diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
 --- a/arch/mips/kernel/setup.c
 +++ b/arch/mips/kernel/setup.c
-@@ -109,9 +109,15 @@ static const char builtin_cmdline[] __initconst = "";
+@@ -109,9 +109,16 @@ static const char builtin_cmdline[] __initconst = "";
  #define SF2000_PROGRESS_VERSION 1u
  #define SF2000_PROGRESS_ENTRIES 96u
  #define SF2000_PROGRESS_NAME_LEN 32u
 +#define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
 +#define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
++#define SF2000_WDT_BOOT_COUNT 0xff000000u
 +#define SF2000_WDT_BOOT_CONF 100u
  
  static unsigned int sf2000_screen_seq;
@@ -33,7 +35,7 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
  struct sf2000_progress_entry {
  	unsigned int seq;
  	unsigned int kind;
-@@ -327,6 +333,54 @@ static void sf2000_progress_copy_name(volatile char *dst, const char *src)
+@@ -327,6 +334,55 @@ static void sf2000_progress_copy_name(volatile char *dst, const char *src)
  	dst[i] = '\0';
  }
  
@@ -42,7 +44,7 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
 +	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 +		return;
 +
-+	*SF2000_WDT_COUNT_KSEG1 = 0;
++	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
 +}
 +
 +static void sf2000_watchdog_arm(const char *name)
@@ -50,10 +52,10 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
 +	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 +		return;
 +
-+	*SF2000_WDT_COUNT_KSEG1 = 0;
++	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
 +	*SF2000_WDT_CONF_KSEG1 = SF2000_WDT_BOOT_CONF;
 +	pr_info("sf2000: early watchdog armed\n");
-+	sf2000_progress_mark(name, 3, SF2000_WDT_BOOT_CONF);
++	sf2000_progress_mark(name, 3, SF2000_WDT_BOOT_COUNT);
 +}
 +
 +static int __init sf2000_builtin_cmdline_has(const char *needle)
@@ -80,7 +82,8 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
 +		return;
 +
 +	pr_emerg("sf2000: early watchdog test hang\n");
-+	sf2000_progress_mark("early-watchdog-test-hang", 3, 1);
++	sf2000_progress_mark("early-watchdog-test-hang", 3,
++		SF2000_WDT_BOOT_COUNT);
 +	while (1)
 +		asm volatile("nop");
 +}
@@ -88,7 +91,7 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
  void sf2000_progress_mark(const char *name, unsigned int kind,
  	unsigned int value)
  {
-@@ -360,6 +414,7 @@ void sf2000_progress_mark(const char *name, unsigned int kind,
+@@ -360,6 +416,7 @@ void sf2000_progress_mark(const char *name, unsigned int kind,
  	}
  	log->write_index = index;
  	log->seq = seq;
@@ -96,7 +99,7 @@ diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
  }
  EXPORT_SYMBOL(sf2000_progress_mark);
  
-@@ -1120,6 +1175,8 @@ static inline void prefill_possible_map(void) {}
+@@ -1120,6 +1177,8 @@ static inline void prefill_possible_map(void) {}
  void __init setup_arch(char **cmdline_p)
  {
  	sf2000_restart_init();

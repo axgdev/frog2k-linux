@@ -31,6 +31,8 @@ typedef unsigned long uintptr;
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define MAPPING_REG 0xb8800220u
+#define WDT0_COUNT 0xb8818500u
+#define WDT0_CONF 0xb8818504u
 #define BOOTROM_BASE 0xbfc00000u
 #define ROM_F_MOUNT_ADDR 0x8101f044u
 #define ROM_F_OPEN_ADDR 0x8101f0d4u
@@ -606,6 +608,20 @@ static void bootlog_loader_info(u32 kernel_size, u32 dtb_size, u32 entry,
 	bootlog_flush();
 }
 
+static void bootlog_wdt_state(void)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("wdt count=");
+	bootlog_hex(mmio_read32(WDT0_COUNT));
+	bootlog_puts(" conf=");
+	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static void bootlog_ebase(u32 before, u32 after)
 {
 	bootlog_init();
@@ -1072,6 +1088,7 @@ void linux_loader_main(void)
 	disable_interrupts();
 	bootlog_init();
 	progress_reset();
+	bootlog_wdt_state();
 	backlight_stage_mark("loader-entry", 1);
 	bootlog_stage("loader-entry", 1);
 

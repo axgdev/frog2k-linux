@@ -517,7 +517,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  On the next boot, the loader dumps the previous run to log.txt before clearing it.\n'; \
 		printf '  This helps replace manual blink counting when RAM survives reset/reboot.\n\n'; \
 		printf 'Early watchdog:\n'; \
-		printf '  Linux arms WDT0 during setup_arch and pets it whenever it records progress.\n'; \
+		printf '  Linux arms WDT0 during setup_arch and pets it near overflow whenever it records progress.\n'; \
 		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
 		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
 		printf 'Runtime controls:\n'; \
