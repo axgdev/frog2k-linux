@@ -52,7 +52,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ADDR 0xa13f0000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
-#define PROGRESS_ENTRIES 96u
+#define PROGRESS_ENTRIES 256u
 #define PROGRESS_NAME_LEN 32u
 
 typedef unsigned long long u64;

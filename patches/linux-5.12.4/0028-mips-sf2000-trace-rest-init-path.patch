@@ -1,0 +1,226 @@
+From 0000000000000000000000000000000000000028 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace rest init path
+
+Hardware now reaches after-mem-encrypt, so continue RAM-only progress
+markers through the remaining start_kernel() calls before arch_call_rest_init().
+
+Increase the RAM progress ring to 256 entries so the deeper trace does not
+wrap during normal boot.
+---
+ arch/mips/kernel/setup.c |   2 +-
+ init/main.c              | 140 ++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 140 insertions(+), 2 deletions(-)
+
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -107,7 +107,7 @@
+ #define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
+ #define SF2000_PROGRESS_MAGIC 0x52504653u
+ #define SF2000_PROGRESS_VERSION 1u
+-#define SF2000_PROGRESS_ENTRIES 96u
++#define SF2000_PROGRESS_ENTRIES 256u
+ #define SF2000_PROGRESS_NAME_LEN 32u
+ #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
+ #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
+--- a/init/main.c
++++ b/init/main.c
+@@ -1151,6 +1151,9 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
+ #endif
+ 
+ #ifdef CONFIG_BLK_DEV_INITRD
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-initrd-check");
++#endif
+ 	if (initrd_start && !initrd_below_start_ok &&
+ 	    page_to_pfn(virt_to_page((void *)initrd_start)) < min_low_pfn) {
+ 		pr_crit("initrd overwritten (0x%08lx < 0x%08lx) - disabling it.\n",
+@@ -1158,47 +1161,184 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
+ 		    min_low_pfn);
+ 		initrd_start = 0;
+ 	}
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-initrd-check");
++#endif
++#endif
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-setup-pageset");
+ #endif
+ 	setup_per_cpu_pageset();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-setup-pageset");
++	sf2000_init_mark("before-numa-policy");
++#endif
+ 	numa_policy_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-numa-policy");
++	sf2000_init_mark("before-acpi-early");
++#endif
+ 	acpi_early_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-acpi-early");
++#endif
+ 	if (late_time_init)
+ 		late_time_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-late-time");
++	sf2000_init_mark("before-sched-clock");
++#endif
+ 	sched_clock_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-sched-clock");
++	sf2000_init_mark("before-calibrate-delay");
++#endif
+ 	calibrate_delay();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-calibrate-delay");
++	sf2000_init_mark("before-pid-idr");
++#endif
+ 	pid_idr_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-pid-idr");
++	sf2000_init_mark("before-anon-vma");
++#endif
+ 	anon_vma_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-anon-vma");
++#endif
+ #ifdef CONFIG_X86
+ 	if (efi_enabled(EFI_RUNTIME_SERVICES))
+ 		efi_enter_virtual_mode();
+ #endif
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-thread-stack-cache");
++#endif
+ 	thread_stack_cache_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-thread-stack-cache");
++	sf2000_init_mark("before-cred-init");
++#endif
+ 	cred_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-cred-init");
++	sf2000_init_mark("before-fork-init");
++#endif
+ 	fork_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-fork-init");
++	sf2000_init_mark("before-proc-caches");
++#endif
+ 	proc_caches_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-proc-caches");
++	sf2000_init_mark("before-uts-ns");
++#endif
+ 	uts_ns_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-uts-ns");
++	sf2000_init_mark("before-key-init");
++#endif
+ 	key_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-key-init");
++	sf2000_init_mark("before-security-init");
++#endif
+ 	security_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-security-init");
++	sf2000_init_mark("before-dbg-late");
++#endif
+ 	dbg_late_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-dbg-late");
++	sf2000_init_mark("before-vfs-caches");
++#endif
+ 	vfs_caches_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-vfs-caches");
++	sf2000_init_mark("before-pagecache");
++#endif
+ 	pagecache_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-pagecache");
++	sf2000_init_mark("before-signals");
++#endif
+ 	signals_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-signals");
++	sf2000_init_mark("before-seq-file");
++#endif
+ 	seq_file_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-seq-file");
++	sf2000_init_mark("before-proc-root");
++#endif
+ 	proc_root_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-proc-root");
++	sf2000_init_mark("before-nsfs");
++#endif
+ 	nsfs_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-nsfs");
++	sf2000_init_mark("before-cpuset");
++#endif
+ 	cpuset_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-cpuset");
++	sf2000_init_mark("before-cgroup");
++#endif
+ 	cgroup_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-cgroup");
++	sf2000_init_mark("before-taskstats");
++#endif
+ 	taskstats_init_early();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-taskstats");
++	sf2000_init_mark("before-delayacct");
++#endif
+ 	delayacct_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-delayacct");
++#endif
+ 
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-poking");
++#endif
+ 	poking_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-poking");
++	sf2000_init_mark("before-check-bugs");
++#endif
+ 	check_bugs();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-check-bugs");
++#endif
+ 
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-acpi-subsystem");
++#endif
+ 	acpi_subsystem_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-acpi-subsystem");
++	sf2000_init_mark("before-arch-post-acpi");
++#endif
+ 	arch_post_acpi_subsys_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-arch-post-acpi");
++	sf2000_init_mark("before-kcsan");
++#endif
+ 	kcsan_init();
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("after-kcsan");
++#endif
+ 
+ 	/* Do the rest non-__init'ed, we're now alive */
++#ifdef CONFIG_MIPS
++	sf2000_init_mark("before-rest-init");
++#endif
+ 	arch_call_rest_init();
+ 
+ 	prevent_tail_call_optimization();
+-- 
+2.49.0
+
