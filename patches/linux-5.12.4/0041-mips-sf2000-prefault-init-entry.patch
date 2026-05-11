@@ -1,0 +1,81 @@
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -72,12 +72,18 @@
+ 	jal	schedule_tail		# a0 = struct task_struct *prev
+ 	move	a0, s1
+ 	jal	s0
++#ifdef CONFIG_MIPS_SF2000
++	jal	sf2000_ret_after_kernel_thread
++#endif
+ 	j	syscall_exit
+ 
+ FEXPORT(ret_from_fork)
+ 	jal	schedule_tail		# a0 = struct task_struct *prev
+ 
+ FEXPORT(syscall_exit)
++#ifdef CONFIG_MIPS_SF2000
++	jal	sf2000_ret_syscall_exit
++#endif
+ #ifdef CONFIG_DEBUG_RSEQ
+ 	move	a0, sp
+ 	jal	rseq_syscall
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -52,6 +52,18 @@
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 		unsigned int value);
+ 
++void sf2000_ret_after_kernel_thread(void)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark("ret-after-kernel-thread", 9, 0);
++}
++
++void sf2000_ret_syscall_exit(void)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark("ret-syscall-exit", 9, 0);
++}
++
+ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ {
+ 	unsigned long status;
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -64,9 +64,27 @@
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		sf2000_progress_mark(name, 8, value);
+ }
++
++static void sf2000_elf_prefault(const char *name, unsigned long address)
++{
++	struct page *page = NULL;
++	long ret;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	sf2000_elf_value(name, (unsigned int)address);
++	ret = get_user_pages(address & PAGE_MASK, 1, FOLL_FORCE, &page, NULL);
++	sf2000_elf_value("elf-prefault-ret", (unsigned int)ret);
++	if (page) {
++		sf2000_elf_value("elf-prefault-page", (unsigned int)page);
++		put_page(page);
++	}
++}
+ #else
+ static inline void sf2000_elf_mark(const char *name) { }
+ static inline void sf2000_elf_value(const char *name, unsigned int value) { }
++static inline void sf2000_elf_prefault(const char *name, unsigned long address) { }
+ #endif
+ 
+ #ifndef ELF_COMPAT
+@@ -1345,6 +1363,8 @@
+ 
+ 	finalize_exec(bprm);
+ 	sf2000_elf_mark("elf-after-finalize");
++	sf2000_elf_prefault("elf-prefault-entry", elf_entry);
++	sf2000_elf_prefault("elf-prefault-stack", bprm->p);
+ 	sf2000_elf_value("elf-before-start-thread", (unsigned int)elf_entry);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+ 	sf2000_elf_value("elf-after-start-thread", (unsigned int)bprm->p);

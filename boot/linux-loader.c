@@ -41,9 +41,9 @@ typedef unsigned long uintptr;
 #define ROM_CACHE_FLUSH_ADDR 0x810032f4u
 #define BACKLIGHT_R05 (1u << 5)
 #define STATUS_L25 (1u << 25)
-#define BACKLIGHT_OFF_TICKS 0x00020000u
-#define BACKLIGHT_ON_TICKS 0x00010000u
-#define BACKLIGHT_STAGE_GAP_TICKS 0x00040000u
+#define BACKLIGHT_OFF_TICKS 0x00008000u
+#define BACKLIGHT_ON_TICKS 0x00004000u
+#define BACKLIGHT_STAGE_GAP_TICKS 0x00010000u
 #define MAPPING_LINUX_BIT (1u << 24)
 #define QEMU_DIRECT_DELAY_SHIFT 12
 #define LOG_SECTOR_SIZE 512u
@@ -54,7 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-11 direct-stack-shift"
+#define LOADER_BUILD_TAG "2026-05-11 user-handoff-prefault"
 
 typedef unsigned long long u64;
 
