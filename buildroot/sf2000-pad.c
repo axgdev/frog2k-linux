@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/reboot.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -51,6 +52,9 @@
 #define KEY_SHIFTER_CLOCK_LOW_US 3u
 #define KEY_SHIFTER_CLOCK_HIGH_US 3u
 #define POLL_INTERVAL_MS 20u
+#ifndef LINUX_REBOOT_CMD_RESTART
+#define LINUX_REBOOT_CMD_RESTART 0x01234567
+#endif
 
 enum pad_profile {
 	PAD_PROFILE_SF2000,
@@ -84,6 +88,25 @@ static const uint8_t stock_bit_for_button[ARRAY_SIZE(buttons)] = {
 static const uint8_t gb300_stock_bit_for_shift[KEY_SHIFTER_BITS] = {
 	15, 11, 10, 12, 13, 14, 0, 3, 4, 6, 7, 5, 1, 2, 8, 9,
 };
+
+#define BUTTON_BIT(name) (1u << BUTTON_##name)
+
+enum button_index {
+	BUTTON_R,
+	BUTTON_Y,
+	BUTTON_X,
+	BUTTON_L,
+	BUTTON_A,
+	BUTTON_B,
+	BUTTON_SELECT,
+	BUTTON_START,
+	BUTTON_UP,
+	BUTTON_DOWN,
+	BUTTON_LEFT,
+	BUTTON_RIGHT,
+};
+
+#define REBOOT_BUTTON_MASK BUTTON_BIT(SELECT)
 
 static volatile uint8_t *sysio;
 static volatile sig_atomic_t stopping;
@@ -357,6 +380,24 @@ static void log_button_state(uint32_t mask)
 	log_line(line);
 }
 
+static void maybe_reboot(uint32_t state)
+{
+	static int armed = 1;
+
+	if ((state & REBOOT_BUTTON_MASK) != REBOOT_BUTTON_MASK) {
+		armed = 1;
+		return;
+	}
+
+	if (!armed)
+		return;
+	armed = 0;
+	log_line("sf2000-pad: SELECT pressed, rebooting\n");
+	sync();
+	reboot(LINUX_REBOOT_CMD_RESTART);
+	log_line("sf2000-pad: reboot syscall returned\n");
+}
+
 static enum pad_profile parse_profile(const char *name)
 {
 	if (name && (!strcmp(name, "stock-bits") || !strcmp(name, "gb300") ||
@@ -439,6 +480,7 @@ int main(int argc, char **argv)
 			state = raw;
 			log_button_state(state);
 		}
+		maybe_reboot(state);
 
 		sleep_ms(POLL_INTERVAL_MS);
 	}

@@ -102,7 +102,9 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-buildroot-asd run-linux-buildroot-rom \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-display run-linux-input smoke-linux-input \
-	run-linux-buildroot-input smoke-linux-buildroot-input clean
+	run-linux-buildroot-input smoke-linux-buildroot-input \
+	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
+	smoke-linux-buildroot-reboot clean
 
 all: status
 
@@ -514,6 +516,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Early Linux records named progress entries at uncached 0xa13f0000.\n'; \
 		printf '  On the next boot, the loader dumps the previous run to log.txt before clearing it.\n'; \
 		printf '  This helps replace manual blink counting when RAM survives reset/reboot.\n\n'; \
+		printf 'Runtime controls:\n'; \
+		printf '  Press SELECT in Linux userspace to request a watchdog reboot.\n\n'; \
 		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
 		printf '  Direct QEMU blank-ROM runs compress these delays automatically.\n'; \
 		printf '  1 pulse: Linux loader entered\n'; \
@@ -625,6 +629,22 @@ smoke-linux-input: run-linux-input
 	grep -q 'sf2000-pad: state=.*RIGHT' '$(BUILD_DIR)'/logs/linux-input.log
 	grep -q 'sf2000-pad: state=.*A' '$(BUILD_DIR)'/logs/linux-input.log
 
+run-linux-reboot: qemu linux-rom-sd
+	test -f '$(BOOTROM_BUGFIX)'
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 100; printf 'sendkey backspace 1000\n'; sleep 20; \
+		printf 'quit\n') | \
+			'$(QEMU_BIN)' -M sf2000 $(QEMU_ROM_CPU_ARGS) -bios '$(BOOTROM_BUGFIX)' \
+		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-reboot.log \
+		> '$(BUILD_DIR)'/logs/linux-reboot.console 2>&1
+
+smoke-linux-reboot: run-linux-reboot
+	grep -q 'sf2000-pad: SELECT pressed, rebooting' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000: watchdog restart' '$(BUILD_DIR)'/logs/linux-reboot.log
+	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 2
+
 run-linux-rom: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -688,6 +708,12 @@ run-linux-buildroot-input:
 
 smoke-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot smoke-linux-input
+
+run-linux-buildroot-reboot:
+	$(MAKE) ROOTFS=buildroot run-linux-reboot
+
+smoke-linux-buildroot-reboot:
+	$(MAKE) ROOTFS=buildroot smoke-linux-reboot
 
 clean:
 	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'
