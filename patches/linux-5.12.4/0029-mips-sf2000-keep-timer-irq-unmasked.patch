@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000029 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: keep timer IRQ unmasked
+
+The physical log reaches before-calibrate-delay after the first IRQ enable.
+The previous physical-only mask clearing left Status.IM at zero, preventing
+the CP0 timer interrupt from advancing jiffies during calibrate_delay().
+
+Keep IP7 unmasked while continuing to mask the other CP0 interrupt sources.
+---
+ init/main.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/init/main.c
++++ b/init/main.c
+@@ -137,9 +137,9 @@ static void sf2000_before_irq_enable(void)
+ 	sf2000_progress_mark("irq-compare-before", 4, read_c0_compare());
+ 	if (sf2000_rom_handoff_present() &&
+ 	    ((read_c0_ebase() & 0xfffff000u) == 0x81002000u)) {
+-		clear_c0_status(ST0_IM);
++		change_c0_status(ST0_IM, STATUSF_IP7);
+ 		irq_disable_hazard();
+-		sf2000_progress_mark("irq-mask-cleared", 4,
++		sf2000_progress_mark("irq-mask-timer-only", 4,
+ 			read_c0_status());
+ 	}
+ }
+-- 
+2.49.0
+
