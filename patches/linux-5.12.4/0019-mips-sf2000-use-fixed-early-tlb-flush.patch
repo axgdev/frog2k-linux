@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000019 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 12:35:00 +0000
+Subject: [PATCH] mips: sf2000: use fixed early TLB flush
+
+The physical unit now reaches the "wired skip/read" marker. In the generated
+code the next instructions still enter the generic local_flush_tlb_all()
+feature path, reading current_cpu_data options and tlbsize before the first
+TLB write marker can run.
+
+The SF2000 bring-up profile already forces a 16-entry 4Kc-style TLB and has no
+Linux-owned wired mappings at this point. Use a fixed 16-entry indexed flush
+for this early path so it no longer depends on the generic feature branch.
+Keep diagnostic calls outside the EntryLo-zero staging window by restoring an
+invalid non-zero EntryLo staging value before emitting post-write markers.
+---
+ arch/mips/mm/tlb-r4k.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 01f9ce11e6fb..d742f1b62c39 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -86,6 +86,35 @@ void local_flush_tlb_all(void)
+ 	first_entry = entry;
+ 	sf2000_tlb_tick("tlb-flush-after-wired-read");
+ 
++	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++		sf2000_tlb_tick("tlb-flush-before-first-write");
++		while (entry < 16) {
++			write_c0_entryhi(CKSEG0 + (entry << (PAGE_SHIFT + 1)));
++			write_c0_index(entry);
++			write_c0_entrylo0(0);
++			write_c0_entrylo1(0);
++			mtc0_tlbw_hazard();
++			tlb_write_indexed();
++			if (entry == first_entry) {
++				tlbw_use_hazard();
++				write_c0_entrylo0(1);
++				write_c0_entrylo1(1);
++				sf2000_tlb_tick("tlb-flush-after-first-write");
++			}
++			entry++;
++		}
++		tlbw_use_hazard();
++		write_c0_entrylo0(1);
++		write_c0_entrylo1(1);
++		sf2000_tlb_tick("tlb-flush-after-loop");
++		write_c0_entryhi(old_ctx);
++		htw_start();
++		flush_micro_tlb();
++		local_irq_restore(flags);
++		sf2000_tlb_tick("tlb-flush-done");
++		return;
++	}
++
+ 	/*
+ 	 * Blast 'em all away.
+ 	 * If there are any wired entries, fall back to iterating
+-- 
+2.50.1

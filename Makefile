@@ -540,8 +540,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '      10 TLBMISS setup, 11 Status/BEV normalized\n'; \
 		printf '    inside tlb_init, ticks are: entry, config entry, pagemask write/read\n'; \
 		printf '      wired zero, before flush, flush entry, irq save, entrylo clear/defer\n'; \
-		printf '      wired skip/read, before/after first TLB write, flush loop done\n'; \
-		printf '      flush done, config done, refill build before/after\n'; \
+		printf '      wired skip/read, fixed 16-entry flush, before/after first TLB write\n'; \
+		printf '      flush loop done, flush done, config done, refill build before/after\n'; \
 		printf '    next trap ticks: 5 per_cpu returned, 6 generic vector copied, 7 default vectors\n'; \
 		printf '    8 watch vector, 9 parity setup, 10 board bus-error setup\n'; \
 		printf '    11 main exception vectors, 12 icache flush, 13 DBE extable sort, 14 CU2 notifier\n'; \
