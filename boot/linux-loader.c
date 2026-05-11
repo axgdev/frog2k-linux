@@ -31,6 +31,11 @@ typedef unsigned long uintptr;
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define BOOTROM_BASE 0xbfc00000u
+#define ROM_F_MOUNT_ADDR 0x8101f044u
+#define ROM_F_OPEN_ADDR 0x8101f0d4u
+#define ROM_DISK_READ_ADDR 0x8101ffb4u
+#define ROM_DISK_WRITE_ADDR 0x81020020u
+#define ROM_CACHE_FLUSH_ADDR 0x810032f4u
 #define BACKLIGHT_R05 (1u << 5)
 #define STATUS_L25 (1u << 25)
 #define BACKLIGHT_OFF_TICKS 0x04000000u
@@ -108,13 +113,14 @@ typedef int (*rom_disk_write_fn)(u8 pdrv, const u8 *buff, u32 sector,
 		u32 count);
 typedef void (*rom_cache_flush_fn)(void *addr, unsigned long len);
 
-static rom_f_mount_fn const rom_f_mount = (rom_f_mount_fn)0x8101f044u;
-static rom_f_open_fn const rom_f_open = (rom_f_open_fn)0x8101f0d4u;
-static rom_disk_read_fn const rom_disk_read = (rom_disk_read_fn)0x8101ffb4u;
+static rom_f_mount_fn const rom_f_mount = (rom_f_mount_fn)ROM_F_MOUNT_ADDR;
+static rom_f_open_fn const rom_f_open = (rom_f_open_fn)ROM_F_OPEN_ADDR;
+static rom_disk_read_fn const rom_disk_read =
+	(rom_disk_read_fn)ROM_DISK_READ_ADDR;
 static rom_disk_write_fn const rom_disk_write =
-	(rom_disk_write_fn)0x81020020u;
+	(rom_disk_write_fn)ROM_DISK_WRITE_ADDR;
 static rom_cache_flush_fn const rom_cache_flush =
-	(rom_cache_flush_fn)0x810032f4u;
+	(rom_cache_flush_fn)ROM_CACHE_FLUSH_ADDR;
 
 struct elf32_ehdr {
 	u8 e_ident[EI_NIDENT];
@@ -225,11 +231,23 @@ static void zero_sector(u8 *sector)
 		sector[i] = 0;
 }
 
+static int rom_word_present(u32 value)
+{
+	return value != 0 && value != 0xffffffffu;
+}
+
 static int rom_call_present(u32 addr)
 {
 	u32 insn = mmio_read32(addr);
 
-	return insn != 0 && insn != 0xffffffffu;
+	return rom_word_present(insn);
+}
+
+static int rom_handoff_present(void)
+{
+	return rom_call_present(ROM_F_MOUNT_ADDR) ||
+		rom_call_present(ROM_DISK_WRITE_ADDR) ||
+		rom_word_present(mmio_read32(BOOTROM_BASE));
 }
 
 static int log_fat_next(u32 cluster, u32 *next)
@@ -389,9 +407,9 @@ static void bootlog_init(void)
 		return;
 	log_tried = 1;
 
-	if (!rom_call_present(0x8101f044u) ||
-	    !rom_call_present(0x8101f0d4u) ||
-	    !rom_call_present(0x81020020u))
+	if (!rom_call_present(ROM_F_MOUNT_ADDR) ||
+	    !rom_call_present(ROM_F_OPEN_ADDR) ||
+	    !rom_call_present(ROM_DISK_WRITE_ADDR))
 		return;
 
 	rc = rom_f_mount(&log_fs, "", 1);
@@ -461,6 +479,22 @@ static void bootlog_ebase(u32 before, u32 after)
 	bootlog_flush();
 }
 
+static void bootlog_handoff_state(u32 bootrom, u32 mount, u32 write)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("handoff bootrom=");
+	bootlog_hex(bootrom);
+	bootlog_puts(" rom_f_mount=");
+	bootlog_hex(mount);
+	bootlog_puts(" rom_disk_write=");
+	bootlog_hex(write);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static u32 cp0_count(void)
 {
 	u32 count;
@@ -473,7 +507,7 @@ static void delay_count_ticks(u32 ticks)
 {
 	u32 start = cp0_count();
 
-	if (mmio_read32(BOOTROM_BASE) == 0)
+	if (!rom_handoff_present())
 		ticks >>= QEMU_DIRECT_DELAY_SHIFT;
 	if (ticks == 0)
 		return;
@@ -588,6 +622,26 @@ static u32 read_ebase(void)
 	return ebase;
 }
 
+static u32 read_status(void)
+{
+	u32 status;
+
+	__asm__ volatile("mfc0 %0, $12" : "=r"(status));
+	return status;
+}
+
+static void write_status(u32 status)
+{
+	__asm__ volatile(
+		"mtc0 %0, $12\n\t"
+		"nop\n\t"
+		"nop\n\t"
+		"nop"
+		:
+		: "r"(status)
+		: "memory");
+}
+
 static void write_ebase(u32 ebase)
 {
 	__asm__ volatile(
@@ -604,10 +658,19 @@ static void write_ebase(u32 ebase)
 
 static void reset_exception_base_for_linux(void)
 {
+	u32 bootrom;
+	u32 mount;
+	u32 write;
 	u32 before;
 	u32 after;
 
-	if (mmio_read32(BOOTROM_BASE) == 0)
+	bootrom = mmio_read32(BOOTROM_BASE);
+	mount = mmio_read32(ROM_F_MOUNT_ADDR);
+	write = mmio_read32(ROM_DISK_WRITE_ADDR);
+	bootlog_handoff_state(bootrom, mount, write);
+
+	if (!rom_word_present(mount) && !rom_word_present(write) &&
+	    !rom_word_present(bootrom))
 		return;
 
 	before = read_ebase();
@@ -620,6 +683,20 @@ static void reset_exception_base_for_linux(void)
 	uart_hex(after);
 	uart_puts("\n");
 	bootlog_ebase(before, after);
+}
+
+static void log_status_handoff(void)
+{
+	u32 status = read_status();
+
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("status=");
+	bootlog_hex(status);
+	bootlog_puts(" -> 0x00000000\n");
+	bootlog_flush();
 }
 
 static uintptr align_up(uintptr value, uintptr align)
@@ -786,14 +863,17 @@ static void copy_linux_elf(const u8 *blob)
 	}
 }
 
-static void jump_to_kernel(u32 entry, uintptr dtb)
+static void print_kernel_jump(u32 entry, uintptr dtb)
 {
 	uart_puts("linux-loader: jump entry=");
 	uart_hex(entry);
 	uart_puts(" dtb=");
 	uart_hex((u32)dtb);
 	uart_puts("\n");
+}
 
+static void jump_to_kernel(u32 entry, uintptr dtb)
+{
 	__asm__ volatile(
 		"move $4, %0\n\t"
 		"move $5, %1\n\t"
@@ -860,6 +940,9 @@ void linux_loader_main(void)
 	disable_interrupts();
 	reset_exception_base_for_linux();
 	backlight_stage_mark("loader-jump", 2);
+	print_kernel_jump(eh->e_entry, dtb_dest);
+	log_status_handoff();
+	write_status(0);
 	jump_to_kernel(eh->e_entry, dtb_dest);
 
 	for (;;)

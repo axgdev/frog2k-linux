@@ -302,6 +302,8 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 		--disable KALLSYMS \
 		--disable KALLSYMS_ALL \
 		--disable KALLSYMS_BASE_RELATIVE \
+		--disable INITRAMFS_COMPRESSION_GZIP \
+		--enable INITRAMFS_COMPRESSION_NONE \
 		--enable DEVTMPFS \
 		--enable DEVTMPFS_MOUNT \
 		--enable PROC_FS \
@@ -513,6 +515,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  1 pulse: Linux loader entered\n'; \
 		printf '  2 pulses: loader is jumping to the kernel\n'; \
 		printf '  log.txt records CP0 EBase before/after the loader normalizes it for Linux.\n'; \
+		printf '  log.txt also records the handoff words used to decide whether ROM helpers are present.\n'; \
 		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
 		printf '  after 3 pulses, count single ticks inside setup_arch:\n'; \
 		printf '    1 cpu_probe, 2 mips_cm_probe skipped/done, 3 prom_init\n'; \
@@ -526,14 +529,14 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '    4 setup_per_cpu_areas, 5 smp_prepare_boot_cpu, 6 cpu hotplug init\n'; \
 		printf '    7 build_all_zonelists, 8 page_alloc_init, 9 jump_label_init\n'; \
 		printf '    10 parse_early_param, 11 parse_args, 12 setup_log_buf\n'; \
-		printf '    13 vfs_caches_init_early, 14 sort_main_extable, 15 trap_init\n'; \
-		printf '  6 pulses: mm_init completed\n'; \
-		printf '  if it stops after the 14th post-setup tick, it entered trap_init but did not return.\n'; \
-		printf '  inside trap_init, count single ticks after that 14th post-setup tick:\n'; \
+		printf '    13 vfs_caches_init_early, 14 sort_main_extable\n'; \
+		printf '  after the 14th post-setup tick, trap_init begins and emits its own ticks:\n'; \
 		printf '    1 check_wait skipped/done, 2 ebase selected, 3 generic vector preinstalled\n'; \
 		printf '    4 per_cpu_trap_init/TLB setup, 5 generic vector copied, 6 default vectors\n'; \
 		printf '    7 watch vector, 8 parity setup, 9 board bus-error setup\n'; \
 		printf '    10 main exception vectors, 11 icache flush, 12 DBE extable sort, 13 CU2 notifier\n'; \
+		printf '  post-setup tick 15 means trap_init returned and mm_init is about to run.\n'; \
+		printf '  6 pulses: mm_init completed\n'; \
 		printf '  7 pulses: time_init completed\n'; \
 		printf '  8 pulses: kernel is about to enable IRQs\n'; \
 		printf '  9 pulses: kernel is about to exec /init\n'; \
