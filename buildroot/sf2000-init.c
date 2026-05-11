@@ -30,6 +30,11 @@ typedef unsigned int size_t;
 #define PIN_R05 5UL
 #define STATUS_L25 (1UL << PIN_L25)
 #define BACKLIGHT_R05 (1UL << PIN_R05)
+#define WDT_MAP_BASE_PHYS 0x18818000UL
+#define WDT_MAP_SIZE 0x1000UL
+#define WDT_REG_OFF 0x500UL
+#define WDT_COUNT_OFF 0x00UL
+#define WDT_CONF_OFF 0x04UL
 
 struct timespec {
 	long tv_sec;
@@ -174,6 +179,26 @@ static void mmio_write8(volatile unsigned char *base, unsigned long off,
 	*(volatile unsigned char *)(base + off) = value;
 }
 
+static int early_watchdog_disable(void)
+{
+	volatile unsigned char *wdt;
+	long fd;
+
+	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
+	if (fd < 0)
+		return -1;
+
+	wdt = sys_mmap2(0, WDT_MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
+		fd, WDT_MAP_BASE_PHYS);
+	syscall1(SYS_close, fd);
+	if ((long)wdt < 0)
+		return -2;
+
+	mmio_write32(wdt, WDT_REG_OFF + WDT_COUNT_OFF, 0);
+	mmio_write8(wdt, WDT_REG_OFF + WDT_CONF_OFF, 0);
+	return 0;
+}
+
 static void userspace_backlight_set(volatile unsigned char *sysio, int on)
 {
 	unsigned int out;
@@ -294,6 +319,10 @@ static void log_message(const char *message)
 void _start(void)
 {
 	setup_stdio();
+	if (early_watchdog_disable() == 0)
+		log_message("sf2000_buildroot: early watchdog disabled\n");
+	else
+		log_message("sf2000_buildroot: early watchdog disable failed\n");
 	log_message("sf2000_buildroot: /init visible userspace stage begin\n");
 	if (visible_userspace_stage() == 0)
 		log_message("sf2000_buildroot: /init visible userspace stage done\n");

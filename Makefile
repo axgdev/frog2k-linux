@@ -516,6 +516,10 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Early Linux records named progress entries at uncached 0xa13f0000.\n'; \
 		printf '  On the next boot, the loader dumps the previous run to log.txt before clearing it.\n'; \
 		printf '  This helps replace manual blink counting when RAM survives reset/reboot.\n\n'; \
+		printf 'Early watchdog:\n'; \
+		printf '  Linux arms WDT0 during setup_arch and pets it whenever it records progress.\n'; \
+		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
+		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
 		printf 'Runtime controls:\n'; \
 		printf '  Press SELECT in Linux userspace to request a watchdog reboot.\n\n'; \
 		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
@@ -667,6 +671,8 @@ run-linux-buildroot-asd:
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-asd
+	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-asd.log
@@ -678,6 +684,8 @@ run-linux-buildroot-rom:
 smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
+	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-rom.log
