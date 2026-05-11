@@ -79,8 +79,12 @@ LINUX_LOADER_ELF := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).elf
 LINUX_LOADER_BIN := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).bin
 LINUX_ASD := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX).asd
 SDCARD_LINUX_ASD := $(BUILD_DIR)/sdcard/firmware/linux.asd
+SDCARD_FASTBOOT_BIN := $(BUILD_DIR)/sdcard/firmware/unifrog.bin
+SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
+SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
+QEMU_BOOT_TIMEOUT ?= 35s
 SMOKE_INIT_PATTERN ?= sf2000_linux: initramfs alive
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
@@ -441,6 +445,27 @@ $(SDCARD_LINUX_ASD): $(LINUX_ASD)
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
+$(SDCARD_BIOS_ASD): $(LINUX_ASD)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(SDCARD_FASTBOOT_BIN): $(LINUX_LOADER_BIN)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(SDCARD_BOOT_OPTIONS): Makefile
+	mkdir -p '$(dir $@)'
+	{ \
+		printf 'SF2000 Linux boot artifacts for ROOTFS=%s\n\n' '$(ROOTFS)'; \
+		printf '/bios/bisrv.asd\n'; \
+		printf '  Direct ROM boot. This is an ASD image with a valid LCFG CRC.\n\n'; \
+		printf '/firmware/unifrog.bin\n'; \
+		printf '  Existing fastboot auto-load path. This is the raw loader binary, not an ASD.\n\n'; \
+		printf '/firmware/linux.asd\n'; \
+		printf '  Unifrog menu handoff path. Boot Unifrog first, then select linux.asd.\n\n'; \
+		printf 'The loader starts with a slow backlight off/on/off proof before jumping to Linux.\n'; \
+	} > '$@'
+
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
 
@@ -452,7 +477,8 @@ linux-buildroot:
 linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot linux-asd
 
-sdcard-linux: $(SDCARD_LINUX_ASD)
+sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
+		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS)
 
 sdcard-buildroot:
 	$(MAKE) ROOTFS=buildroot sdcard-linux
@@ -464,7 +490,7 @@ linux-buildroot-rom-sd:
 
 run-linux: qemu linux
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_VMLINUX)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_VMLINUX)' \
 		-dtb '$(SF2000_DTB)' -append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux.log \
@@ -477,7 +503,7 @@ smoke-linux: run-linux
 
 run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-asd.log \
 		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
@@ -504,7 +530,7 @@ smoke-linux-input: run-linux-input
 run-linux-rom: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout 20s '$(QEMU_BIN)' -M sf2000 -bios '$(BOOTROM_BUGFIX)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -bios '$(BOOTROM_BUGFIX)' \
 		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-rom.log \
@@ -546,7 +572,7 @@ run-linux-buildroot-display: qemu
 	SF2000_TRACE_GMA=1 \
 	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-buildroot-gma \
 	SF2000_GMA_DUMP_LIMIT=8 \
-	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-display.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-display.console 2>&1 || test $$? -eq 124

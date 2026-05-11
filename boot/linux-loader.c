@@ -28,7 +28,8 @@ typedef unsigned long uintptr;
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define BACKLIGHT_R05 (1u << 5)
-#define BACKLIGHT_PULSE_DELAY 50000000u
+#define BACKLIGHT_LONG_TICKS 0x20000000u
+#define BACKLIGHT_SHORT_TICKS 0x10000000u
 
 struct elf32_ehdr {
 	u8 e_ident[EI_NIDENT];
@@ -109,9 +110,19 @@ static void mmio_write8(uintptr addr, u8 value)
 	*(volatile u8 *)addr = value;
 }
 
-static void delay_cycles(u32 count)
+static u32 cp0_count(void)
 {
-	while (count-- != 0)
+	u32 count;
+
+	__asm__ volatile("mfc0 %0, $9" : "=r"(count));
+	return count;
+}
+
+static void delay_count_ticks(u32 ticks)
+{
+	u32 start = cp0_count();
+
+	while ((u32)(cp0_count() - start) < ticks)
 		__asm__ volatile("nop");
 }
 
@@ -125,17 +136,35 @@ static void backlight_set(int on)
 	else
 		out |= BACKLIGHT_R05;
 
-	mmio_write32(GPIO_R_OUT, out);
-	mmio_write32(GPIO_R_DIR, dir | BACKLIGHT_R05);
 	mmio_write8(PINMUX_R05, 0);
+	mmio_write32(GPIO_R_DIR, dir | BACKLIGHT_R05);
+	mmio_write32(GPIO_R_OUT, out);
 }
 
 static void backlight_loader_mark(void)
 {
+	uart_puts("linux-loader: early backlight proof begin\n");
 	backlight_set(0);
-	delay_cycles(BACKLIGHT_PULSE_DELAY);
+	delay_count_ticks(BACKLIGHT_LONG_TICKS);
 	backlight_set(1);
-	delay_cycles(BACKLIGHT_PULSE_DELAY);
+	delay_count_ticks(BACKLIGHT_SHORT_TICKS);
+	backlight_set(0);
+	delay_count_ticks(BACKLIGHT_LONG_TICKS);
+	backlight_set(1);
+	uart_puts("linux-loader: early backlight proof end\n");
+}
+
+static void loader_panic(const char *message)
+{
+	uart_puts(message);
+	uart_puts("\n");
+
+	for (;;) {
+		backlight_set(0);
+		delay_count_ticks(BACKLIGHT_LONG_TICKS);
+		backlight_set(1);
+		delay_count_ticks(BACKLIGHT_LONG_TICKS);
+	}
 }
 
 static void clear_bss(void)
@@ -372,17 +401,14 @@ void linux_loader_main(void)
 	uart_puts("\n");
 
 	if (!valid_elf(eh, kernel_size)) {
-		uart_puts("linux-loader: invalid embedded kernel\n");
-		for (;;)
-			;
+		loader_panic("linux-loader: invalid embedded kernel");
 	}
 
 	load_min = 0;
 	load_max = 0;
 	if (scan_linux_elf(linux_vmlinux_start, kernel_size,
 			&load_min, &load_max) != 0) {
-		for (;;)
-			;
+		loader_panic("linux-loader: cannot map embedded kernel");
 	}
 
 	payload_end = align_up((uintptr)linux_dtb_end, 0x10000u);
@@ -390,9 +416,7 @@ void linux_loader_main(void)
 	if (dtb_dest < payload_end)
 		dtb_dest = payload_end;
 	if (dtb_dest + dtb_size > RAM_TOP) {
-		uart_puts("linux-loader: no room for DTB\n");
-		for (;;)
-			;
+		loader_panic("linux-loader: no room for DTB");
 	}
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);

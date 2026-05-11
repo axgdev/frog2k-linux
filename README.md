@@ -40,9 +40,23 @@ revisited after the kernel ABI and core devices are proven.
 
 ```sh
 make qemu
-make rootfs
+make ROOTFS=buildroot sdcard-linux
+make ROOTFS=buildroot smoke-linux-buildroot-asd
+make ROOTFS=buildroot smoke-linux-buildroot-rom
+make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
 ```
 
-`make linux` and `make run` will become the main loop once the kernel source and
-SF2000 Linux loader path are in place.
+`sdcard-linux` writes three intentionally different boot artifacts under
+`build/sdcard`:
+
+- `bios/bisrv.asd`: direct ROM boot. Copy this over the SD card
+  `/bios/bisrv.asd` when bypassing fastboot/Unifrog.
+- `firmware/unifrog.bin`: existing fastboot auto-load path. This is the raw
+  loader binary, not an ASD image.
+- `firmware/linux.asd`: Unifrog menu handoff path. Boot Unifrog first and
+  select `linux.asd`.
+
+The loader starts with a slow backlight off/on/off proof before jumping to the
+kernel. If that pattern is not visible on hardware, the Linux loader did not
+run or did not reach its first GPIO writes.
