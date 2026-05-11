@@ -3,7 +3,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 
 This project is the Linux bring-up workspace for the SF2000, GB300, DY12, and
-related HC15xx/SF2000-family handhelds. The first hardware target is GB300.
+related HC15xx/SF2000-family handhelds. The first hardware target is SF2000.
 
 The goal is a small, fast iteration loop:
 
@@ -27,7 +27,7 @@ The HCLinux tree has useful Linux support for HC16xx, but not a ready HC15xx
 Linux board port. We use it as driver and platform reference while keeping the
 initial SF2000 target small:
 
-- MIPS little-endian, soft-float userspace.
+- MIPS little-endian, using the existing SF2000 toolchain under `/opt/`.
 - UART console first.
 - Initramfs first; SD rootfs later.
 - No desktop stack, no package manager, no X11/Wayland during bring-up.
