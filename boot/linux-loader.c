@@ -28,8 +28,9 @@ typedef unsigned long uintptr;
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define BACKLIGHT_R05 (1u << 5)
-#define BACKLIGHT_LONG_TICKS 0x20000000u
-#define BACKLIGHT_SHORT_TICKS 0x10000000u
+#define BACKLIGHT_OFF_TICKS 0x20000000u
+#define BACKLIGHT_ON_TICKS 0x08000000u
+#define BACKLIGHT_STAGE_GAP_TICKS 0x18000000u
 
 struct elf32_ehdr {
 	u8 e_ident[EI_NIDENT];
@@ -141,17 +142,25 @@ static void backlight_set(int on)
 	mmio_write32(GPIO_R_OUT, out);
 }
 
-static void backlight_loader_mark(void)
+static void backlight_stage_mark(const char *name, unsigned int pulses)
 {
-	uart_puts("linux-loader: early backlight proof begin\n");
-	backlight_set(0);
-	delay_count_ticks(BACKLIGHT_LONG_TICKS);
+	unsigned int i;
+
+	uart_puts("linux-loader: visible stage ");
+	uart_puts(name);
+	uart_puts(" pulses=");
+	uart_hex(pulses);
+	uart_puts("\n");
+
 	backlight_set(1);
-	delay_count_ticks(BACKLIGHT_SHORT_TICKS);
-	backlight_set(0);
-	delay_count_ticks(BACKLIGHT_LONG_TICKS);
-	backlight_set(1);
-	uart_puts("linux-loader: early backlight proof end\n");
+	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
+	for (i = 0; i < pulses; i++) {
+		backlight_set(0);
+		delay_count_ticks(BACKLIGHT_OFF_TICKS);
+		backlight_set(1);
+		delay_count_ticks(BACKLIGHT_ON_TICKS);
+	}
+	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
 }
 
 static void loader_panic(const char *message)
@@ -161,9 +170,9 @@ static void loader_panic(const char *message)
 
 	for (;;) {
 		backlight_set(0);
-		delay_count_ticks(BACKLIGHT_LONG_TICKS);
+		delay_count_ticks(BACKLIGHT_OFF_TICKS);
 		backlight_set(1);
-		delay_count_ticks(BACKLIGHT_LONG_TICKS);
+		delay_count_ticks(BACKLIGHT_OFF_TICKS);
 	}
 }
 
@@ -388,7 +397,7 @@ void linux_loader_main(void)
 
 	clear_bss();
 	disable_interrupts();
-	backlight_loader_mark();
+	backlight_stage_mark("loader-entry", 1);
 
 	kernel_size = (usize)(linux_vmlinux_end - linux_vmlinux_start);
 	dtb_size = (usize)(linux_dtb_end - linux_dtb_start);
@@ -424,7 +433,7 @@ void linux_loader_main(void)
 	cache_flush_range(load_min, (usize)(load_max - load_min));
 	cache_flush_range(dtb_dest, dtb_size);
 	disable_interrupts();
-	backlight_set(1);
+	backlight_stage_mark("loader-jump", 2);
 	jump_to_kernel(eh->e_entry, dtb_dest);
 
 	for (;;)

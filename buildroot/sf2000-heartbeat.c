@@ -131,7 +131,7 @@ int main(void)
 	signal(SIGTERM, handle_signal);
 
 	log_line("sf2000-heartbeat: backlight heartbeat ready\n");
-	pulse_backlight(3, 180, 180);
+	pulse_backlight(3, 800, 800);
 
 	while (!stopping) {
 		if (access("/run/sf2000-screen-own-backlight", F_OK) == 0) {
@@ -145,10 +145,10 @@ int main(void)
 			continue;
 		}
 
-		backlight_set(1);
-		sleep_ms(1200);
 		backlight_set(0);
-		sleep_ms(120);
+		sleep_ms(1000);
+		backlight_set(1);
+		sleep_ms(1500);
 	}
 
 	backlight_set(1);

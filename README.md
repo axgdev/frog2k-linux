@@ -57,6 +57,12 @@ make status
 - `firmware/linux.asd`: Unifrog menu handoff path. Boot Unifrog first and
   select `linux.asd`.
 
-The loader starts with a slow backlight off/on/off proof before jumping to the
-kernel. If that pattern is not visible on hardware, the Linux loader did not
-run or did not reach its first GPIO writes.
+Hardware diagnostics use counted backlight-off pulse groups:
+
+- 1 pulse: Linux loader entered.
+- 2 pulses: loader is jumping to the kernel.
+- 3 pulses: kernel entered MIPS `setup_arch`.
+- 4 pulses: kernel finished MIPS `setup_arch`.
+- 5 pulses: initramfs `/init` reached userspace.
+
+If the pulse groups stop, the next stage is where the boot is hanging.

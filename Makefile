@@ -84,7 +84,7 @@ SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
-QEMU_BOOT_TIMEOUT ?= 35s
+QEMU_BOOT_TIMEOUT ?= 90s
 SMOKE_INIT_PATTERN ?= sf2000_linux: initramfs alive
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
@@ -250,12 +250,17 @@ $(LINUX_SRC)/Makefile:
 	tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1
 
 $(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
-	@if ! grep -q -- '-std=gnu89 -fPIC' '$(LINUX_SRC)'/arch/mips/vdso/Makefile; then \
-		for patch in $(LINUX_PATCHES); do \
+	@for patch in $(LINUX_PATCHES); do \
+		if patch -d '$(LINUX_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'applying %s\n' "$$patch"; \
 			patch -d '$(LINUX_SRC)' -p1 < "$$patch"; \
-		done; \
-	fi
+		elif patch -d '$(LINUX_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
+			printf 'already applied %s\n' "$$patch"; \
+		else \
+			printf 'cannot apply %s\n' "$$patch" >&2; \
+			exit 1; \
+		fi; \
+	done
 	touch '$@'
 
 $(SF2000_DTB): linux/sf2000.dts
@@ -291,6 +296,16 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 		--disable SERIAL_MCTRL_GPIO \
 		--disable SERIAL_8250_DMA \
 		--disable SERIAL_8250_PCI \
+		--disable SMP \
+		--disable SMP_UP \
+		--disable MIPS_CPS \
+		--disable MIPS_CPS_PM \
+		--disable MIPS_CM \
+		--disable MIPS_CPC \
+		--disable MIPS_CMP \
+		--disable MIPS_MT \
+		--disable MIPS_MT_SMP \
+		--disable MIPS_MT_FPAFF \
 		--disable BLOCK \
 		--disable BLK_DEV \
 		--disable BLK_DEV_BSG \
@@ -463,7 +478,12 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Existing fastboot auto-load path. This is the raw loader binary, not an ASD.\n\n'; \
 		printf '/firmware/linux.asd\n'; \
 		printf '  Unifrog menu handoff path. Boot Unifrog first, then select linux.asd.\n\n'; \
-		printf 'The loader starts with a slow backlight off/on/off proof before jumping to Linux.\n'; \
+		printf 'Visible stages use counted backlight-off pulses:\n'; \
+		printf '  1 pulse: Linux loader entered\n'; \
+		printf '  2 pulses: loader is jumping to the kernel\n'; \
+		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
+		printf '  4 pulses: kernel finished MIPS setup_arch\n'; \
+		printf '  5 pulses: initramfs /init reached userspace\n'; \
 	} > '$@'
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
@@ -515,7 +535,7 @@ smoke-linux-asd: run-linux-asd
 
 run-linux-input: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 3; printf 'sendkey right 1000\n'; sleep 2; \
+	(sleep 45; printf 'sendkey right 1000\n'; sleep 2; \
 		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor stdio \
