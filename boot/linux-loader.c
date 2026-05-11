@@ -54,7 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-11 exec-trace"
+#define LOADER_BUILD_TAG "2026-05-11 arg-copy-trace"
 
 typedef unsigned long long u64;
 
