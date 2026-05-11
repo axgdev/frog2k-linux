@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000025 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: skip early TLBWI flush
+
+Physical SF2000 hardware reaches the first indexed TLB write in
+local_flush_tlb_all() and then stops making progress. The watchdog log
+confirms the last completed marker is tlb-flush-after-wired-read, so the
+first tlb_write_indexed() does not return.
+
+Keep the bootloader's existing TLB state for the first Linux flush instead
+of rewriting the entries this early. This lets boot continue far enough to
+diagnose the next blocker, and records a distinct progress marker when this
+path is taken.
+---
+ arch/mips/mm/tlb-r4k.c | 22 +---------------------
+ 1 file changed, 1 insertion(+), 21 deletions(-)
+
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -201,30 +201,10 @@ void local_flush_tlb_all(void)
+ 	sf2000_tlb_tick("tlb-flush-after-wired-read");
+ 
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
+-		while (entry < 16) {
+-			write_c0_entryhi(entry << (PAGE_SHIFT + 1));
+-			write_c0_index(entry);
+-			write_c0_entrylo0(0);
+-			write_c0_entrylo1(0);
+-			mtc0_tlbw_hazard();
+-			tlb_write_indexed();
+-			if (entry == first_entry) {
+-				tlbw_use_hazard();
+-				write_c0_entrylo0(1);
+-				write_c0_entrylo1(1);
+-				sf2000_tlb_tick("tlb-flush-after-first-write");
+-			}
+-			entry++;
+-		}
+-		tlbw_use_hazard();
+-		write_c0_entrylo0(1);
+-		write_c0_entrylo1(1);
+-		sf2000_tlb_tick("tlb-flush-after-loop");
++		sf2000_tlb_tick("tlb-flush-skip-tlbwi");
+ 		write_c0_entryhi(old_ctx);
+ 		htw_start();
+-		flush_micro_tlb();
+ 		local_irq_restore(flags);
+-		sf2000_tlb_tick("tlb-flush-done");
+ 		return;
+ 	}
+ 
+-- 
+2.49.0

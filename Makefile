@@ -554,9 +554,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '    inside tlb_init, physical TLB ticks use bare GPIO without printk/GMA.\n'; \
 		printf '    ticks are: entry, config entry, pagemask write/read\n'; \
 		printf '      wired zero, before flush, flush entry, irq save, entrylo clear/defer\n'; \
-		printf '      wired skip/read, fixed 16-entry flush, after first TLB write\n'; \
-		printf '      there is no marker before the first TLB write on physical builds\n'; \
-		printf '      flush loop done, flush done, config done, refill build before/after\n'; \
+		printf '      wired skip/read, SF2000 TLBWI skip, config done\n'; \
+		printf '      refill build before/after\n'; \
 		printf '    next trap ticks: 5 per_cpu returned, 6 generic vector copied, 7 default vectors\n'; \
 		printf '    8 watch vector, 9 parity setup, 10 board bus-error setup\n'; \
 		printf '    11 main exception vectors, 12 icache flush, 13 DBE extable sort, 14 CU2 notifier\n'; \
