@@ -16,6 +16,7 @@
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -62,6 +63,7 @@
 #define PINPAD_L08 8u
 #define PINPAD_L09 9u
 #define PINPAD_L10 10u
+#define PINPAD_L25 25u
 #define PINPAD_R05 69u
 #define PINPAD_T00 96u
 #define PINPAD_T01 97u
@@ -100,6 +102,7 @@
 #define PINMUX_PRGB_DE 6u
 
 #define ST7789_SLPOUT 0x11u
+#define ST7789_NORON 0x13u
 #define ST7789_INVON 0x21u
 #define ST7789_DISPON 0x29u
 #define ST7789_CASET 0x2au
@@ -114,6 +117,8 @@ static volatile uint8_t *gma;
 static volatile uint8_t *sysio;
 static volatile sig_atomic_t stopping;
 static int panel_enabled = 1;
+static int led_enabled = 1;
+static int slow_panel_bus = 1;
 
 static uint16_t *framebuffer(void);
 
@@ -166,6 +171,111 @@ static const struct glyph glyphs[] = {
 	{ 'Z', { 0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f } },
 };
 
+static const uint8_t st7789_x60_old_init[] = {
+	0, 1, ST7789_SLPOUT,
+	99, 3, 0xcf, 0x00, 0xa1,
+	0, 3, 0xb1, 0x00, 0x1e,
+	0, 2, 0xb4, 0x02,
+	0, 2, 0xb6, 0x02,
+	0, 3, 0xc0, 0x0f, 0x0d,
+	0, 2, 0xc1, 0x00,
+	0, 2, 0xc5, 0xe7,
+	0, 16, 0xe0, 0x05, 0x08, 0x0d, 0x07, 0x10, 0x08, 0x33, 0x35,
+		0x45, 0x04, 0x0b, 0x08, 0x1a, 0x1d, 0x0f,
+	0, 16, 0xe1, 0x06, 0x23, 0x26, 0x00, 0x0c, 0x01, 0x39, 0x02,
+		0x4a, 0x02, 0x0c, 0x07, 0x31, 0x36, 0x0f,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 2, ST7789_MADCTL, 0xa8,
+	0
+};
+
+static const uint8_t st7789_x60_new_init[] = {
+	1, 3, 0xf0, 0x5a, 0x5a,
+	0, 6, 0xf3, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0, 1, ST7789_SLPOUT,
+	16, 1, ST7789_NORON,
+	128, 12, 0xf4, 0x07, 0x00, 0x00, 0x00, 0x21, 0x47, 0x01, 0x02,
+		0x2a, 0x66, 0x05,
+	0, 11, 0xf5, 0x00, 0x4d, 0x66, 0x00, 0x00, 0x12, 0x00, 0x00,
+		0x0d, 0x01,
+	0, 2, ST7789_TEON, 0x00,
+	0, 2, ST7789_MADCTL, 0x88,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 6, 0xf3, 0x00, 0x03, 0x00, 0x00, 0x00,
+	16, 4, 0xf3, 0x00, 0x0f, 0x01,
+	16, 3, 0xf3, 0x00, 0x1f,
+	16, 3, 0xf3, 0x00, 0x3f,
+	16, 4, 0xf3, 0x00, 0x3f, 0x03,
+	48, 3, 0xf3, 0x00, 0x7f,
+	48, 3, 0xf3, 0x00, 0xff,
+	32, 6, 0xf3, 0x00, 0xff, 0x1f, 0x00, 0x02,
+	0, 12, 0xf4, 0x07, 0x00, 0x00, 0x00, 0x21, 0x47, 0x04, 0x02,
+		0x2a, 0x66, 0x05,
+	16, 2, 0xf3, 0x01,
+	0, 18, 0xf2, 0x28, 0x65, 0x7f, 0x08, 0x08, 0x00, 0x00, 0x15,
+		0x48, 0x00, 0x07, 0x01, 0x00, 0x00, 0x94, 0x08, 0x08,
+	0, 2, ST7789_TEON, 0x00,
+	0, 2, ST7789_MADCTL, 0xe8,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 1, ST7789_NORON,
+	0, 3, 0xf0, 0xa5, 0xa5,
+	0
+};
+
+static const uint8_t st7789_q19_init[] = {
+	1, 3, 0xf0, 0x5a, 0x5a,
+	0, 6, 0xf3, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0, 1, ST7789_SLPOUT,
+	16, 1, ST7789_NORON,
+	128, 12, 0xf4, 0x07, 0x00, 0x00, 0x00, 0x21, 0x47, 0x01, 0x02,
+		0x2a, 0x66, 0x05,
+	0, 11, 0xf5, 0x00, 0x4d, 0x66, 0x00, 0x00, 0x12, 0x00, 0x00,
+		0x0d, 0x01,
+	0, 2, ST7789_TEON, 0x00,
+	0, 2, ST7789_MADCTL, 0x88,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 6, 0xf3, 0x00, 0x03, 0x00, 0x00, 0x00,
+	16, 4, 0xf3, 0x00, 0x0f, 0x01,
+	16, 3, 0xf3, 0x00, 0x1f,
+	16, 3, 0xf3, 0x00, 0x3f,
+	16, 4, 0xf3, 0x00, 0x3f, 0x03,
+	48, 3, 0xf3, 0x00, 0x7f,
+	48, 3, 0xf3, 0x00, 0xff,
+	32, 6, 0xf3, 0x00, 0xff, 0x1f, 0x00, 0x02,
+	0, 12, 0xf4, 0x07, 0x00, 0x00, 0x00, 0x21, 0x47, 0x04, 0x02,
+		0x2a, 0x66, 0x05,
+	16, 2, 0xf3, 0x01,
+	0, 18, 0xf2, 0x28, 0x65, 0x7f, 0x08, 0x08, 0x00, 0x00, 0x15,
+		0x48, 0x00, 0x07, 0x01, 0x00, 0x00, 0x94, 0x08, 0x08,
+	0, 2, ST7789_TEON, 0x00,
+	0, 2, ST7789_MADCTL, 0x28,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 1, ST7789_NORON,
+	0, 3, 0xf0, 0xa5, 0xa5,
+	0
+};
+
+static const uint8_t st7789_dy12_init[] = {
+	1, 4, 0xb9, 0xff, 0x83, 0x47,
+	0, 1, ST7789_SLPOUT,
+	99, 2, 0xcc, 0x08,
+	0, 5, 0xb3, 0x00, 0x00, 0x08, 0x04,
+	0, 2, ST7789_MADCTL, 0x68,
+	0, 2, ST7789_COLMOD, 0x55,
+	0, 4, 0xb6, 0x88, 0x2f, 0x57,
+	0, 2, 0xb0, 0x3b,
+	5, 8, 0xb1, 0x00, 0x01, 0x31, 0x03, 0x44, 0x44, 0xd4,
+	0, 8, 0xb4, 0x11, 0x8f, 0x00, 0x04, 0x04, 0x1d, 0x88,
+	0, 5, 0xe3, 0x10, 0x10, 0x10, 0x10,
+	0, 9, 0xbf, 0x00, 0x00, 0xc0, 0x70, 0x38, 0x3c, 0xc7, 0x00,
+	0, 4, 0xb6, 0x8a, 0x67, 0x57,
+	0, 28, 0xe0, 0x01, 0x07, 0x07, 0x1f, 0x1c, 0x3e, 0x1b, 0x6b,
+		0x07, 0x13, 0x19, 0x19, 0x16, 0x01, 0x23, 0x20,
+		0x38, 0x38, 0x3e, 0x14, 0x64, 0x09, 0x06, 0x06,
+		0x0c, 0x18, 0xcc,
+	0
+};
+
 static const uint8_t st7789_sf2000_init[] = {
 	0, 1, ST7789_SLPOUT,
 	99, 2, ST7789_MADCTL, 0x70,
@@ -188,6 +298,54 @@ static const uint8_t st7789_sf2000_init[] = {
 		0x47, 0x08, 0x15, 0x14, 0x2c, 0x33,
 	0, 1, ST7789_INVON,
 	0
+};
+
+static const uint8_t st7789_009306_init[] = {
+	0, 1, ST7789_SLPOUT, 0,
+	1, 0xfe, 0,
+	1, 0xef, 0,
+	2, ST7789_MADCTL, 0x28, 0,
+	2, ST7789_COLMOD, 0x05, 0,
+	3, 0xa4, 0x44, 0x44, 0,
+	3, 0xa5, 0x42, 0x42, 0,
+	3, 0xaa, 0x88, 0x88, 0,
+	3, 0xe8, 0x11, 0x0b, 0,
+	3, 0xe3, 0x01, 0x10, 0,
+	2, 0xff, 0x61, 0,
+	2, 0xac, 0x00, 0,
+	2, 0xad, 0x33, 0,
+	2, 0xae, 0x2b, 0,
+	2, 0xaf, 0x55, 0,
+	3, 0xa6, 0x25, 0x25, 0,
+	3, 0xa7, 0x24, 0x24, 0,
+	3, 0xa8, 0x13, 0x13, 0,
+	3, 0xa9, 0x25, 0x25, 0,
+	5, ST7789_CASET, 0x00, 0x00, 0x00, 0xef, 0,
+	5, ST7789_RASET, 0x00, 0x00, 0x01, 0x3f, 0,
+	1, ST7789_RAMWR, 0,
+	7, 0xf0, 0x02, 0x01, 0x00, 0x06, 0x09, 0x0c, 0,
+	7, 0xf1, 0x01, 0x03, 0x00, 0x3a, 0x3e, 0x09, 0,
+	7, 0xf2, 0x0c, 0x09, 0x26, 0x07, 0x07, 0x30, 0,
+	7, 0xf3, 0x09, 0x06, 0x57, 0x03, 0x03, 0x6b, 0,
+	7, 0xf4, 0x0d, 0x1d, 0x1c, 0x06, 0x08, 0x0f, 0,
+	7, 0xf5, 0x0c, 0x05, 0x06, 0x33, 0x31, 0x0f, 0,
+	1, ST7789_SLPOUT, 99,
+	0
+};
+
+struct panel_variant {
+	const char *name;
+	const uint8_t *init;
+	uint8_t madctl[4];
+};
+
+static const struct panel_variant panel_variants[] = {
+	{ "SF2000", st7789_sf2000_init, { 0x70, 0x00, 0x80, 0xc0 } },
+	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
+	{ "X60 NEW", st7789_x60_new_init, { 0xe8, 0x88, 0x28, 0x68 } },
+	{ "Q19", st7789_q19_init, { 0x28, 0x68, 0xa8, 0xe8 } },
+	{ "DY12", st7789_dy12_init, { 0x68, 0x28, 0xa8, 0xe8 } },
+	{ "009306", st7789_009306_init, { 0x28, 0x68, 0xa8, 0xe8 } },
 };
 
 struct pinmux_setting {
@@ -310,6 +468,17 @@ static void backlight_set(int on)
 	mmio_write8(sysio, PINMUX_R_OFF + PIN_R05, 0);
 }
 
+static int publish_marker(const char *path, const char *text)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+
+	if (fd < 0)
+		return -1;
+	(void)write(fd, text, strlen(text));
+	close(fd);
+	return 0;
+}
+
 static uint32_t gpio_base_for_pad(unsigned pad)
 {
 	if (pad < 32u)
@@ -378,6 +547,30 @@ static void gpio_config_input(unsigned pad)
 
 	pinmux_set_pad(pad, PINMUX_GPIO);
 	mmio_write32(sysio, base + GPIO_DIR_OFF, dir & ~gpio_bit_for_pad(pad));
+}
+
+static void status_led_set(int on)
+{
+	if (!led_enabled)
+		return;
+	gpio_config_output(PINPAD_L25);
+	gpio_set_pad(PINPAD_L25, on);
+}
+
+static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
+{
+	unsigned i;
+
+	for (i = 0; i < count && !stopping; i++) {
+		backlight_set(1);
+		status_led_set(1);
+		sleep_ms(on_ms);
+		backlight_set(0);
+		status_led_set(0);
+		sleep_ms(off_ms);
+	}
+	backlight_set(1);
+	status_led_set(0);
 }
 
 static void panel_control_pinmux(void)
@@ -449,13 +642,22 @@ static void panel_write_bus(uint16_t value)
 	mmio_write32(sysio, GPIOT_OFF + GPIO_OUTPUT_OFF, tout);
 }
 
+static void panel_bus_delay(void)
+{
+	if (slow_panel_bus)
+		(void)mmio_read32(sysio, GPIOL_OFF + GPIO_OUTPUT_OFF);
+}
+
 static void panel_write16(int rs, uint16_t value)
 {
 	gpio_set_pad(PINPAD_T01, rs);
 	gpio_set_pad(PINPAD_L10, 0);
 	panel_write_bus(value);
+	panel_bus_delay();
 	gpio_set_pad(PINPAD_L07, 0);
+	panel_bus_delay();
 	gpio_set_pad(PINPAD_L07, 1);
+	panel_bus_delay();
 	gpio_set_pad(PINPAD_L10, 1);
 	gpio_set_pad(PINPAD_T01, 1);
 }
@@ -540,9 +742,9 @@ static void panel_reset(void)
 	sleep_ms(500);
 }
 
-static void panel_apply_sf2000_init(void)
+static void panel_apply_init_sequence(const uint8_t *sequence)
 {
-	const uint8_t *p = st7789_sf2000_init;
+	const uint8_t *p = sequence;
 	unsigned clock_skewed = *p++;
 
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF,
@@ -567,10 +769,30 @@ static void panel_apply_sf2000_init(void)
 	}
 }
 
-static int panel_init(void)
+static void panel_set_brightness(uint8_t brightness, uint8_t cabc)
+{
+	if (!panel_enabled)
+		return;
+	panel_cmd(0x53);
+	panel_data(0x2c);
+	panel_cmd(0x51);
+	panel_data(brightness);
+	panel_cmd(0x55);
+	panel_data(cabc);
+}
+
+static void panel_set_madctl(uint8_t madctl)
+{
+	if (!panel_enabled)
+		return;
+	panel_cmd(ST7789_MADCTL);
+	panel_data(madctl);
+}
+
+static int panel_init_variant(const struct panel_variant *variant)
 {
 	uint32_t panel_id;
-	char line[96];
+	char line[128];
 
 	if (!panel_enabled)
 		return 0;
@@ -581,19 +803,20 @@ static int panel_init(void)
 	panel_reset();
 	sleep_ms(120);
 	panel_id = panel_read_id();
-	panel_apply_sf2000_init();
+	panel_apply_init_sequence(variant->init);
+	panel_set_brightness(0xff, 0x00);
 	panel_restart_frame();
 	panel_cmd(ST7789_DISPON);
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: panel init done id=0x%06x init=sf2000\n",
-		panel_id & 0xffffffu);
+		"sf2000-screen: panel init done id=0x%06x init=%s\n",
+		panel_id & 0xffffffu, variant->name);
 	log_line(line);
 	append_file_log(line);
 	return 0;
 }
 
-static void panel_push_frame(void)
+static void panel_push_frame(int switch_to_rgb)
 {
 	uint16_t *fb = framebuffer();
 	unsigned i;
@@ -608,6 +831,33 @@ static void panel_push_frame(void)
 	for (i = 0; i < WIDTH * HEIGHT; i++)
 		panel_data(fb[i]);
 	panel_bus_idle();
+	if (switch_to_rgb)
+		panel_rgb_pinmux();
+}
+
+static void panel_push_probe_pixels(void)
+{
+	unsigned i;
+
+	if (!panel_enabled)
+		return;
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_restart_frame();
+	for (i = 0; i < 16; i++)
+		panel_data(rgb565(31, 63, 31));
+	panel_bus_idle();
+}
+
+static void panel_prepare_rgb_frame(void)
+{
+	if (!panel_enabled)
+		return;
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_restart_frame();
 	panel_rgb_pinmux();
 }
 
@@ -696,23 +946,26 @@ static void draw_background(void)
 	fill_rect(0, 207, WIDTH, 2, rgb565(31, 46, 0));
 }
 
-static void draw_boot_screen(unsigned frame)
+static void draw_diag_screen(const char *phase, const char *variant,
+	uint8_t madctl, unsigned frame)
 {
 	char line[48];
 	uint16_t white = rgb565(31, 63, 31);
 	uint16_t yellow = rgb565(31, 54, 4);
 	uint16_t green = rgb565(8, 60, 16);
 	uint16_t blue = rgb565(5, 24, 31);
+	uint16_t red = rgb565(31, 8, 6);
 	uint16_t dark = rgb565(0, 4, 6);
 	unsigned i;
 
 	draw_background();
 	draw_text(20, 8, "SF2000 LINUX", yellow, rgb565(0, 10, 18), 3);
 	draw_text(18, 48, "BUILDROOT USERSPACE OK", white, dark, 2);
-	draw_text(18, 72, "GMA RGB565 CONSOLE", green, dark, 2);
-	draw_text(18, 96, "KMSG AND TMP LOG READY", white, dark, 2);
-	draw_text(18, 120, "BUTTONS VIA UINPUT", blue, dark, 2);
-	draw_text(18, 144, "UART NOT REQUIRED", yellow, dark, 2);
+	draw_text(18, 72, phase, green, dark, 2);
+	draw_text(18, 96, variant, blue, dark, 2);
+	snprintf(line, sizeof(line), "MADCTL %02X", madctl);
+	draw_text(18, 120, line, red, dark, 2);
+	draw_text(18, 144, "KMSG AND TMP LOG READY", yellow, dark, 2);
 
 	snprintf(line, sizeof(line), "FRAME %06u", frame);
 	draw_text(18, 180, line, white, dark, 2);
@@ -779,32 +1032,106 @@ static void present_frame(void)
 	gma_set_bit(GMA_CTL, 1u << 18, 1);
 }
 
-static int publish_ready_marker(void)
-{
-	int fd = open("/run/sf2000-screen-ready",
-		O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-
-	if (fd < 0)
-		return -1;
-	(void)write(fd, "ready\n", 6);
-	close(fd);
-	return 0;
-}
-
 static void handle_signal(int sig)
 {
 	(void)sig;
 	stopping = 1;
 }
 
+static void log_gma_ready(void)
+{
+	char line[160];
+
+	snprintf(line, sizeof(line),
+		"sf2000-screen: gma console ready desc=0x%08x fb=0x%08x %ux%u pitch=%u\n",
+		GMA_DESC_PHYS, GMA_FRAME_PHYS, WIDTH, HEIGHT, PITCH);
+	log_line(line);
+	append_file_log(line);
+}
+
+static void log_direct_diag(const struct panel_variant *variant,
+	uint8_t madctl, unsigned frame)
+{
+	char line[160];
+
+	snprintf(line, sizeof(line),
+		"sf2000-screen: direct diag variant=%s madctl=0x%02x frame=%u\n",
+		variant->name, madctl, frame);
+	log_line(line);
+	append_file_log(line);
+}
+
+static void show_direct_frame(const char *phase,
+	const struct panel_variant *variant, uint8_t madctl, unsigned *frame,
+	unsigned hold_ms)
+{
+	if (stopping)
+		return;
+	panel_set_madctl(madctl);
+	(*frame)++;
+	draw_diag_screen(phase, variant->name, madctl, *frame);
+	panel_push_frame(0);
+	log_direct_diag(variant, madctl, *frame);
+	sleep_ms(hold_ms);
+}
+
+static void run_direct_diag(unsigned *frame)
+{
+	unsigned i;
+
+	for (i = 0; i < ARRAY_SIZE(panel_variants) && !stopping; i++) {
+		const struct panel_variant *variant = &panel_variants[i];
+		unsigned madctl_count = i == 0 ? ARRAY_SIZE(variant->madctl) : 1;
+		unsigned m;
+
+		diagnostic_pulse((i % 3u) + 1u, 80, 80);
+		panel_init_variant(variant);
+		for (m = 0; m < madctl_count && !stopping; m++)
+			show_direct_frame("DIRECT PANEL BUS", variant,
+				variant->madctl[m], frame, 1400);
+	}
+}
+
+static void run_rgb_diag(unsigned *frame)
+{
+	const struct panel_variant *variant = &panel_variants[0];
+	unsigned i;
+
+	if (stopping)
+		return;
+
+	diagnostic_pulse(4, 70, 70);
+	panel_init_variant(variant);
+	panel_set_madctl(variant->madctl[0]);
+	(*frame)++;
+	draw_diag_screen("GMA RGB SCANOUT", variant->name,
+		variant->madctl[0], *frame);
+	panel_push_frame(0);
+	sleep_ms(900);
+
+	for (i = 0; i < 8 && !stopping; i++) {
+		(*frame)++;
+		draw_diag_screen("GMA RGB SCANOUT", variant->name,
+			variant->madctl[0], *frame);
+		panel_prepare_rgb_frame();
+		present_frame();
+		sleep_ms(900);
+	}
+}
+
 int main(void)
 {
 	int fd;
 	unsigned frame = 0;
-	char line[160];
+	const struct panel_variant *first_variant = &panel_variants[0];
 
 	if (getenv("SF2000_PANEL") && strcmp(getenv("SF2000_PANEL"), "0") == 0)
 		panel_enabled = 0;
+	if (getenv("SF2000_LED") && strcmp(getenv("SF2000_LED"), "0") == 0)
+		led_enabled = 0;
+	if (getenv("SF2000_FAST_PANEL") &&
+			strcmp(getenv("SF2000_FAST_PANEL"), "1") == 0)
+		slow_panel_bus = 0;
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
 	if (fd < 0) {
@@ -824,27 +1151,32 @@ int main(void)
 	signal(SIGTERM, handle_signal);
 
 	backlight_set(1);
-	panel_init();
-	build_gma_descriptor();
-	draw_boot_screen(frame);
-	panel_push_frame();
-	present_frame();
-	publish_ready_marker();
+	publish_marker("/run/sf2000-screen-own-backlight", "owned\n");
+	sleep_ms(1300);
+	diagnostic_pulse(5, 120, 120);
 
-	snprintf(line, sizeof(line),
-		"sf2000-screen: gma console ready desc=0x%08x fb=0x%08x %ux%u pitch=%u\n",
-		GMA_DESC_PHYS, GMA_FRAME_PHYS, WIDTH, HEIGHT, PITCH);
-	log_line(line);
-	append_file_log(line);
+	build_gma_descriptor();
+	panel_init_variant(first_variant);
+	panel_push_probe_pixels();
+	draw_diag_screen("GMA TRACE READY", first_variant->name,
+		first_variant->madctl[0], frame);
+	present_frame();
+	publish_marker("/run/sf2000-screen-ready", "ready\n");
+	log_gma_ready();
+
+	draw_diag_screen("FIRST DIRECT BUS", first_variant->name,
+		first_variant->madctl[0], frame);
+	panel_push_frame(0);
+	sleep_ms(1800);
 
 	while (!stopping) {
-		frame++;
-		draw_boot_screen(frame);
-		present_frame();
-		sleep_ms(1000);
+		run_direct_diag(&frame);
+		run_rgb_diag(&frame);
 	}
 
 	backlight_set(1);
+	status_led_set(0);
+	unlink("/run/sf2000-screen-own-backlight");
 	log_line("sf2000-screen: stopped\n");
 	return 0;
 }

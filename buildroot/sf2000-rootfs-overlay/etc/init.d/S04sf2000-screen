@@ -9,6 +9,6 @@ case "$1" in
 		;;
 	stop)
 		killall sf2000-screen 2>/dev/null || true
-		rm -f /run/sf2000-screen-ready
+		rm -f /run/sf2000-screen-ready /run/sf2000-screen-own-backlight
 		;;
 esac
