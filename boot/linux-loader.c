@@ -447,6 +447,20 @@ static void bootlog_loader_info(u32 kernel_size, u32 dtb_size, u32 entry,
 	bootlog_flush();
 }
 
+static void bootlog_ebase(u32 before, u32 after)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("ebase=");
+	bootlog_hex(before);
+	bootlog_puts(" -> ");
+	bootlog_hex(after);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static u32 cp0_count(void)
 {
 	u32 count;
@@ -559,6 +573,53 @@ static void disable_interrupts(void)
 		: "=&r"(status)
 		:
 		: "$8", "memory");
+}
+
+static u32 read_ebase(void)
+{
+	u32 ebase;
+
+	__asm__ volatile(
+		".set push\n\t"
+		".set mips32r2\n\t"
+		"mfc0 %0, $15, 1\n\t"
+		".set pop"
+		: "=r"(ebase));
+	return ebase;
+}
+
+static void write_ebase(u32 ebase)
+{
+	__asm__ volatile(
+		".set push\n\t"
+		".set mips32r2\n\t"
+		"mtc0 %0, $15, 1\n\t"
+		"nop\n\t"
+		"nop\n\t"
+		".set pop"
+		:
+		: "r"(ebase)
+		: "memory");
+}
+
+static void reset_exception_base_for_linux(void)
+{
+	u32 before;
+	u32 after;
+
+	if (mmio_read32(BOOTROM_BASE) == 0)
+		return;
+
+	before = read_ebase();
+	write_ebase(0);
+	after = read_ebase();
+
+	uart_puts("linux-loader: ebase ");
+	uart_hex(before);
+	uart_puts(" -> ");
+	uart_hex(after);
+	uart_puts("\n");
+	bootlog_ebase(before, after);
 }
 
 static uintptr align_up(uintptr value, uintptr align)
@@ -797,6 +858,7 @@ void linux_loader_main(void)
 	cache_flush_range(load_min, (usize)(load_max - load_min));
 	cache_flush_range(dtb_dest, dtb_size);
 	disable_interrupts();
+	reset_exception_base_for_linux();
 	backlight_stage_mark("loader-jump", 2);
 	jump_to_kernel(eh->e_entry, dtb_dest);
 

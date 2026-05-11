@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 07:35:00 +0000
+Subject: [PATCH] mips: harden SF2000 trap initialization
+
+Physical SF2000 hardware reaches the post-setup_arch ladder and appears to
+stop after the sort_main_extable marker. The next step is trap_init(), where
+the generic MIPS path clears BEV in per_cpu_trap_init() before trap_init() has
+installed the generic exception handler at 0x80000180.
+
+For the SF2000 bring-up profile, pre-install the generic exception vector
+before clearing BEV, defer configure_status() until the TLB handler is ready,
+skip wait-instruction selection, and avoid the dedicated interrupt-vector
+option. Add finer trap_init ticks so any remaining physical stop identifies the
+next exact vector/TLB setup step.
+---
+ arch/mips/kernel/cpu-probe.c |  3 +--
+ arch/mips/kernel/traps.c     | 49 ++++++++++++++++++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 4 deletions(-)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index 85268be..f86d2c4 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -1990,8 +1990,7 @@ static void cpu_probe_sf2000(struct cpuinfo_mips *c, unsigned int cpu)
+ 	c->cputype = CPU_4KC;
+ 	c->writecombine = _CACHE_UNCACHED;
+ 	c->options = MIPS_CPU_TLB | MIPS_CPU_4KEX | MIPS_CPU_4K_CACHE |
+-		     MIPS_CPU_COUNTER | MIPS_CPU_DIVEC | MIPS_CPU_LLSC |
+-		     MIPS_CPU_MCHECK;
++		     MIPS_CPU_COUNTER | MIPS_CPU_LLSC | MIPS_CPU_MCHECK;
+ 	c->ases = 0;
+ 	c->scache.flags = MIPS_CACHE_NOT_PRESENT;
+ 	c->tlbsize = config1 ? ((config1 & MIPS_CONF1_TLBS) >>
+diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
+index 808b8b6..34d6639 100644
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -107,6 +107,13 @@ void (*board_ejtag_handler_setup)(void);
+ void (*board_bind_eic_interrupt)(int irq, int regset);
+ void (*board_ebase_setup)(void);
+ void(*board_cache_error_setup)(void);
++extern void __init sf2000_visible_tick(const char *name);
++
++static void __init sf2000_trap_tick(const char *name)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_visible_tick(name);
++}
+ 
+ static void show_raw_backtrace(unsigned long reg29, const char *loglvl)
+ {
+@@ -2275,7 +2282,8 @@ void per_cpu_trap_init(bool is_boot_cpu)
+ {
+ 	unsigned int cpu = smp_processor_id();
+ 
+-	configure_status();
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		configure_status();
+ 	configure_hwrena();
+ 
+ 	configure_exception_vector();
+@@ -2317,6 +2325,9 @@ void per_cpu_trap_init(bool is_boot_cpu)
+ 		cpu_cache_init();
+ 	tlb_init();
+ 	TLBMISS_HANDLER_SETUP();
++
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		configure_status();
+ }
+ 
+ /* Install CPU exception handler */
+@@ -2366,7 +2377,9 @@ void __init trap_init(void)
+ 	unsigned long i, vec_size;
+ 	phys_addr_t ebase_pa;
+ 
+-	check_wait();
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		check_wait();
++	sf2000_trap_tick("trap-after-check-wait");
+ 
+ 	if (!cpu_has_mips_r2_r6) {
+ 		ebase = CAC_BASE;
+@@ -2398,6 +2411,7 @@ void __init trap_init(void)
+ 		else
+ 			ebase = (unsigned long)phys_to_virt(ebase_pa);
+ 	}
++	sf2000_trap_tick("trap-after-ebase");
+ 
+ 	if (cpu_has_mmips) {
+ 		unsigned int config3 = read_c0_config3();
+@@ -2410,7 +2424,14 @@ void __init trap_init(void)
+ 
+ 	if (board_ebase_setup)
+ 		board_ebase_setup();
++
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		set_handler(0x180, &except_vec3_generic, 0x80);
++	sf2000_trap_tick("trap-after-pre-vector");
++
+ 	per_cpu_trap_init(true);
++	sf2000_trap_tick("trap-after-per-cpu");
++
+ 	memblock_set_bottom_up(false);
+ 
+ 	/*
+@@ -2419,12 +2440,14 @@ void __init trap_init(void)
+ 	 * configuration.
+ 	 */
+ 	set_handler(0x180, &except_vec3_generic, 0x80);
++	sf2000_trap_tick("trap-after-generic-vector");
+ 
+ 	/*
+ 	 * Setup default vectors
+ 	 */
+ 	for (i = 0; i <= 31; i++)
+ 		set_except_vector(i, handle_reserved);
++	sf2000_trap_tick("trap-after-default-vectors");
+ 
+ 	/*
+ 	 * Copy the EJTAG debug exception vector handler code to it's final
+@@ -2438,6 +2461,7 @@ void __init trap_init(void)
+ 	 */
+ 	if (cpu_has_watch)
+ 		set_except_vector(EXCCODE_WATCH, handle_watch);
++	sf2000_trap_tick("trap-after-watch-vector");
+ 
+ 	/*
+ 	 * Initialise interrupt handlers
+@@ -2455,6 +2479,7 @@ void __init trap_init(void)
+ 	 * it different ways.
+ 	 */
+ 	parity_protection_init();
++	sf2000_trap_tick("trap-after-parity");
+ 
+ 	/*
+ 	 * The Data Bus Errors / Instruction Bus Errors are signaled
+@@ -2463,6 +2488,7 @@ void __init trap_init(void)
+ 	 */
+ 	if (board_be_init)
+ 		board_be_init();
++	sf2000_trap_tick("trap-after-board-be");
+ 
+ 	set_except_vector(EXCCODE_INT, using_rollback_handler() ?
+ 					rollback_handle_int : handle_int);
+@@ -2522,6 +2548,7 @@ void __init trap_init(void)
+ 		set_except_vector(EXCCODE_THREAD, handle_mt);
+ 
+ 	set_except_vector(EXCCODE_DSPDIS, handle_dsp);
++	sf2000_trap_tick("trap-after-main-vectors");
+ 
+ 	if (board_cache_error_setup)
+ 		board_cache_error_setup();
+@@ -2535,10 +2562,13 @@ void __init trap_init(void)
+ 		set_handler(0x080, &except_vec3_generic, 0x80);
+ 
+ 	local_flush_icache_range(ebase, ebase + vec_size);
++	sf2000_trap_tick("trap-after-flush");
+ 
+ 	sort_extable(__start___dbe_table, __stop___dbe_table);
++	sf2000_trap_tick("trap-after-dbe-sort");
+ 
+ 	cu2_notifier(default_cu2_call, 0x80000000);	/* Run last  */
++	sf2000_trap_tick("trap-after-cu2");
+ }
+ 
+ static int trap_pm_notifier(struct notifier_block *self, unsigned long cmd,
+-- 
+2.50.1
