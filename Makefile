@@ -7,23 +7,81 @@ INITRAMFS := $(BUILD_DIR)/initramfs.cpio
 INITRAMFS_LIST := $(BUILD_DIR)/initramfs.list
 INIT_BIN := $(BUILD_DIR)/initramfs-init
 GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
+ASDPACK := $(BUILD_DIR)/asdpack
 QEMU_BIN := $(QEMU_DIR)/.cache/qemu-10.2.2/build/qemu-system-mipsel
+QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
 HOSTCC ?= cc
 TOOLCHAIN_DIR ?= /opt/gdb-mips-toolchain
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-mti-elf-
+CC_MIPS := $(CROSS_COMPILE)gcc
+LD_MIPS := $(CROSS_COMPILE)ld
+OBJCOPY_MIPS := $(CROSS_COMPILE)objcopy
+STRIP_MIPS := $(CROSS_COMPILE)strip
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
+ROOTFS ?= tiny
 LINUX_VERSION := 5.12.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v5.x/$(LINUX_TARBALL)
 LINUX_SRC := $(BUILD_DIR)/linux-$(LINUX_VERSION)
+BUILDROOT_VERSION := 2024.02.12
+BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
+BUILDROOT_URL := https://buildroot.org/downloads/$(BUILDROOT_TARBALL)
+BUILDROOT_SRC := $(BUILD_DIR)/buildroot-$(BUILDROOT_VERSION)
+BUILDROOT_WORK ?= /tmp/sf2000_linux-buildroot
+BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
+BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
+BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
+BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
+BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
+BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
+BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
+BUILDROOT_PATCHES := buildroot/patches
+BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
+BUILDROOT_PATCH_FILES := $(shell find '$(BUILDROOT_PATCHES)' -type f 2>/dev/null)
+BUILDROOT_IMAGE_CPIO := $(BUILDROOT_OUT)/images/rootfs.cpio
+BUILDROOT_CPIO := $(BUILD_DIR)/rootfs-buildroot.cpio
+BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-gcc
+BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-strip
+BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
+BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
+BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))'
+ifeq ($(ROOTFS),tiny)
+ROOTFS_SUFFIX :=
+ROOTFS_CPIO := $(INITRAMFS)
 LINUX_OUT := $(BUILD_DIR)/linux-sf2000
+else ifeq ($(ROOTFS),buildroot)
+ROOTFS_SUFFIX := -buildroot
+ROOTFS_CPIO := $(BUILDROOT_CPIO)
+LINUX_OUT := $(BUILD_DIR)/linux-sf2000-buildroot
+else
+$(error unsupported ROOTFS '$(ROOTFS)', expected tiny or buildroot)
+endif
 LINUX_VMLINUX := $(LINUX_OUT)/vmlinux
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
 LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init
+LINUX_LOADER_BLOBS_S := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-blobs.S
+LINUX_LOADER_ENTRY_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-entry.o
+LINUX_LOADER_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).o
+LINUX_LOADER_BLOBS_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-blobs.o
+LINUX_LOADER_ELF := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).elf
+LINUX_LOADER_BIN := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).bin
+LINUX_ASD := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX).asd
+SDCARD_LINUX_ASD := $(BUILD_DIR)/sdcard/firmware/linux.asd
+LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
+BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
+SMOKE_INIT_PATTERN ?= sf2000_linux: initramfs alive
+LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
+	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
+	-Wall -Wextra
 
-.PHONY: all status qemu rootfs linux run-linux smoke-linux clean
+.PHONY: all status qemu rootfs buildroot linux linux-asd linux-buildroot \
+	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
+	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
+	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
+	smoke-linux-buildroot-asd run-linux-buildroot-rom \
+	smoke-linux-buildroot-rom clean
 
 all: status
 
@@ -33,6 +91,8 @@ status:
 	@printf '  hclinux: %s\n' '$(HCLINUX_DIR)'
 	@printf '  host cc: %s\n' '$(HOSTCC)'
 	@printf '  toolchain: %s\n' '$(CROSS_COMPILE)'
+	@printf '  rootfs:  %s\n' '$(ROOTFS)'
+	@printf '  buildroot out: %s\n' '$(BUILDROOT_OUT)'
 	@printf '  jobs:    %s\n' '$(JOBS)'
 	@printf '  qemu bin exists: '
 	@test -x '$(QEMU_BIN)' && printf 'yes\n' || printf 'no\n'
@@ -40,17 +100,27 @@ status:
 	@test -f '$(INITRAMFS)' && printf 'yes\n' || printf 'no\n'
 	@printf '  linux vmlinux exists: '
 	@test -f '$(LINUX_VMLINUX)' && printf 'yes\n' || printf 'no\n'
+	@printf '  linux asd exists: '
+	@test -f '$(LINUX_ASD)' && printf 'yes\n' || printf 'no\n'
+	@printf '  buildroot cpio exists: '
+	@test -f '$(BUILDROOT_CPIO)' && printf 'yes\n' || printf 'no\n'
+	@printf '  bugfix ROM exists: '
+	@test -f '$(BOOTROM_BUGFIX)' && printf 'yes\n' || printf 'no\n'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
 
-rootfs: $(INITRAMFS)
+$(QEMU_MKSD): $(QEMU_DIR)/tools/mksf2000sd.c
+	$(MAKE) -C '$(QEMU_DIR)' build/mksf2000sd
+
+rootfs: $(ROOTFS_CPIO)
+buildroot: $(BUILDROOT_CPIO)
 
 $(INIT_BIN): init/sf2000-init.c Makefile
 	mkdir -p '$(dir $@)'
-	'$(CROSS_COMPILE)gcc' -Os -static -nostdlib -ffreestanding \
+	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -G 0 \
-		-Wl,-e,_start -Wl,--gc-sections -o '$@' '$<'
+		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
 
 $(GEN_INIT_CPIO): $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -69,6 +139,42 @@ $(INITRAMFS): $(INIT_BIN) $(GEN_INIT_CPIO) Makefile
 		printf 'file /init %s 0755 0 0\n' '$(abspath $(INIT_BIN))'; \
 	} > '$(INITRAMFS_LIST)'
 	'$(GEN_INIT_CPIO)' '$(INITRAMFS_LIST)' > '$@'
+
+$(BUILDROOT_SRC)/Makefile:
+	mkdir -p '$(BUILD_DIR)' .cache
+	test -f '.cache/$(BUILDROOT_TARBALL)' || curl -L -o '.cache/$(BUILDROOT_TARBALL)' '$(BUILDROOT_URL)'
+	rm -rf '$(BUILDROOT_SRC)'
+	mkdir -p '$(BUILDROOT_SRC)'
+	tar -xf '.cache/$(BUILDROOT_TARBALL)' -C '$(BUILDROOT_SRC)' --strip-components=1
+
+$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) Makefile $(BUILDROOT_PATCH_FILES)
+	mkdir -p '$(BUILDROOT_OUT)'
+	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
+	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
+		--set-str GLOBAL_PATCH_DIR '$(abspath $(BUILDROOT_PATCHES))' \
+		--set-str ROOTFS_OVERLAY '$(abspath $(BUILDROOT_OVERLAY)) $(abspath $(BUILDROOT_GENERATED_OVERLAY))' \
+		--set-str ROOTFS_DEVICE_TABLE 'system/device_table.txt $(abspath $(BUILDROOT_DEVICE_TABLE))'
+	$(BUILDROOT_MAKE) olddefconfig
+
+$(BUILDROOT_CC): $(BUILDROOT_OUT)/.config
+	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' toolchain \
+		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
+		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
+
+$(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) Makefile
+	mkdir -p '$(dir $@)'
+	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding -fno-builtin \
+		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
+		-fno-pic -G 0 -Wall -Wextra \
+		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
+	'$(STRIP_MIPS)' '$@'
+
+$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_OVERLAY_FILES)
+	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
+		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
+		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
+	mkdir -p '$(dir $@)'
+	cp '$(BUILDROOT_IMAGE_CPIO)' '$@'
 
 $(LINUX_SRC)/Makefile:
 	mkdir -p '$(BUILD_DIR)' .cache
@@ -90,13 +196,13 @@ $(SF2000_DTB): linux/sf2000.dts
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
 
-$(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(INITRAMFS) Makefile
+$(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(ROOTFS_CPIO) Makefile
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
 	'$(LINUX_SRC)'/scripts/config --file '$@' \
 		--enable BLK_DEV_INITRD \
-		--set-str INITRAMFS_SOURCE '$(abspath $(INITRAMFS))' \
+		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
 		--enable CMDLINE_BOOL \
 		--set-str CMDLINE '$(LINUX_CMDLINE)' \
 		--disable MODULES \
@@ -157,6 +263,7 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(INITRAMFS) Makefile
 		--disable VIRTIO_CONSOLE \
 		--disable VIRTIO_MMIO \
 		--disable HW_RANDOM \
+		--enable RANDOM_TRUST_BOOTLOADER \
 		--disable I2C \
 		--disable SPI \
 		--disable GPIOLIB \
@@ -207,11 +314,83 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(INITRAMFS) Makefile
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 
-$(LINUX_VMLINUX): $(LINUX_OUT)/.config $(INITRAMFS)
+$(LINUX_VMLINUX): $(LINUX_OUT)/.config $(ROOTFS_CPIO)
 	$(MAKE) -j'$(JOBS)' -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 
 linux: $(LINUX_VMLINUX) $(SF2000_DTB)
+
+$(ASDPACK): tools/asdpack.c Makefile
+	mkdir -p '$(dir $@)'
+	'$(HOSTCC)' -O2 -Wall -Wextra -o '$@' '$<'
+
+$(LINUX_LOADER_ENTRY_OBJ): boot/linux-loader-entry.S Makefile
+	mkdir -p '$(dir $@)'
+	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+
+$(LINUX_LOADER_OBJ): boot/linux-loader.c Makefile
+	mkdir -p '$(dir $@)'
+	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+
+$(LINUX_LOADER_BLOBS_S): $(LINUX_VMLINUX) $(SF2000_DTB) Makefile
+	mkdir -p '$(dir $@)'
+	{ \
+		printf '.section .rodata.blobs, "a"\n'; \
+		printf '.balign 16\n'; \
+		printf '.globl linux_vmlinux_start\n'; \
+		printf 'linux_vmlinux_start:\n'; \
+		printf '.incbin "%s"\n' '$(abspath $(LINUX_VMLINUX))'; \
+		printf '.balign 16\n'; \
+		printf '.globl linux_vmlinux_end\n'; \
+		printf 'linux_vmlinux_end:\n'; \
+		printf '.globl linux_dtb_start\n'; \
+		printf 'linux_dtb_start:\n'; \
+		printf '.incbin "%s"\n' '$(abspath $(SF2000_DTB))'; \
+		printf '.balign 16\n'; \
+		printf '.globl linux_dtb_end\n'; \
+		printf 'linux_dtb_end:\n'; \
+	} > '$@'
+
+$(LINUX_LOADER_BLOBS_OBJ): $(LINUX_LOADER_BLOBS_S)
+	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+
+$(LINUX_LOADER_ELF): $(LINUX_LOADER_ENTRY_OBJ) $(LINUX_LOADER_OBJ) \
+		$(LINUX_LOADER_BLOBS_OBJ) boot/linux-loader.ld
+	'$(LD_MIPS)' -EL -T boot/linux-loader.ld -o '$@' \
+		'$(LINUX_LOADER_ENTRY_OBJ)' '$(LINUX_LOADER_OBJ)' \
+		'$(LINUX_LOADER_BLOBS_OBJ)'
+
+$(LINUX_LOADER_BIN): $(LINUX_LOADER_ELF)
+	'$(OBJCOPY_MIPS)' -O binary '$<' '$@'
+
+$(LINUX_ASD): $(LINUX_LOADER_BIN) $(ASDPACK)
+	'$(ASDPACK)' '$(LINUX_LOADER_BIN)' '$@'
+	'$(ASDPACK)' --check '$@'
+
+$(SDCARD_LINUX_ASD): $(LINUX_ASD)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
+	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
+
+linux-asd: $(LINUX_ASD)
+
+linux-buildroot:
+	$(MAKE) ROOTFS=buildroot linux
+
+linux-buildroot-asd:
+	$(MAKE) ROOTFS=buildroot linux-asd
+
+sdcard-linux: $(SDCARD_LINUX_ASD)
+
+sdcard-buildroot:
+	$(MAKE) ROOTFS=buildroot sdcard-linux
+
+linux-rom-sd: $(LINUX_ROM_SD_IMAGE)
+
+linux-buildroot-rom-sd:
+	$(MAKE) ROOTFS=buildroot linux-rom-sd
 
 run-linux: qemu linux
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -224,7 +403,50 @@ run-linux: qemu linux
 smoke-linux: run-linux
 	grep -q 'sf2000: loaded Linux ELF' '$(BUILD_DIR)'/logs/linux.console
 	grep -q 'sf2000: uart: .*Linux version' '$(BUILD_DIR)'/logs/linux.log
-	grep -q 'sf2000_linux: initramfs alive' '$(BUILD_DIR)'/logs/linux.log
+	grep -q '$(SMOKE_INIT_PATTERN)' '$(BUILD_DIR)'/logs/linux.log
+
+run-linux-asd: qemu linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-asd.log \
+		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
+
+smoke-linux-asd: run-linux-asd
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-asd.console
+	grep -q 'sf2000: uart: .*linux-loader: jump entry=' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q '$(SMOKE_INIT_PATTERN)' '$(BUILD_DIR)'/logs/linux-asd.log
+
+run-linux-rom: qemu linux-rom-sd
+	test -f '$(BOOTROM_BUGFIX)'
+	mkdir -p '$(BUILD_DIR)'/logs
+	timeout 20s '$(QEMU_BIN)' -M sf2000 -bios '$(BOOTROM_BUGFIX)' \
+		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-rom.log \
+		> '$(BUILD_DIR)'/logs/linux-rom.console 2>&1 || test $$? -eq 124
+
+smoke-linux-rom: run-linux-rom
+	grep -q 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'CRC check pass !' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000: uart: .*linux-loader: jump entry=' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q '$(SMOKE_INIT_PATTERN)' '$(BUILD_DIR)'/logs/linux-rom.log
+
+run-linux-buildroot-asd:
+	$(MAKE) ROOTFS=buildroot \
+		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-asd
+
+smoke-linux-buildroot-asd:
+	$(MAKE) ROOTFS=buildroot \
+		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-asd
+
+run-linux-buildroot-rom:
+	$(MAKE) ROOTFS=buildroot \
+		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-rom
+
+smoke-linux-buildroot-rom:
+	$(MAKE) ROOTFS=buildroot \
+		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
 
 clean:
 	rm -rf '$(BUILD_DIR)'

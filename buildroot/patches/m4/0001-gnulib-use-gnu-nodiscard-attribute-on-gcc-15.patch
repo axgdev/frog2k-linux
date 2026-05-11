@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000_linux <sf2000-linux@example.invalid>
+Date: Sun, 10 May 2026 23:24:00 +0000
+Subject: [PATCH] gnulib: use GNU nodiscard attribute on GCC 15
+
+GCC 15 accepts the C23 nodiscard spelling but GNU m4 1.4.19's bundled
+gnulib headers place the macro between "static inline" and the return
+type. That placement is valid for GNU __attribute__((warn_unused_result))
+but not for the C23 attribute spelling, so host-m4 fails to build.
+
+The same old gnulib snapshot also forces _FORTIFY_SOURCE on, which
+conflicts with Alpine/musl's fortify headers and its replacement cdefs.h.
+
+Keep using the GNU nodiscard attribute form and leave fortify to the host
+toolchain.
+---
+ lib/config.hin | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/lib/config.hin b/lib/config.hin
+index 12e3e704c..e9e57a6c3 100644
+--- a/lib/config.hin
++++ b/lib/config.hin
+@@ -195,7 +195,7 @@
+ 
+ /* Enable compile-time and run-time bounds-checking, and some warnings,
+       without upsetting newer glibc. */
+-   #if defined __OPTIMIZE__ && __OPTIMIZE__
++   #if 0
+    # define _FORTIFY_SOURCE 2
+    #endif
+   
+@@ -2584,7 +2584,7 @@
+ # define _GL_ATTRIBUTE_MALLOC
+ #endif
+ 
+-#if 201710L < __STDC_VERSION__
++#if 0
+ # define _GL_ATTRIBUTE_NODISCARD [[__nodiscard__]]
+ #elif _GL_HAS_ATTRIBUTE (warn_unused_result)
+ # define _GL_ATTRIBUTE_NODISCARD __attribute__ ((__warn_unused_result__))
+-- 
+2.50.0
