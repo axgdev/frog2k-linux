@@ -562,7 +562,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  post-setup tick 15 means trap_init returned and mm_init is about to run.\n'; \
 		printf '  6 pulses: mm_init completed\n'; \
 		printf '  7 pulses: time_init completed\n'; \
-		printf '  8 pulses: kernel is about to enable IRQs\n'; \
+		printf '  8 pulses: kernel is about to enable IRQs; RAM log records CP0 IRQ state\n'; \
 		printf '  9 pulses: kernel is about to exec /init\n'; \
 		printf '  10 pulses: initramfs /init reached userspace\n'; \
 	} > '$@'

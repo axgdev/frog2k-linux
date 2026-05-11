@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000026 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace first IRQ enable
+
+Physical hardware now reaches time_init() and then stops after the
+before-irq-enable marker. Add RAM progress records around the first global
+IRQ enable so the next watchdog dump includes CP0 Status, Cause and Compare.
+
+For physical ROM handoff boots, clear the CP0 interrupt mask before that
+first enable. This keeps Status.IE testing separate from the individual
+interrupt sources while the platform interrupt path is still being brought up.
+
+Also shorten the physical visual delays now that RAM progress logging is the
+primary diagnostic channel, and pet the watchdog during visible markers so
+diagnostics do not create false early-boot hangs.
+---
+ arch/mips/kernel/setup.c | 20 ++++++++++++++------
+ init/main.c              | 35 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 49 insertions(+), 6 deletions(-)
+
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -85,11 +85,11 @@
+ #define SF2000_PIN_R05 5
+ #define SF2000_STATUS_L25 (1u << SF2000_PIN_L25)
+ #define SF2000_BACKLIGHT_R05 (1u << SF2000_PIN_R05)
+-#define SF2000_STAGE_OFF_TICKS 0x04000000u
+-#define SF2000_STAGE_ON_TICKS 0x02000000u
+-#define SF2000_STAGE_GAP_TICKS 0x08000000u
+-#define SF2000_TICK_OFF_TICKS 0x03000000u
+-#define SF2000_TICK_GAP_TICKS 0x08000000u
++#define SF2000_STAGE_OFF_TICKS 0x00400000u
++#define SF2000_STAGE_ON_TICKS 0x00200000u
++#define SF2000_STAGE_GAP_TICKS 0x00600000u
++#define SF2000_TICK_OFF_TICKS 0x00200000u
++#define SF2000_TICK_GAP_TICKS 0x00400000u
+ #define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
+ #define SF2000_GMA_KSEG1 ((volatile unsigned char *)CKSEG1ADDR(0x18808000))
+ #define SF2000_GMA_DESC_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x00f00000))
+@@ -168,7 +168,7 @@
+ 		_machine_restart = sf2000_machine_restart;
+ }
+ 
+-static int sf2000_rom_handoff_present(void)
++int sf2000_rom_handoff_present(void)
+ {
+ 	unsigned int word = *SF2000_ROM_F_MOUNT_KSEG0;
+ 
+@@ -463,16 +463,20 @@
+ 	sf2000_screen_mark(1, pulses);
+ 	sf2000_backlight_set(1);
+ 	sf2000_status_led_set(0);
++	sf2000_watchdog_pet();
+ 	sf2000_stage_delay(SF2000_STAGE_GAP_TICKS);
+ 	for (i = 0; i < pulses; i++) {
++		sf2000_watchdog_pet();
+ 		sf2000_backlight_set(0);
+ 		sf2000_status_led_set(1);
+ 		sf2000_stage_delay(SF2000_STAGE_OFF_TICKS);
++		sf2000_watchdog_pet();
+ 		sf2000_backlight_set(1);
+ 		sf2000_status_led_set(0);
+ 		sf2000_stage_delay(SF2000_STAGE_ON_TICKS);
+ 	}
+ 	sf2000_status_led_set(0);
++	sf2000_watchdog_pet();
+ 	sf2000_stage_delay(SF2000_STAGE_GAP_TICKS);
+ }
+ 
+@@ -489,9 +493,11 @@
+ 	sf2000_backlight_set(1);
+ 	sf2000_status_led_set(0);
+ 	sf2000_stage_delay(SF2000_TICK_GAP_TICKS);
++	sf2000_watchdog_pet();
+ 	sf2000_backlight_set(0);
+ 	sf2000_status_led_set(1);
+ 	sf2000_stage_delay(SF2000_TICK_OFF_TICKS);
++	sf2000_watchdog_pet();
+ 	sf2000_backlight_set(1);
+ 	sf2000_status_led_set(0);
+ 	sf2000_stage_delay(SF2000_TICK_GAP_TICKS);
+--- a/init/main.c
++++ b/init/main.c
+@@ -104,6 +104,8 @@
+ #include <asm/setup.h>
+ #include <asm/sections.h>
+ #include <asm/cacheflush.h>
++#include <asm/hazards.h>
++#include <asm/mipsregs.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/initcall.h>
+@@ -121,6 +123,35 @@
+ extern void sf2000_visible_stage_nolog(const char *name,
+ 		unsigned int pulses);
+ extern void sf2000_visible_tick(const char *name);
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++extern int sf2000_rom_handoff_present(void);
++
++static void sf2000_before_irq_enable(void)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	sf2000_progress_mark("irq-status-before", 4, read_c0_status());
++	sf2000_progress_mark("irq-cause-before", 4, read_c0_cause());
++	sf2000_progress_mark("irq-compare-before", 4, read_c0_compare());
++	if (sf2000_rom_handoff_present() &&
++	    ((read_c0_ebase() & 0xfffff000u) == 0x81002000u)) {
++		clear_c0_status(ST0_IM);
++		irq_disable_hazard();
++		sf2000_progress_mark("irq-mask-cleared", 4,
++			read_c0_status());
++	}
++}
++
++static void sf2000_after_irq_enable(void)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	sf2000_progress_mark("irq-status-after", 4, read_c0_status());
++	sf2000_progress_mark("irq-cause-after", 4, read_c0_cause());
++}
+ #endif
+ 
+ /*
+@@ -1044,9 +1075,13 @@
+ 
+ #ifdef CONFIG_MIPS
+ 	sf2000_visible_stage("before-irq-enable", 8);
++	sf2000_before_irq_enable();
+ #endif
+ 	early_boot_irqs_disabled = false;
+ 	local_irq_enable();
++#ifdef CONFIG_MIPS
++	sf2000_after_irq_enable();
++#endif
+ 
+ 	kmem_cache_init_late();
+ 
+-- 
+2.49.0
+
