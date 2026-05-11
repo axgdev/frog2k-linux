@@ -513,6 +513,11 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  1 pulse: Linux loader entered\n'; \
 		printf '  2 pulses: loader is jumping to the kernel\n'; \
 		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
+		printf '  after 3 pulses, count single ticks inside setup_arch:\n'; \
+		printf '    1 cpu_probe, 2 mips_cm_probe skipped/done, 3 prom_init\n'; \
+		printf '    4 early console, 5 cpu_report/check_bugs, 6 arch_mem_init\n'; \
+		printf '    7 resource/smp map, 8 cpu_cache_init, 9 paging_init\n'; \
+		printf '    10 memblock_dump_all\n'; \
 		printf '  4 pulses: kernel finished MIPS setup_arch\n'; \
 		printf '  5 pulses: start_kernel resumed after setup_arch\n'; \
 		printf '  after 5 pulses, count single ticks for the post-setup_arch ladder:\n'; \

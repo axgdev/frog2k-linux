@@ -1,0 +1,201 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 06:55:00 +0000
+Subject: [PATCH] mips: force safe SF2000 CPU probing
+
+Real HC15xx/SF2000 hardware reaches setup_arch but stops before the
+setup_arch-done marker. That window starts with cpu_probe(), which assumes the
+PRID/vendor and optional CP0 configuration chain match a known upstream MIPS
+core. Treat this board as a conservative 4Kc-compatible MIPS32r1 target for
+now: keep the real PRID for reporting, but avoid the generic vendor switch,
+avoid optional Config2+ probing, and advertise only the basic R4K exception,
+cache, counter, ll/sc and TLB facilities needed by the bring-up kernel.
+
+Add single-tick diagnostics inside setup_arch so one physical test can identify
+the next failing setup step if the CPU probe is no longer the blocker.
+---
+ arch/mips/kernel/cpu-probe.c | 76 ++++++++++++++++++++++++++------------------
+ arch/mips/kernel/setup.c     | 19 ++++++++++-
+ 2 files changed, 63 insertions(+), 32 deletions(-)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index bfc83c2..85268be 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -1978,6 +1978,35 @@ const char *__cpu_name[NR_CPUS];
+ const char *__elf_platform;
+ const char *__elf_base_platform;
+ 
++static void cpu_probe_sf2000(struct cpuinfo_mips *c, unsigned int cpu)
++{
++	unsigned int config0;
++	unsigned int config1 = 0;
++
++	config0 = read_c0_config();
++	if (config0 & MIPS_CONF_M)
++		config1 = read_c0_config1();
++
++	c->cputype = CPU_4KC;
++	c->writecombine = _CACHE_UNCACHED;
++	c->options = MIPS_CPU_TLB | MIPS_CPU_4KEX | MIPS_CPU_4K_CACHE |
++		     MIPS_CPU_COUNTER | MIPS_CPU_DIVEC | MIPS_CPU_LLSC |
++		     MIPS_CPU_MCHECK;
++	c->ases = 0;
++	c->scache.flags = MIPS_CACHE_NOT_PRESENT;
++	c->tlbsize = config1 ? ((config1 & MIPS_CONF1_TLBS) >>
++				MIPS_CONF1_TLBS_SHIFT) + 1 : 32;
++	c->tlbsizevtlb = c->tlbsize;
++	c->tlbsizeftlbsets = 0;
++	c->tlbsizeftlbways = 0;
++	c->isa_level = 0;
++	set_isa(c, MIPS_CPU_ISA_M32R1);
++	__cpu_name[cpu] = "HC15xx/SF2000";
++
++	pr_info("SF2000: forced MIPS32r1 CPU profile, prid=%08x config0=%08x config1=%08x tlb=%d\n",
++		c->processor_id, config0, config1, c->tlbsize);
++}
++
+ void cpu_probe(void)
+ {
+ 	struct cpuinfo_mips *c = &current_cpu_data;
+@@ -1998,43 +2027,47 @@ void cpu_probe(void)
+ 	c->fpu_msk31	= FPU_CSR_RSVD | FPU_CSR_ABS2008 | FPU_CSR_NAN2008;
+ 
+ 	c->processor_id = read_c0_prid();
+-	switch (c->processor_id & PRID_COMP_MASK) {
+-	case PRID_COMP_LEGACY:
+-		cpu_probe_legacy(c, cpu);
+-		break;
+-	case PRID_COMP_MIPS:
+-		cpu_probe_mips(c, cpu);
+-		break;
+-	case PRID_COMP_ALCHEMY:
+-		cpu_probe_alchemy(c, cpu);
+-		break;
+-	case PRID_COMP_SIBYTE:
+-		cpu_probe_sibyte(c, cpu);
+-		break;
+-	case PRID_COMP_BROADCOM:
+-		cpu_probe_broadcom(c, cpu);
+-		break;
+-	case PRID_COMP_SANDCRAFT:
+-		cpu_probe_sandcraft(c, cpu);
+-		break;
+-	case PRID_COMP_NXP:
+-		cpu_probe_nxp(c, cpu);
+-		break;
+-	case PRID_COMP_CAVIUM:
+-		cpu_probe_cavium(c, cpu);
+-		break;
+-	case PRID_COMP_LOONGSON:
+-		cpu_probe_loongson(c, cpu);
+-		break;
+-	case PRID_COMP_INGENIC_13:
+-	case PRID_COMP_INGENIC_D0:
+-	case PRID_COMP_INGENIC_D1:
+-	case PRID_COMP_INGENIC_E1:
+-		cpu_probe_ingenic(c, cpu);
+-		break;
+-	case PRID_COMP_NETLOGIC:
+-		cpu_probe_netlogic(c, cpu);
+-		break;
++	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++		cpu_probe_sf2000(c, cpu);
++	} else {
++		switch (c->processor_id & PRID_COMP_MASK) {
++		case PRID_COMP_LEGACY:
++			cpu_probe_legacy(c, cpu);
++			break;
++		case PRID_COMP_MIPS:
++			cpu_probe_mips(c, cpu);
++			break;
++		case PRID_COMP_ALCHEMY:
++			cpu_probe_alchemy(c, cpu);
++			break;
++		case PRID_COMP_SIBYTE:
++			cpu_probe_sibyte(c, cpu);
++			break;
++		case PRID_COMP_BROADCOM:
++			cpu_probe_broadcom(c, cpu);
++			break;
++		case PRID_COMP_SANDCRAFT:
++			cpu_probe_sandcraft(c, cpu);
++			break;
++		case PRID_COMP_NXP:
++			cpu_probe_nxp(c, cpu);
++			break;
++		case PRID_COMP_CAVIUM:
++			cpu_probe_cavium(c, cpu);
++			break;
++		case PRID_COMP_LOONGSON:
++			cpu_probe_loongson(c, cpu);
++			break;
++		case PRID_COMP_INGENIC_13:
++		case PRID_COMP_INGENIC_D0:
++		case PRID_COMP_INGENIC_D1:
++		case PRID_COMP_INGENIC_E1:
++			cpu_probe_ingenic(c, cpu);
++			break;
++		case PRID_COMP_NETLOGIC:
++			cpu_probe_netlogic(c, cpu);
++			break;
++		}
+ 	}
+ 
+ 	BUG_ON(!__cpu_name[cpu]);
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index a0f1d77..0b97817 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -882,15 +882,24 @@ void __init setup_arch(char **cmdline_p)
+ {
+ 	sf2000_visible_stage("mips-setup-entry", 3);
+ 	cpu_probe();
+-	mips_cm_probe();
++	sf2000_visible_tick("mips-after-cpu-probe");
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		mips_cm_probe();
++	sf2000_visible_tick("mips-after-cm-probe");
++
+ 	prom_init();
++	sf2000_visible_tick("mips-after-prom-init");
+ 
+ 	setup_early_fdc_console();
+ #ifdef CONFIG_EARLY_PRINTK
+ 	setup_early_printk();
+ #endif
++	sf2000_visible_tick("mips-after-early-console");
++
+ 	cpu_report();
+ 	check_bugs_early();
++	sf2000_visible_tick("mips-after-cpu-report");
+ 
+ #if defined(CONFIG_VT)
+ #if defined(CONFIG_VGA_CONSOLE)
+@@ -899,16 +908,23 @@ void __init setup_arch(char **cmdline_p)
+ #endif
+ 
+ 	arch_mem_init(cmdline_p);
++	sf2000_visible_tick("mips-after-arch-mem-init");
++
+ 	dmi_setup();
+ 
+ 	resource_init();
+ 	plat_smp_setup();
+ 	prefill_possible_map();
++	sf2000_visible_tick("mips-after-resource-init");
+ 
+ 	cpu_cache_init();
++	sf2000_visible_tick("mips-after-cpu-cache-init");
++
+ 	paging_init();
++	sf2000_visible_tick("mips-after-paging-init");
+ 
+ 	memblock_dump_all();
++	sf2000_visible_tick("mips-after-memblock-dump");
+ 
+ 	sf2000_visible_stage("mips-setup-done", 4);
+ }
+-- 
+2.50.1
