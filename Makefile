@@ -531,10 +531,14 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '    10 parse_early_param, 11 parse_args, 12 setup_log_buf\n'; \
 		printf '    13 vfs_caches_init_early, 14 sort_main_extable\n'; \
 		printf '  after the 14th post-setup tick, trap_init begins and emits its own ticks:\n'; \
-		printf '    1 check_wait skipped/done, 2 ebase selected, 3 generic vector preinstalled\n'; \
-		printf '    4 per_cpu_trap_init/TLB setup, 5 generic vector copied, 6 default vectors\n'; \
-		printf '    7 watch vector, 8 parity setup, 9 board bus-error setup\n'; \
-		printf '    10 main exception vectors, 11 icache flush, 12 DBE extable sort, 13 CU2 notifier\n'; \
+		printf '    1 check_wait skipped/done, 2 ebase selected, 3 CP0 EBase normalized/skipped\n'; \
+		printf '    4 generic vector preinstalled, then per_cpu_trap_init emits sub-ticks:\n'; \
+		printf '      1 entry, 2 hwrena, 3 exception vector, 4 IRQ select, 5 ASID\n'; \
+		printf '      6 mm context, 7 lazy TLB, 8 before tlb_init, 9 after tlb_init\n'; \
+		printf '      10 TLBMISS setup, 11 Status/BEV normalized\n'; \
+		printf '    next trap ticks: 5 per_cpu returned, 6 generic vector copied, 7 default vectors\n'; \
+		printf '    8 watch vector, 9 parity setup, 10 board bus-error setup\n'; \
+		printf '    11 main exception vectors, 12 icache flush, 13 DBE extable sort, 14 CU2 notifier\n'; \
 		printf '  post-setup tick 15 means trap_init returned and mm_init is about to run.\n'; \
 		printf '  6 pulses: mm_init completed\n'; \
 		printf '  7 pulses: time_init completed\n'; \

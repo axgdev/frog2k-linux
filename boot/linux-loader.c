@@ -895,6 +895,7 @@ void linux_loader_main(void)
 	uintptr load_max;
 	uintptr payload_end;
 	uintptr dtb_dest;
+	u32 entry;
 
 	clear_bss();
 	disable_interrupts();
@@ -929,8 +930,11 @@ void linux_loader_main(void)
 	if (dtb_dest + dtb_size > RAM_TOP) {
 		loader_panic("linux-loader: no room for DTB");
 	}
+	entry = eh->e_entry;
 	bootlog_loader_info((u32)kernel_size, (u32)dtb_size, eh->e_entry,
 		(u32)dtb_dest);
+	reset_exception_base_for_linux();
+	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
@@ -938,12 +942,10 @@ void linux_loader_main(void)
 	cache_flush_range(load_min, (usize)(load_max - load_min));
 	cache_flush_range(dtb_dest, dtb_size);
 	disable_interrupts();
-	reset_exception_base_for_linux();
 	backlight_stage_mark("loader-jump", 2);
-	print_kernel_jump(eh->e_entry, dtb_dest);
-	log_status_handoff();
+	print_kernel_jump(entry, dtb_dest);
 	write_status(0);
-	jump_to_kernel(eh->e_entry, dtb_dest);
+	jump_to_kernel(entry, dtb_dest);
 
 	for (;;)
 		;

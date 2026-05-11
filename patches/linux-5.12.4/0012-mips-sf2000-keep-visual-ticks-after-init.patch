@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000012 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: keep visual ticks after init
+
+per_cpu_trap_init() is not an init-only function: it is also reachable from
+later CPU restore paths. The SF2000 diagnostics call it during early boot, but
+modpost still correctly warns when the non-init trap code references helpers
+placed in .init.text.
+
+Keep the tiny visual diagnostic helpers in normal text so the trap breadcrumbs
+can be used from per_cpu_trap_init() without section mismatches.
+---
+ arch/mips/kernel/setup.c | 22 +++++++++++-----------
+ arch/mips/kernel/traps.c |  4 ++--
+ init/main.c              |  6 +++---
+ 3 files changed, 16 insertions(+), 16 deletions(-)
+
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index 10b1900c207d..c395ef1a03fb 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -91,7 +91,7 @@
+ #define SF2000_TICK_GAP_TICKS 0x08000000u
+ #define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
+ 
+-static unsigned int __init sf2000_cp0_count(void)
++static unsigned int sf2000_cp0_count(void)
+ {
+ 	unsigned int count;
+ 
+@@ -99,14 +99,14 @@
+ 	return count;
+ }
+ 
+-static int __init sf2000_rom_handoff_present(void)
++static int sf2000_rom_handoff_present(void)
+ {
+ 	unsigned int word = *SF2000_ROM_F_MOUNT_KSEG0;
+ 
+ 	return word != 0 && word != 0xffffffffu;
+ }
+ 
+-static void __init sf2000_stage_delay(unsigned int ticks)
++static void sf2000_stage_delay(unsigned int ticks)
+ {
+ 	unsigned int start = sf2000_cp0_count();
+ 
+@@ -120,22 +120,22 @@
+ 		asm volatile("nop");
+ }
+ 
+-static unsigned int __init sf2000_read32(unsigned int off)
++static unsigned int sf2000_read32(unsigned int off)
+ {
+ 	return *(volatile unsigned int *)(SF2000_SYSIO_KSEG1 + off);
+ }
+ 
+-static void __init sf2000_write32(unsigned int off, unsigned int value)
++static void sf2000_write32(unsigned int off, unsigned int value)
+ {
+ 	*(volatile unsigned int *)(SF2000_SYSIO_KSEG1 + off) = value;
+ }
+ 
+-static void __init sf2000_write8(unsigned int off, unsigned char value)
++static void sf2000_write8(unsigned int off, unsigned char value)
+ {
+ 	*(volatile unsigned char *)(SF2000_SYSIO_KSEG1 + off) = value;
+ }
+ 
+-static void __init sf2000_status_led_set(int on)
++static void sf2000_status_led_set(int on)
+ {
+ 	unsigned int out;
+ 	unsigned int dir;
+@@ -152,7 +152,7 @@
+ 	sf2000_write32(SF2000_GPIO_L_OUT_OFF, out);
+ }
+ 
+-static void __init sf2000_backlight_set(int on)
++static void sf2000_backlight_set(int on)
+ {
+ 	unsigned int out;
+ 	unsigned int dir;
+@@ -169,7 +169,7 @@
+ 	sf2000_write32(SF2000_GPIO_R_OUT_OFF, out);
+ }
+ 
+-void __init sf2000_visible_stage(const char *name, unsigned int pulses)
++void sf2000_visible_stage(const char *name, unsigned int pulses)
+ {
+ 	unsigned int i;
+ 
+@@ -189,12 +189,12 @@
+ 	sf2000_stage_delay(SF2000_STAGE_GAP_TICKS);
+ }
+ 
+-void __init sf2000_visible_stage_nolog(const char *name, unsigned int pulses)
++void sf2000_visible_stage_nolog(const char *name, unsigned int pulses)
+ {
+ 	sf2000_visible_stage(name, pulses);
+ }
+ 
+-void __init sf2000_visible_tick(const char *name)
++void sf2000_visible_tick(const char *name)
+ {
+ 	pr_info("sf2000: visible tick %s\n", name);
+ 	sf2000_backlight_set(1);
+diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
+index 4913452596be..9f8bc95886b6 100644
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -107,10 +107,10 @@
+ void (*board_bind_eic_interrupt)(int irq, int regset);
+ void (*board_ebase_setup)(void);
+ void(*board_cache_error_setup)(void);
+-extern void __init sf2000_visible_tick(const char *name);
++extern void sf2000_visible_tick(const char *name);
+ #define SF2000_ROM_F_MOUNT_KSEG0 ((volatile unsigned int *)0x8101f044)
+ 
+-static void __init sf2000_trap_tick(const char *name)
++static void sf2000_trap_tick(const char *name)
+ {
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		sf2000_visible_tick(name);
+diff --git a/init/main.c b/init/main.c
+index 60fa38589550..20222ae33a2e 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -116,11 +116,11 @@
+ extern void radix_tree_init(void);
+ 
+ #ifdef CONFIG_MIPS
+-extern void __init sf2000_visible_stage(const char *name,
++extern void sf2000_visible_stage(const char *name,
+ 		unsigned int pulses);
+-extern void __init sf2000_visible_stage_nolog(const char *name,
++extern void sf2000_visible_stage_nolog(const char *name,
+ 		unsigned int pulses);
+-extern void __init sf2000_visible_tick(const char *name);
++extern void sf2000_visible_tick(const char *name);
+ #endif
+ 
+ /*
+-- 
+2.49.0
