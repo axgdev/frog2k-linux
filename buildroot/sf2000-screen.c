@@ -1084,7 +1084,7 @@ static void run_direct_diag(unsigned *frame)
 		unsigned madctl_count = i == 0 ? ARRAY_SIZE(variant->madctl) : 1;
 		unsigned m;
 
-		diagnostic_pulse((i % 3u) + 1u, 80, 80);
+		diagnostic_pulse((i % 3u) + 1u, 450, 450);
 		panel_init_variant(variant);
 		for (m = 0; m < madctl_count && !stopping; m++)
 			show_direct_frame("DIRECT PANEL BUS", variant,
@@ -1100,7 +1100,7 @@ static void run_rgb_diag(unsigned *frame)
 	if (stopping)
 		return;
 
-	diagnostic_pulse(4, 70, 70);
+	diagnostic_pulse(4, 450, 450);
 	panel_init_variant(variant);
 	panel_set_madctl(variant->madctl[0]);
 	(*frame)++;
@@ -1153,7 +1153,7 @@ int main(void)
 	backlight_set(1);
 	publish_marker("/run/sf2000-screen-own-backlight", "owned\n");
 	sleep_ms(1300);
-	diagnostic_pulse(5, 120, 120);
+	diagnostic_pulse(5, 1000, 1000);
 
 	build_gma_descriptor();
 	panel_init_variant(first_variant);

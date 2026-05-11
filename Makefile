@@ -32,6 +32,7 @@ BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
 BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
 BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
+BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
 BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
@@ -44,8 +45,11 @@ BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
 BUILDROOT_PATCH_FILES := $(shell find '$(BUILDROOT_PATCHES)' -type f 2>/dev/null)
-BUILDROOT_IMAGE_CPIO := $(BUILDROOT_OUT)/images/rootfs.cpio
 BUILDROOT_CPIO := $(BUILD_DIR)/rootfs-buildroot.cpio
+BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
+BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
+BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
+BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-gcc
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-strip
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
@@ -155,7 +159,11 @@ $(BUILDROOT_SRC)/Makefile:
 	mkdir -p '$(BUILDROOT_SRC)'
 	tar -xf '.cache/$(BUILDROOT_TARBALL)' -C '$(BUILDROOT_SRC)' --strip-components=1
 
-$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) Makefile $(BUILDROOT_PATCH_FILES)
+$(BUILDROOT_GENERATED_OVERLAY_STAMP):
+	mkdir -p '$(dir $@)' '$(BUILDROOT_GENERATED_OVERLAY)'
+	touch '$@'
+
+$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) Makefile $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	mkdir -p '$(BUILDROOT_OUT)'
 	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
 	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
@@ -164,10 +172,11 @@ $(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUI
 		--set-str ROOTFS_DEVICE_TABLE 'system/device_table.txt $(abspath $(BUILDROOT_DEVICE_TABLE))'
 	$(BUILDROOT_MAKE) olddefconfig
 
-$(BUILDROOT_CC): $(BUILDROOT_OUT)/.config
+$(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' toolchain \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
+	touch '$@'
 
 $(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) Makefile
 	mkdir -p '$(dir $@)'
@@ -177,27 +186,57 @@ $(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) Makefile
 		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
 	'$(STRIP_MIPS)' '$@'
 
-$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_CC) Makefile
+$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
 	'$(BUILDROOT_STRIP)' '$@'
 
-$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_CC) Makefile
+$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
 	'$(BUILDROOT_STRIP)' '$@'
 
-$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_CC) Makefile
+$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
 	'$(BUILDROOT_STRIP)' '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_OUT)/.config $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_OVERLAY_FILES)
+$(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
+	touch '$@'
+
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
-	cp '$(BUILDROOT_IMAGE_CPIO)' '$@'
+	rm -rf '$(BUILDROOT_REPACK_DIR)'
+	mkdir -p '$(BUILDROOT_REPACK_DIR)'
+	rsync -a --delete --exclude=/THIS_IS_NOT_YOUR_ROOT_FILESYSTEM \
+		'$(BUILDROOT_OUT)'/target/ '$(BUILDROOT_REPACK_DIR)'/
+	rsync -a '$(BUILDROOT_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
+	rsync -a '$(BUILDROOT_GENERATED_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
+	rm -rf '$(BUILDROOT_REPACK_DIR)'/run/* '$(BUILDROOT_REPACK_DIR)'/tmp/*
+	mkdir -p '$(BUILDROOT_REPACK_DIR)'/dev/input \
+		'$(BUILDROOT_REPACK_DIR)'/dev/pts '$(BUILDROOT_REPACK_DIR)'/dev/shm
+	{ \
+		printf 'nod /dev/console 0622 0 0 c 5 1\n'; \
+		printf 'nod /dev/null 0666 0 0 c 1 3\n'; \
+		printf 'nod /dev/mem 0640 0 0 c 1 1\n'; \
+		printf 'nod /dev/tty 0666 0 0 c 5 0\n'; \
+		printf 'nod /dev/ttyS0 0660 0 5 c 4 64\n'; \
+		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
+		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
+		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
+		printf 'nod /dev/input/event1 0660 0 0 c 13 65\n'; \
+		printf 'nod /dev/input/event2 0660 0 0 c 13 66\n'; \
+		printf 'nod /dev/input/event3 0660 0 0 c 13 67\n'; \
+	} > '$(BUILDROOT_DEVICE_CPIO_LIST)'
+	mkdir -p '$(BUILD_DIR)'/usr
+	ln -sf ../gen_init_cpio '$(BUILD_DIR)'/usr/gen_init_cpio
+	cd '$(BUILD_DIR)' && '$(abspath $(LINUX_SRC))'/usr/gen_initramfs.sh \
+		-o '$(abspath $@)' -u squash -g squash \
+		'$(abspath $(BUILDROOT_REPACK_DIR))' \
+		'$(abspath $(BUILDROOT_DEVICE_CPIO_LIST))'
 
 $(LINUX_SRC)/Makefile:
 	mkdir -p '$(BUILD_DIR)' .cache
@@ -219,7 +258,7 @@ $(SF2000_DTB): linux/sf2000.dts
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
 
-$(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(ROOTFS_CPIO) Makefile
+$(LINUX_OUT)/.config: $(LINUX_SRC)/.patched Makefile
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
@@ -231,6 +270,11 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/.patched $(ROOTFS_CPIO) Makefile
 		--disable MODULES \
 		--disable DEBUG_INFO \
 		--disable DEBUG_INFO_REDUCED \
+		--disable IKCONFIG \
+		--disable IKCONFIG_PROC \
+		--disable KALLSYMS \
+		--disable KALLSYMS_ALL \
+		--disable KALLSYMS_BASE_RELATIVE \
 		--enable DEVTMPFS \
 		--enable DEVTMPFS_MOUNT \
 		--enable PROC_FS \

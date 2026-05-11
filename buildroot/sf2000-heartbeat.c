@@ -81,6 +81,8 @@ static void pulse_backlight(unsigned count, unsigned on_ms, unsigned off_ms)
 	unsigned i;
 
 	for (i = 0; i < count && !stopping; i++) {
+		if (access("/run/sf2000-screen-own-backlight", F_OK) == 0)
+			break;
 		backlight_set(1);
 		sleep_ms(on_ms);
 		backlight_set(0);
