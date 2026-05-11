@@ -30,6 +30,7 @@ typedef unsigned long uintptr;
 #define GPIO_L_DIR 0xb8800058u
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
+#define MAPPING_REG 0xb8800220u
 #define BOOTROM_BASE 0xbfc00000u
 #define ROM_F_MOUNT_ADDR 0x8101f044u
 #define ROM_F_OPEN_ADDR 0x8101f0d4u
@@ -41,6 +42,7 @@ typedef unsigned long uintptr;
 #define BACKLIGHT_OFF_TICKS 0x04000000u
 #define BACKLIGHT_ON_TICKS 0x02000000u
 #define BACKLIGHT_STAGE_GAP_TICKS 0x08000000u
+#define MAPPING_LINUX_BIT (1u << 24)
 #define QEMU_DIRECT_DELAY_SHIFT 12
 #define LOG_SECTOR_SIZE 512u
 #define LOG_LIMIT 65536u
@@ -495,6 +497,20 @@ static void bootlog_handoff_state(u32 bootrom, u32 mount, u32 write)
 	bootlog_flush();
 }
 
+static void bootlog_mapping(u32 before, u32 after)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("mapping=");
+	bootlog_hex(before);
+	bootlog_puts(" -> ");
+	bootlog_hex(after);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static u32 cp0_count(void)
 {
 	u32 count;
@@ -683,6 +699,22 @@ static void reset_exception_base_for_linux(void)
 	uart_hex(after);
 	uart_puts("\n");
 	bootlog_ebase(before, after);
+}
+
+static void setup_system_mapping_for_linux(void)
+{
+	u32 before = mmio_read32(MAPPING_REG);
+	u32 after = before | MAPPING_LINUX_BIT;
+
+	mmio_write32(MAPPING_REG, after);
+	after = mmio_read32(MAPPING_REG);
+
+	uart_puts("linux-loader: mapping ");
+	uart_hex(before);
+	uart_puts(" -> ");
+	uart_hex(after);
+	uart_puts("\n");
+	bootlog_mapping(before, after);
 }
 
 static void log_status_handoff(void)
@@ -933,6 +965,7 @@ void linux_loader_main(void)
 	entry = eh->e_entry;
 	bootlog_loader_info((u32)kernel_size, (u32)dtb_size, eh->e_entry,
 		(u32)dtb_dest);
+	setup_system_mapping_for_linux();
 	reset_exception_base_for_linux();
 	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
