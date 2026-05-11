@@ -20,10 +20,15 @@ typedef unsigned int size_t;
 
 #define SYSIO_BASE_PHYS 0x18800000UL
 #define SYSIO_SIZE 0x1000UL
+#define PINMUX_L_OFF 0x4a0UL
 #define PINMUX_R_OFF 0x4e0UL
+#define GPIO_L_OUT_OFF 0x54UL
+#define GPIO_L_DIR_OFF 0x58UL
 #define GPIO_R_OUT_OFF 0xf4UL
 #define GPIO_R_DIR_OFF 0xf8UL
+#define PIN_L25 25UL
 #define PIN_R05 5UL
+#define STATUS_L25 (1UL << PIN_L25)
 #define BACKLIGHT_R05 (1UL << PIN_R05)
 
 struct timespec {
@@ -186,6 +191,23 @@ static void userspace_backlight_set(volatile unsigned char *sysio, int on)
 	mmio_write32(sysio, GPIO_R_OUT_OFF, out);
 }
 
+static void userspace_status_led_set(volatile unsigned char *sysio, int on)
+{
+	unsigned int out;
+	unsigned int dir;
+
+	mmio_write8(sysio, PINMUX_L_OFF + PIN_L25, 0);
+	dir = mmio_read32(sysio, GPIO_L_DIR_OFF);
+	mmio_write32(sysio, GPIO_L_DIR_OFF, dir | STATUS_L25);
+
+	out = mmio_read32(sysio, GPIO_L_OUT_OFF);
+	if (on)
+		out |= STATUS_L25;
+	else
+		out &= ~STATUS_L25;
+	mmio_write32(sysio, GPIO_L_OUT_OFF, out);
+}
+
 static int visible_userspace_stage(void)
 {
 	volatile unsigned char *sysio;
@@ -203,14 +225,18 @@ static int visible_userspace_stage(void)
 		return -2;
 
 	userspace_backlight_set(sysio, 1);
-	sleep_ms(900);
-	for (i = 0; i < 5; i++) {
+	userspace_status_led_set(sysio, 0);
+	sleep_ms(1200);
+	for (i = 0; i < 10; i++) {
 		userspace_backlight_set(sysio, 0);
-		sleep_ms(900);
+		userspace_status_led_set(sysio, 1);
+		sleep_ms(220);
 		userspace_backlight_set(sysio, 1);
-		sleep_ms(350);
+		userspace_status_led_set(sysio, 0);
+		sleep_ms(120);
 	}
-	sleep_ms(900);
+	userspace_status_led_set(sysio, 0);
+	sleep_ms(1200);
 	return 0;
 }
 

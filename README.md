@@ -56,13 +56,21 @@ make status
   loader binary, not an ASD image.
 - `firmware/linux.asd`: Unifrog menu handoff path. Boot Unifrog first and
   select `linux.asd`.
+- `log.txt`: fixed-size early boot log. Keep this file in the SD root if you
+  want kernel stage names written back to the card.
 
-Hardware diagnostics use counted backlight-off pulse groups:
+Hardware diagnostics use counted backlight-off pulse groups, mirrored on the
+L25 status LED when that LED is present:
 
 - 1 pulse: Linux loader entered.
 - 2 pulses: loader is jumping to the kernel.
 - 3 pulses: kernel entered MIPS `setup_arch`.
 - 4 pulses: kernel finished MIPS `setup_arch`.
-- 5 pulses: initramfs `/init` reached userspace.
+- 5 pulses: `start_kernel` resumed after `setup_arch`.
+- 6 pulses: `mm_init` completed.
+- 7 pulses: `time_init` completed.
+- 8 pulses: the kernel is about to enable IRQs.
+- 9 pulses: the kernel is about to exec `/init`.
+- 10 pulses: initramfs `/init` reached userspace.
 
 If the pulse groups stop, the next stage is where the boot is hanging.

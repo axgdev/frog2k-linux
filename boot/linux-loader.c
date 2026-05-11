@@ -25,12 +25,94 @@ typedef unsigned long uintptr;
 #define UART_LSR_THRE 0x20
 #define CACHE_LINE 16u
 #define PINMUX_R05 0xb88004e5u
+#define PINMUX_L25 0xb88004b9u
+#define GPIO_L_OUT 0xb8800054u
+#define GPIO_L_DIR 0xb8800058u
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define BACKLIGHT_R05 (1u << 5)
-#define BACKLIGHT_OFF_TICKS 0x20000000u
-#define BACKLIGHT_ON_TICKS 0x08000000u
-#define BACKLIGHT_STAGE_GAP_TICKS 0x18000000u
+#define STATUS_L25 (1u << 25)
+#define BACKLIGHT_OFF_TICKS 0x06000000u
+#define BACKLIGHT_ON_TICKS 0x03000000u
+#define BACKLIGHT_STAGE_GAP_TICKS 0x20000000u
+#define LOG_SECTOR_SIZE 512u
+#define LOG_LIMIT 65536u
+#define FA_READ 0x01u
+
+typedef unsigned long long u64;
+
+struct fatfs {
+	u8 fs_type;
+	u8 pdrv;
+	u8 n_fats;
+	u8 wflag;
+	u8 fsi_flag;
+	u8 reserved0;
+	u16 id;
+	u16 n_rootdir;
+	u16 csize;
+	void *lfnbuf;
+	u8 *dirbuf;
+	u32 last_clst;
+	u32 free_clst;
+	u32 cdir;
+	u32 cdc_scl;
+	u32 cdc_size;
+	u32 cdc_ofs;
+	u32 n_fatent;
+	u32 fsize;
+	u32 volbase;
+	u32 fatbase;
+	u32 dirbase;
+	u32 database;
+	u32 bitbase;
+	u32 winsect;
+	u8 win[LOG_SECTOR_SIZE];
+};
+
+struct ffobjid {
+	struct fatfs *fs;
+	u16 id;
+	u8 attr;
+	u8 stat;
+	u32 sclust;
+	u8 reserved0[4];
+	u64 objsize;
+	u32 n_cont;
+	u32 n_frag;
+	u32 c_scl;
+	u32 c_size;
+	u32 c_ofs;
+	u8 reserved1[4];
+};
+
+struct fil {
+	struct ffobjid obj;
+	u8 flag;
+	u8 err;
+	u8 reserved0[6];
+	u64 fptr;
+	u32 clust;
+	u32 sect;
+	u32 dir_sect;
+	u8 *dir_ptr;
+	u8 buf[LOG_SECTOR_SIZE];
+};
+
+typedef int (*rom_f_mount_fn)(struct fatfs *fs, const char *path, u8 opt);
+typedef int (*rom_f_open_fn)(struct fil *fp, const char *path, u8 mode);
+typedef int (*rom_disk_read_fn)(u8 pdrv, u8 *buff, u32 sector, u32 count);
+typedef int (*rom_disk_write_fn)(u8 pdrv, const u8 *buff, u32 sector,
+		u32 count);
+typedef void (*rom_cache_flush_fn)(void *addr, unsigned long len);
+
+static rom_f_mount_fn const rom_f_mount = (rom_f_mount_fn)0x8101f044u;
+static rom_f_open_fn const rom_f_open = (rom_f_open_fn)0x8101f0d4u;
+static rom_disk_read_fn const rom_disk_read = (rom_disk_read_fn)0x8101ffb4u;
+static rom_disk_write_fn const rom_disk_write =
+	(rom_disk_write_fn)0x81020020u;
+static rom_cache_flush_fn const rom_cache_flush =
+	(rom_cache_flush_fn)0x810032f4u;
 
 struct elf32_ehdr {
 	u8 e_ident[EI_NIDENT];
@@ -111,6 +193,258 @@ static void mmio_write8(uintptr addr, u8 value)
 	*(volatile u8 *)addr = value;
 }
 
+static struct fatfs log_fs;
+static struct fil log_file;
+static u8 log_sector[LOG_SECTOR_SIZE];
+static u8 log_fat_sector[LOG_SECTOR_SIZE];
+static u32 log_fat_lba = 0xffffffffu;
+static u32 log_sector_index = 0xffffffffu;
+static u32 log_pos;
+static u32 log_limit;
+static int log_ready;
+static int log_tried;
+
+static u32 le16(const u8 *p)
+{
+	return (u32)p[0] | ((u32)p[1] << 8);
+}
+
+static u32 le32(const u8 *p)
+{
+	return (u32)p[0] | ((u32)p[1] << 8) |
+		((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+static void zero_sector(u8 *sector)
+{
+	u32 i;
+
+	for (i = 0; i < LOG_SECTOR_SIZE; i++)
+		sector[i] = 0;
+}
+
+static int rom_call_present(u32 addr)
+{
+	u32 insn = mmio_read32(addr);
+
+	return insn != 0 && insn != 0xffffffffu;
+}
+
+static int log_fat_next(u32 cluster, u32 *next)
+{
+	u32 fat_offset;
+	u32 fat_lba;
+	u32 offset;
+	u32 value;
+
+	if (cluster < 2 || cluster >= log_fs.n_fatent)
+		return -1;
+
+	if (log_fs.fs_type == 3) {
+		fat_offset = cluster * 4u;
+		fat_lba = log_fs.fatbase + fat_offset / LOG_SECTOR_SIZE;
+		offset = fat_offset % LOG_SECTOR_SIZE;
+		if (fat_lba != log_fat_lba) {
+			if (rom_disk_read(log_fs.pdrv, log_fat_sector,
+					fat_lba, 1) != 0)
+				return -1;
+			log_fat_lba = fat_lba;
+		}
+		value = le32(log_fat_sector + offset) & 0x0fffffffu;
+		if (value >= 0x0ffffff8u)
+			return 1;
+		*next = value;
+		return 0;
+	}
+
+	if (log_fs.fs_type == 2) {
+		fat_offset = cluster * 2u;
+		fat_lba = log_fs.fatbase + fat_offset / LOG_SECTOR_SIZE;
+		offset = fat_offset % LOG_SECTOR_SIZE;
+		if (fat_lba != log_fat_lba) {
+			if (rom_disk_read(log_fs.pdrv, log_fat_sector,
+					fat_lba, 1) != 0)
+				return -1;
+			log_fat_lba = fat_lba;
+		}
+		value = le16(log_fat_sector + offset);
+		if (value >= 0xfff8u)
+			return 1;
+		*next = value;
+		return 0;
+	}
+
+	return -1;
+}
+
+static int log_file_lba(u32 file_sector, u32 *lba)
+{
+	u32 cluster = log_file.obj.sclust;
+	u32 cluster_index;
+	u32 sector_in_cluster;
+
+	if (log_fs.csize == 0 || cluster < 2)
+		return -1;
+
+	cluster_index = file_sector / log_fs.csize;
+	sector_in_cluster = file_sector % log_fs.csize;
+	while (cluster_index-- != 0) {
+		u32 next = 0;
+		int ret = log_fat_next(cluster, &next);
+
+		if (ret != 0)
+			return -1;
+		cluster = next;
+	}
+
+	if (cluster < 2 || cluster >= log_fs.n_fatent)
+		return -1;
+
+	*lba = log_fs.database + (cluster - 2u) * log_fs.csize +
+		sector_in_cluster;
+	return 0;
+}
+
+static void bootlog_flush_current(void)
+{
+	u32 lba;
+
+	if (!log_ready || log_sector_index == 0xffffffffu)
+		return;
+	if (log_file_lba(log_sector_index, &lba) != 0)
+		return;
+
+	rom_cache_flush(log_sector, LOG_SECTOR_SIZE);
+	rom_disk_write(log_fs.pdrv, log_sector, lba, 1);
+}
+
+static int bootlog_open_sector(u32 sector_index)
+{
+	if (sector_index == log_sector_index)
+		return 0;
+
+	bootlog_flush_current();
+	zero_sector(log_sector);
+	log_sector_index = sector_index;
+	return 0;
+}
+
+static void bootlog_putc(char ch)
+{
+	u32 off;
+
+	if (!log_ready || log_pos >= log_limit)
+		return;
+	if (bootlog_open_sector(log_pos / LOG_SECTOR_SIZE) != 0)
+		return;
+
+	off = log_pos % LOG_SECTOR_SIZE;
+	log_sector[off] = (u8)ch;
+	log_pos++;
+
+	if (log_pos % LOG_SECTOR_SIZE == 0) {
+		bootlog_flush_current();
+		log_sector_index = 0xffffffffu;
+	} else if (off + 1u < LOG_SECTOR_SIZE) {
+		log_sector[off + 1u] = 0;
+	}
+}
+
+static void bootlog_flush(void)
+{
+	u32 off;
+
+	if (!log_ready || log_sector_index == 0xffffffffu)
+		return;
+
+	off = log_pos % LOG_SECTOR_SIZE;
+	if (off < LOG_SECTOR_SIZE)
+		log_sector[off] = 0;
+	bootlog_flush_current();
+}
+
+static void bootlog_puts(const char *s)
+{
+	while (*s != '\0')
+		bootlog_putc(*s++);
+}
+
+static void bootlog_hex(u32 value)
+{
+	static const char digits[] = "0123456789abcdef";
+	int shift;
+
+	bootlog_puts("0x");
+	for (shift = 28; shift >= 0; shift -= 4)
+		bootlog_putc(digits[(value >> shift) & 0xf]);
+}
+
+static void bootlog_init(void)
+{
+	int rc;
+
+	if (log_tried)
+		return;
+	log_tried = 1;
+
+	if (!rom_call_present(0x8101f044u) ||
+	    !rom_call_present(0x8101f0d4u) ||
+	    !rom_call_present(0x81020020u))
+		return;
+
+	rc = rom_f_mount(&log_fs, "", 1);
+	if (rc != 0)
+		return;
+	rc = rom_f_open(&log_file, "log.txt", FA_READ);
+	if (rc != 0)
+		return;
+	if (log_file.obj.fs == (void *)0 || log_file.obj.sclust < 2 ||
+	    log_file.obj.objsize < LOG_SECTOR_SIZE)
+		return;
+
+	log_limit = log_file.obj.objsize < LOG_LIMIT ?
+		(u32)log_file.obj.objsize : LOG_LIMIT;
+	log_ready = 1;
+	log_pos = 0;
+	log_fat_lba = 0xffffffffu;
+	log_sector_index = 0xffffffffu;
+	bootlog_puts("sf2000-linux loader bootlog\n");
+	bootlog_flush();
+}
+
+static void bootlog_stage(const char *name, u32 pulses)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("stage ");
+	bootlog_hex(pulses);
+	bootlog_puts(": ");
+	bootlog_puts(name);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
+static void bootlog_loader_info(u32 kernel_size, u32 dtb_size, u32 entry,
+		u32 dtb)
+{
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("kernel=");
+	bootlog_hex(kernel_size);
+	bootlog_puts(" dtb_size=");
+	bootlog_hex(dtb_size);
+	bootlog_puts(" entry=");
+	bootlog_hex(entry);
+	bootlog_puts(" dtb=");
+	bootlog_hex(dtb);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static u32 cp0_count(void)
 {
 	u32 count;
@@ -142,6 +476,21 @@ static void backlight_set(int on)
 	mmio_write32(GPIO_R_OUT, out);
 }
 
+static void status_led_set(int on)
+{
+	u32 out = mmio_read32(GPIO_L_OUT);
+	u32 dir = mmio_read32(GPIO_L_DIR);
+
+	if (on)
+		out |= STATUS_L25;
+	else
+		out &= ~STATUS_L25;
+
+	mmio_write8(PINMUX_L25, 0);
+	mmio_write32(GPIO_L_DIR, dir | STATUS_L25);
+	mmio_write32(GPIO_L_OUT, out);
+}
+
 static void backlight_stage_mark(const char *name, unsigned int pulses)
 {
 	unsigned int i;
@@ -153,13 +502,17 @@ static void backlight_stage_mark(const char *name, unsigned int pulses)
 	uart_puts("\n");
 
 	backlight_set(1);
+	status_led_set(0);
 	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
 	for (i = 0; i < pulses; i++) {
 		backlight_set(0);
+		status_led_set(1);
 		delay_count_ticks(BACKLIGHT_OFF_TICKS);
 		backlight_set(1);
+		status_led_set(0);
 		delay_count_ticks(BACKLIGHT_ON_TICKS);
 	}
+	status_led_set(0);
 	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
 }
 
@@ -398,6 +751,7 @@ void linux_loader_main(void)
 	clear_bss();
 	disable_interrupts();
 	backlight_stage_mark("loader-entry", 1);
+	bootlog_stage("loader-entry", 1);
 
 	kernel_size = (usize)(linux_vmlinux_end - linux_vmlinux_start);
 	dtb_size = (usize)(linux_dtb_end - linux_dtb_start);
@@ -427,6 +781,9 @@ void linux_loader_main(void)
 	if (dtb_dest + dtb_size > RAM_TOP) {
 		loader_panic("linux-loader: no room for DTB");
 	}
+	bootlog_loader_info((u32)kernel_size, (u32)dtb_size, eh->e_entry,
+		(u32)dtb_dest);
+	bootlog_stage("loader-jump", 2);
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 

@@ -13,10 +13,15 @@
 
 #define SYSIO_BASE_PHYS 0x18800000u
 #define SYSIO_SIZE 0x1000u
+#define PINMUX_L_OFF 0x4a0u
 #define PINMUX_R_OFF 0x4e0u
+#define GPIO_L_OUT_OFF 0x54u
+#define GPIO_L_DIR_OFF 0x58u
 #define GPIO_R_OUT_OFF 0xf4u
 #define GPIO_R_DIR_OFF 0xf8u
+#define PIN_L25 25u
 #define PIN_R05 5u
+#define STATUS_L25 (1u << PIN_L25)
 #define BACKLIGHT_R05 (1u << PIN_R05)
 
 static volatile uint8_t *sysio;
@@ -80,6 +85,25 @@ static void backlight_set(int on)
 	mmio_write32(GPIO_R_OUT_OFF, out);
 }
 
+static void status_led_set(int on)
+{
+	uint32_t bit = STATUS_L25;
+	uint32_t out;
+	uint32_t dir;
+
+	mmio_write8(PINMUX_L_OFF + PIN_L25, 0);
+	dir = mmio_read32(GPIO_L_DIR_OFF);
+	mmio_write32(GPIO_L_DIR_OFF, dir | bit);
+
+	out = mmio_read32(GPIO_L_OUT_OFF);
+	if (on)
+		out |= bit;
+	else
+		out &= ~bit;
+
+	mmio_write32(GPIO_L_OUT_OFF, out);
+}
+
 static void pulse_backlight(unsigned count, unsigned on_ms, unsigned off_ms)
 {
 	unsigned i;
@@ -88,11 +112,14 @@ static void pulse_backlight(unsigned count, unsigned on_ms, unsigned off_ms)
 		if (access("/run/sf2000-screen-own-backlight", F_OK) == 0)
 			break;
 		backlight_set(1);
+		status_led_set(0);
 		sleep_ms(on_ms);
 		backlight_set(0);
+		status_led_set(1);
 		sleep_ms(off_ms);
 	}
 	backlight_set(1);
+	status_led_set(0);
 }
 
 static int map_sysio(void)
@@ -131,27 +158,32 @@ int main(void)
 	signal(SIGTERM, handle_signal);
 
 	log_line("sf2000-heartbeat: backlight heartbeat ready\n");
-	pulse_backlight(3, 800, 800);
+	pulse_backlight(3, 180, 260);
 
 	while (!stopping) {
 		if (access("/run/sf2000-screen-own-backlight", F_OK) == 0) {
+			status_led_set(0);
 			sleep_ms(500);
 			continue;
 		}
 
 		if (access("/run/sf2000-screen-ready", F_OK) == 0) {
 			backlight_set(1);
+			status_led_set(0);
 			sleep_ms(2000);
 			continue;
 		}
 
 		backlight_set(0);
-		sleep_ms(1000);
+		status_led_set(1);
+		sleep_ms(400);
 		backlight_set(1);
-		sleep_ms(1500);
+		status_led_set(0);
+		sleep_ms(1200);
 	}
 
 	backlight_set(1);
+	status_led_set(0);
 	if (sysio)
 		munmap((void *)sysio, SYSIO_SIZE);
 	log_line("sf2000-heartbeat: stopped\n");

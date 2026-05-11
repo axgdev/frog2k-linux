@@ -59,6 +59,11 @@
 			reg = <0x00f00000 0x00100000>;
 			no-map;
 		};
+
+		bootrom_scratch: bootrom-scratch@1000000 {
+			reg = <0x01000000 0x03000000>;
+			no-map;
+		};
 	};
 
 	cpuintc: interrupt-controller {

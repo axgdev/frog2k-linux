@@ -82,6 +82,7 @@ SDCARD_LINUX_ASD := $(BUILD_DIR)/sdcard/firmware/linux.asd
 SDCARD_FASTBOOT_BIN := $(BUILD_DIR)/sdcard/firmware/unifrog.bin
 SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
+SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 QEMU_BOOT_TIMEOUT ?= 90s
@@ -478,13 +479,25 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Existing fastboot auto-load path. This is the raw loader binary, not an ASD.\n\n'; \
 		printf '/firmware/linux.asd\n'; \
 		printf '  Unifrog menu handoff path. Boot Unifrog first, then select linux.asd.\n\n'; \
-		printf 'Visible stages use counted backlight-off pulses:\n'; \
+		printf '/log.txt\n'; \
+		printf '  Preallocated early boot log. Keep this fixed-size file in the SD root.\n'; \
+		printf '  The ROM has disk_write but no f_write, so Linux overwrites this file in place.\n\n'; \
+		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
 		printf '  1 pulse: Linux loader entered\n'; \
 		printf '  2 pulses: loader is jumping to the kernel\n'; \
 		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
 		printf '  4 pulses: kernel finished MIPS setup_arch\n'; \
-		printf '  5 pulses: initramfs /init reached userspace\n'; \
+		printf '  5 pulses: start_kernel resumed after setup_arch\n'; \
+		printf '  6 pulses: mm_init completed\n'; \
+		printf '  7 pulses: time_init completed\n'; \
+		printf '  8 pulses: kernel is about to enable IRQs\n'; \
+		printf '  9 pulses: kernel is about to exec /init\n'; \
+		printf '  10 pulses: initramfs /init reached userspace\n'; \
 	} > '$@'
+
+$(SDCARD_LOG_TXT): Makefile
+	mkdir -p '$(dir $@)'
+	dd if=/dev/zero of='$@' bs=65536 count=1 >/dev/null 2>&1
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
@@ -498,7 +511,7 @@ linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot linux-asd
 
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
-		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS)
+		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS) $(SDCARD_LOG_TXT)
 
 sdcard-buildroot:
 	$(MAKE) ROOTFS=buildroot sdcard-linux
@@ -535,7 +548,7 @@ smoke-linux-asd: run-linux-asd
 
 run-linux-input: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 45; printf 'sendkey right 1000\n'; sleep 2; \
+	(sleep 70; printf 'sendkey right 1000\n'; sleep 2; \
 		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000 -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor stdio \
