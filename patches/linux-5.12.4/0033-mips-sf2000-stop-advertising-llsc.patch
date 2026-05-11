@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Mon, 11 May 2026 18:30:00 +0000
+Subject: [PATCH] mips: sf2000: stop advertising llsc
+
+The real SF2000 reaches the futex core initcall and then stops at the
+runtime cmpxchg probe. That probe deliberately performs an atomic cmpxchg on
+a NULL user pointer and expects the MIPS exception-table path to recover with
+-EFAULT.
+
+The forced SF2000 CPU profile had been advertising MIPS_CPU_LLSC without
+hardware confirmation. On this chip that is too optimistic: the first
+recoverable user LL/SC access does not return to the initcall. Keep the CPU
+profile conservative by omitting LL/SC until the instruction and exception
+interaction is understood. This makes futex cmpxchg detection return -ENOSYS
+instead of taking the broken user LL/SC fault path.
+
+Also enlarge the retained progress ring and shorten visible pulse delays now
+that log.txt is the primary diagnostic channel.
+---
+ arch/mips/kernel/cpu-probe.c | 2 +-
+ arch/mips/kernel/setup.c     | 8 ++++----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index f9040554e..2f2a7c28b 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -1988,8 +1988,8 @@ static void cpu_probe_sf2000(struct cpuinfo_mips *c, unsigned int cpu)
+ 
+ 	c->cputype = CPU_4KC;
+ 	c->writecombine = _CACHE_UNCACHED;
+-	c->options = MIPS_CPU_TLB | MIPS_CPU_4KEX | MIPS_CPU_4K_CACHE |
+-		     MIPS_CPU_COUNTER | MIPS_CPU_LLSC | MIPS_CPU_MCHECK;
++	c->options = MIPS_CPU_TLB | MIPS_CPU_4KEX | MIPS_CPU_4K_CACHE |
++		     MIPS_CPU_COUNTER | MIPS_CPU_MCHECK;
+ 	c->ases = 0;
+ 	c->scache.flags = MIPS_CACHE_NOT_PRESENT;
+ 	/* The HC15xx bring-up uses the smallest 4Kc-compatible TLB profile. */
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index a1b0b7b1a..1bdd89323 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -85,11 +85,11 @@
+ #define SF2000_PIN_R05 5
+ #define SF2000_STATUS_L25 (1u << SF2000_PIN_L25)
+ #define SF2000_BACKLIGHT_R05 (1u << SF2000_PIN_R05)
+-#define SF2000_STAGE_OFF_TICKS 0x00080000u
+-#define SF2000_STAGE_ON_TICKS 0x00040000u
+-#define SF2000_STAGE_GAP_TICKS 0x000c0000u
+-#define SF2000_TICK_OFF_TICKS 0x00040000u
+-#define SF2000_TICK_GAP_TICKS 0x00080000u
++#define SF2000_STAGE_OFF_TICKS 0x00020000u
++#define SF2000_STAGE_ON_TICKS 0x00010000u
++#define SF2000_STAGE_GAP_TICKS 0x00040000u
++#define SF2000_TICK_OFF_TICKS 0x00010000u
++#define SF2000_TICK_GAP_TICKS 0x00020000u
+ #define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
+ #define SF2000_GMA_KSEG1 ((volatile unsigned char *)CKSEG1ADDR(0x18808000))
+ #define SF2000_GMA_DESC_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x00f00000))
+@@ -107,7 +107,7 @@
+ #define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
+ #define SF2000_PROGRESS_MAGIC 0x52504653u
+ #define SF2000_PROGRESS_VERSION 1u
+-#define SF2000_PROGRESS_ENTRIES 384u
++#define SF2000_PROGRESS_ENTRIES 1024u
+ #define SF2000_PROGRESS_NAME_LEN 32u
+ #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
+ #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
+-- 
+2.50.1

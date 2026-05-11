@@ -579,7 +579,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 
 $(SDCARD_LOG_TXT): Makefile
 	mkdir -p '$(dir $@)'
-	dd if=/dev/zero of='$@' bs=131072 count=1 >/dev/null 2>&1
+	dd if=/dev/zero of='$@' bs=262144 count=1 >/dev/null 2>&1
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
