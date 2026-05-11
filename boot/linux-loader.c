@@ -47,6 +47,11 @@ typedef unsigned long uintptr;
 #define LOG_SECTOR_SIZE 512u
 #define LOG_LIMIT 65536u
 #define FA_READ 0x01u
+#define PROGRESS_ADDR 0xa13f0000u
+#define PROGRESS_MAGIC 0x52504653u
+#define PROGRESS_VERSION 1u
+#define PROGRESS_ENTRIES 96u
+#define PROGRESS_NAME_LEN 32u
 
 typedef unsigned long long u64;
 
@@ -106,6 +111,24 @@ struct fil {
 	u32 dir_sect;
 	u8 *dir_ptr;
 	u8 buf[LOG_SECTOR_SIZE];
+};
+
+struct progress_entry {
+	u32 seq;
+	u32 kind;
+	u32 value;
+	u32 name_ptr;
+	char name[PROGRESS_NAME_LEN];
+};
+
+struct progress_log {
+	u32 magic;
+	u32 version;
+	u32 seq;
+	u32 write_index;
+	u32 wrapped;
+	u32 reserved[3];
+	struct progress_entry entries[PROGRESS_ENTRIES];
 };
 
 typedef int (*rom_f_mount_fn)(struct fatfs *fs, const char *path, u8 opt);
@@ -213,6 +236,8 @@ static u32 log_pos;
 static u32 log_limit;
 static int log_ready;
 static int log_tried;
+static volatile struct progress_log * const progress_log =
+	(volatile struct progress_log *)PROGRESS_ADDR;
 
 static u32 le16(const u8 *p)
 {
@@ -401,6 +426,118 @@ static void bootlog_hex(u32 value)
 		bootlog_putc(digits[(value >> shift) & 0xf]);
 }
 
+static void progress_copy_name(volatile char *dst, const char *src)
+{
+	u32 i;
+
+	for (i = 0; i + 1u < PROGRESS_NAME_LEN && src[i] != '\0'; i++)
+		dst[i] = src[i];
+	dst[i] = '\0';
+}
+
+static void progress_reset(void)
+{
+	u32 i;
+
+	progress_log->magic = PROGRESS_MAGIC;
+	progress_log->version = PROGRESS_VERSION;
+	progress_log->seq = 0;
+	progress_log->write_index = 0;
+	progress_log->wrapped = 0;
+	for (i = 0; i < PROGRESS_ENTRIES; i++) {
+		progress_log->entries[i].seq = 0;
+		progress_log->entries[i].kind = 0;
+		progress_log->entries[i].value = 0;
+		progress_log->entries[i].name_ptr = 0;
+		progress_log->entries[i].name[0] = '\0';
+	}
+}
+
+static void progress_mark(const char *name, u32 kind, u32 value)
+{
+	u32 index;
+	u32 seq;
+	volatile struct progress_entry *entry;
+
+	if (progress_log->magic != PROGRESS_MAGIC ||
+	    progress_log->version != PROGRESS_VERSION)
+		return;
+
+	index = progress_log->write_index;
+	if (index >= PROGRESS_ENTRIES)
+		index = 0;
+	seq = progress_log->seq + 1u;
+	entry = &progress_log->entries[index];
+
+	entry->seq = seq;
+	entry->kind = kind;
+	entry->value = value;
+	entry->name_ptr = (u32)(uintptr)name;
+	progress_copy_name(entry->name, name);
+
+	index++;
+	if (index >= PROGRESS_ENTRIES) {
+		index = 0;
+		progress_log->wrapped = 1;
+	}
+	progress_log->write_index = index;
+	progress_log->seq = seq;
+}
+
+static void bootlog_progress_entry(volatile struct progress_entry *entry)
+{
+	u32 i;
+
+	if (entry->seq == 0)
+		return;
+
+	bootlog_puts("progress seq=");
+	bootlog_hex(entry->seq);
+	bootlog_puts(" kind=");
+	bootlog_hex(entry->kind);
+	bootlog_puts(" value=");
+	bootlog_hex(entry->value);
+	bootlog_puts(" name=");
+	for (i = 0; i < PROGRESS_NAME_LEN && entry->name[i] != '\0'; i++)
+		bootlog_putc(entry->name[i]);
+	bootlog_puts(" ptr=");
+	bootlog_hex(entry->name_ptr);
+	bootlog_puts("\n");
+}
+
+static void bootlog_dump_previous_progress(void)
+{
+	u32 i;
+	u32 start;
+	u32 count;
+
+	if (progress_log->magic != PROGRESS_MAGIC ||
+	    progress_log->version != PROGRESS_VERSION ||
+	    progress_log->seq == 0)
+		return;
+
+	bootlog_puts("previous progress addr=");
+	bootlog_hex(PROGRESS_ADDR);
+	bootlog_puts(" seq=");
+	bootlog_hex(progress_log->seq);
+	bootlog_puts(" write=");
+	bootlog_hex(progress_log->write_index);
+	bootlog_puts(" wrapped=");
+	bootlog_hex(progress_log->wrapped);
+	bootlog_puts("\n");
+
+	count = progress_log->wrapped ? PROGRESS_ENTRIES : progress_log->write_index;
+	if (count > PROGRESS_ENTRIES)
+		count = PROGRESS_ENTRIES;
+	start = progress_log->wrapped ? progress_log->write_index : 0;
+	if (start >= PROGRESS_ENTRIES)
+		start = 0;
+
+	for (i = 0; i < count; i++)
+		bootlog_progress_entry(&progress_log->entries[
+			(start + i) % PROGRESS_ENTRIES]);
+}
+
 static void bootlog_init(void)
 {
 	int rc;
@@ -431,11 +568,13 @@ static void bootlog_init(void)
 	log_fat_lba = 0xffffffffu;
 	log_sector_index = 0xffffffffu;
 	bootlog_puts("sf2000-linux loader bootlog\n");
+	bootlog_dump_previous_progress();
 	bootlog_flush();
 }
 
 static void bootlog_stage(const char *name, u32 pulses)
 {
+	progress_mark(name, 1, pulses);
 	bootlog_init();
 	if (!log_ready)
 		return;
@@ -931,6 +1070,8 @@ void linux_loader_main(void)
 
 	clear_bss();
 	disable_interrupts();
+	bootlog_init();
+	progress_reset();
 	backlight_stage_mark("loader-entry", 1);
 	bootlog_stage("loader-entry", 1);
 

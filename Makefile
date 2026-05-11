@@ -510,6 +510,10 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '/log.txt\n'; \
 		printf '  Preallocated early boot log. Keep this fixed-size file in the SD root.\n'; \
 		printf '  The ROM has disk_write but no f_write, so Linux overwrites this file in place.\n\n'; \
+		printf 'RAM progress recorder:\n'; \
+		printf '  Early Linux records named progress entries at uncached 0xa13f0000.\n'; \
+		printf '  On the next boot, the loader dumps the previous run to log.txt before clearing it.\n'; \
+		printf '  This helps replace manual blink counting when RAM survives reset/reboot.\n\n'; \
 		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
 		printf '  Direct QEMU blank-ROM runs compress these delays automatically.\n'; \
 		printf '  1 pulse: Linux loader entered\n'; \
