@@ -1,0 +1,110 @@
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -797,6 +797,92 @@
+ 
+ #ifdef CONFIG_MMU
+ 
++static int sf2000_shift_arg_pages_direct(struct vm_area_struct *vma,
++		unsigned long shift)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	unsigned long old_start = vma->vm_start;
++	unsigned long old_end = vma->vm_end;
++	unsigned long new_start = old_start - shift;
++	unsigned long new_end = old_end - shift;
++	unsigned long old_addr;
++	unsigned long new_addr;
++	int ret;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return -EAGAIN;
++
++	sf2000_exec_value("arg-shift-old-start", (unsigned int)old_start);
++	sf2000_exec_value("arg-shift-old-end", (unsigned int)old_end);
++	sf2000_exec_value("arg-shift-new-start", (unsigned int)new_start);
++	sf2000_exec_value("arg-shift-new-end", (unsigned int)new_end);
++
++	if (vma != find_vma(mm, new_start))
++		return -EFAULT;
++
++	sf2000_exec_mark("arg-shift-before-adjust-wide");
++	ret = vma_adjust(vma, new_start, old_end, vma->vm_pgoff, NULL);
++	sf2000_exec_value("arg-shift-after-adjust-wide", (unsigned int)ret);
++	if (ret)
++		return -ENOMEM;
++
++	for (old_addr = old_start, new_addr = new_start;
++	     old_addr < old_end;
++	     old_addr += PAGE_SIZE, new_addr += PAGE_SIZE) {
++		spinlock_t *ptl;
++		pgd_t *pgd;
++		p4d_t *p4d;
++		pud_t *pud;
++		pmd_t *pmd;
++		pte_t *pte;
++		pte_t entry;
++
++		sf2000_exec_value("arg-shift-src", (unsigned int)old_addr);
++		pgd = pgd_offset(mm, old_addr);
++		p4d = p4d_offset(pgd, old_addr);
++		pud = pud_offset(p4d, old_addr);
++		pmd = pmd_offset(pud, old_addr);
++		pte = pte_offset_map_lock(mm, pmd, old_addr, &ptl);
++		entry = *pte;
++		if (pte_none(entry)) {
++			pte_unmap_unlock(pte, ptl);
++			continue;
++		}
++		ptep_get_and_clear(mm, old_addr, pte);
++		pte_unmap_unlock(pte, ptl);
++		sf2000_exec_value("arg-shift-cleared", (unsigned int)old_addr);
++
++		pgd = pgd_offset(mm, new_addr);
++		p4d = p4d_alloc(mm, pgd, new_addr);
++		if (!p4d)
++			return -ENOMEM;
++		pud = pud_alloc(mm, p4d, new_addr);
++		if (!pud)
++			return -ENOMEM;
++		pmd = pmd_alloc(mm, pud, new_addr);
++		if (!pmd)
++			return -ENOMEM;
++		pte = pte_alloc_map_lock(mm, pmd, new_addr, &ptl);
++		if (!pte)
++			return -ENOMEM;
++		if (!pte_none(*pte)) {
++			pte_unmap_unlock(pte, ptl);
++			return -EFAULT;
++		}
++		set_pte_at(mm, new_addr, pte, entry);
++		pte_unmap_unlock(pte, ptl);
++		sf2000_exec_value("arg-shift-installed", (unsigned int)new_addr);
++	}
++
++	sf2000_exec_mark("arg-shift-before-adjust-final");
++	ret = vma_adjust(vma, new_start, new_end, vma->vm_pgoff, NULL);
++	sf2000_exec_value("arg-shift-after-adjust-final", (unsigned int)ret);
++	if (ret)
++		return -ENOMEM;
++
++	return 0;
++}
++
+ /*
+  * During bprm_mm_init(), we create a temporary stack at STACK_TOP_MAX.  Once
+  * the binfmt code determines where the new stack should reside, we shift it to
+@@ -818,9 +904,14 @@
+ 	unsigned long new_start = old_start - shift;
+ 	unsigned long new_end = old_end - shift;
+ 	struct mmu_gather tlb;
++	int direct_ret;
+ 
+ 	BUG_ON(new_start > new_end);
+ 
++	direct_ret = sf2000_shift_arg_pages_direct(vma, shift);
++	if (direct_ret != -EAGAIN)
++		return direct_ret;
++
+ 	/*
+ 	 * ensure there are no vmas between where we want to go
+ 	 * and where we are
