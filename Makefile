@@ -95,7 +95,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
 	-Wall -Wextra
 
-.PHONY: all status qemu rootfs buildroot linux linux-asd linux-buildroot \
+.PHONY: all status qemu rootfs buildroot linux linux-reextract linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -260,20 +260,19 @@ $(LINUX_SRC)/Makefile:
 
 $(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
 	@if test -e '$@'; then \
-		printf 'linux patch series changed; re-extracting %s\n' '$(LINUX_SRC)'; \
-		test -f '.cache/$(LINUX_TARBALL)' || curl -L -o '.cache/$(LINUX_TARBALL)' '$(LINUX_URL)'; \
-		rm -rf '$(LINUX_SRC)'; \
-		mkdir -p '$(LINUX_SRC)'; \
-		tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1; \
+		printf 'linux patch series changed; applying incrementally in %s\n' '$(LINUX_SRC)'; \
 	fi
 	@for patch in $(LINUX_PATCHES); do \
+		if test -e '$@' && ! test "$$patch" -nt '$@'; then \
+			continue; \
+		fi; \
 		if patch -d '$(LINUX_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'applying %s\n' "$$patch"; \
 			patch -d '$(LINUX_SRC)' -p1 < "$$patch"; \
 		elif patch -d '$(LINUX_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'already applied %s\n' "$$patch"; \
 		else \
-			printf 'cannot apply %s\n' "$$patch" >&2; \
+			printf 'cannot apply %s; run make linux-reextract for a clean kernel tree\n' "$$patch" >&2; \
 			exit 1; \
 		fi; \
 	done
@@ -439,6 +438,9 @@ $(LINUX_VMLINUX): $(LINUX_OUT)/.config $(ROOTFS_CPIO)
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 
 linux: $(LINUX_VMLINUX) $(SF2000_DTB)
+
+linux-reextract:
+	rm -rf '$(LINUX_SRC)' '$(LINUX_OUT)'
 
 $(ASDPACK): tools/asdpack.c Makefile
 	mkdir -p '$(dir $@)'
