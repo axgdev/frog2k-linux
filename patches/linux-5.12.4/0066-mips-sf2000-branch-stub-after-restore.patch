@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000066 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: branch stub after restore
+
+The physical direct-stub image rewrites both pt_regs EPC and ErrorEPC to the
+copied KSEG0 stub before the final return, but the retained post-restore
+header still shows that the stub never executes. The direct branch added for
+the original /init EPC only matches 0x004002f0, so after rewriting the saved
+EPC to 0x80401000 it skips itself and falls back to the unreliable eret path.
+
+Accept either the original /init EPC or the copied stub EPC in the post
+RESTORE_SOME branch and jump directly to the copied stub. This keeps the final
+device path out of the problematic eret handoff while still allowing the stub
+to clear ERL and alias the userspace stack before entering /init.
+---
+ arch/mips/kernel/entry.S | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -154,8 +154,12 @@ restore_partial:		# restore partial frame
+ 	 nop
+ 	LONG_L	k1, PT_EPC(sp)
+ 	li	k0, 0x004002f0
+-	bne	k1, k0, 1f
++	beq	k1, k0, 2f
++	 nop
++	li	k0, 0x80401000
++	bne	k1, k0, 1f
+ 	 nop
++2:
+ 	lui	k0, 0xa13f
+ 	li	k1, 0x51510007
+ 	sw	k1, 20(k0)
+-- 
+2.45.0

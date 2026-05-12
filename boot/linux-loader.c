@@ -54,7 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 epc-errorepc-init-stub"
+#define LOADER_BUILD_TAG "2026-05-12 direct-stub-epc-branch"
 
 typedef unsigned long long u64;
 
