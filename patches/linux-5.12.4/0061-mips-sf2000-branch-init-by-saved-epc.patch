@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000061 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: branch init by saved EPC
+
+The physical SF2000 log for the one-shot identity-init image still stops at
+the final restore marker. The retained header reports marker 0x51510001 and a
+post-RESTORE_SOME CP0 status without ERL, so the ERL-bit test skips the copied
+identity stub even though the saved pt_regs status was prepared for the first
+/init handoff.
+
+Key the special branch off the saved /init EPC instead. That value is the
+handoff target we need to intercept and it is still available in pt_regs at the
+restore point. Mark this branch decision as 0x51510007; if the copied stub
+runs it will still overwrite the marker with 0x51510006 before jumping to
+/init.
+---
+ arch/mips/kernel/entry.S | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -149,12 +149,12 @@ restore_partial:		# restore partial frame
+ 	MFC0	k1, CP0_EPC
+ 	sw	k1, 28(k0)
+ 	sync
+-	LONG_L	k1, PT_STATUS(sp)
+-	andi	k1, ST0_ERL
+-	beqz	k1, 1f
++	LONG_L	k1, PT_EPC(sp)
++	li	k0, 0x004002f0
++	bne	k1, k0, 1f
+ 	 nop
+ 	lui	k0, 0xa13f
+-	li	k1, 0x51510003
++	li	k1, 0x51510007
+ 	sw	k1, 20(k0)
+ 	LONG_L	k1, PT_R29(sp)
+ 	sw	k1, 24(k0)
+-- 
+2.45.0

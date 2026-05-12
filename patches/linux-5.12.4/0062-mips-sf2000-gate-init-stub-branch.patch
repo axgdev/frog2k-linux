@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000062 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: gate init stub branch
+
+The saved-EPC branch is only valid for the physical ROM-handoff workaround.
+Direct ASD QEMU boots can also return to a /init entry at the same address,
+but they do not need the copied identity stub and may not have valid copied
+stub state for that path.
+
+Add an explicit branch-enable flag that is set only when start_thread() takes
+the SF2000 identity handoff. The assembly return path now requires both this
+flag and the saved /init EPC before jumping to the copied stub.
+---
+ arch/mips/kernel/entry.S   | 4 ++++
+ arch/mips/kernel/process.c | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -152,6 +152,10 @@ restore_partial:		# restore partial frame
+ 	MFC0	k1, CP0_EPC
+ 	sw	k1, 28(k0)
+ 	sync
++	PTR_LA	k0, sf2000_identity_branch_enabled
++	lw	k1, 0(k0)
++	beqz	k1, 1f
++	 nop
+ 	LONG_L	k1, PT_EPC(sp)
+ 	li	k0, 0x004002f0
+ 	bne	k1, k0, 1f
+diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -54,6 +54,7 @@ asmlinkage void ret_from_kernel_thread(void);
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 		unsigned int value);
+ extern int sf2000_rom_handoff_present(void);
++int sf2000_identity_branch_enabled;
+ static bool sf2000_identity_handoff_used;
+ 
+ static bool sf2000_identity_userspace_enabled(void)
+@@ -116,6 +117,7 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ 		if (sf2000_identity_handoff_used)
+ 			goto normal_user_status;
+ 		sf2000_identity_handoff_used = true;
++		sf2000_identity_branch_enabled = 1;
+ 		status |= ST0_ERL;
+ 		status &= ~ST0_EXL;
+ 		status &= ~KU_MASK;
+-- 
+2.45.0
