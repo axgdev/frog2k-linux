@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000072 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: read stub latch uncached
+
+The stub-page-latch physical log reaches marker 0x51510015, but records a
+zero latch value. The latch is written through CKSEG1 when the copied stub is
+installed, while the late assembly gate reads it through KSEG0. On the physical
+device that cached read can see stale data even though QEMU observes the write.
+
+Read and clear the latch through KSEG1 as well. Keep the branch target itself
+in KSEG0 so the copied stub still executes from the cached identity text path.
+---
+ arch/mips/kernel/entry.S | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -163,7 +163,7 @@
+ 	li	k0, 0x1002
+ 	bne	k1, k0, 1f
+ 	 nop
+-	li	k0, 0x80401068
++	li	k0, 0xa0401068
+ 	lw	k1, 0(k0)
+ 	lui	k0, 0xa13f
+ 	sw	k1, 24(k0)
+@@ -177,7 +177,7 @@
+ 	bne	k1, k0, 1f
+ 	 nop
+ 	li	k1, 0
+-	li	k0, 0x80401068
++	li	k0, 0xa0401068
+ 	sw	k1, 0(k0)
+ 	lui	k0, 0xa13f
+ 	li	k1, 0x51510007
+-- 
+2.45.0
