@@ -57,7 +57,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 raw-diag-block"
+#define LOADER_BUILD_TAG "2026-05-12 getname-identity-0059"
 
 typedef unsigned long long u64;
 
