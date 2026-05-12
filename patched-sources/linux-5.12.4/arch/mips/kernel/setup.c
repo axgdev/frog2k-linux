@@ -85,11 +85,11 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_PIN_R05 5
 #define SF2000_STATUS_L25 (1u << SF2000_PIN_L25)
 #define SF2000_BACKLIGHT_R05 (1u << SF2000_PIN_R05)
-#define SF2000_STAGE_OFF_TICKS 0x00008000u
-#define SF2000_STAGE_ON_TICKS 0x00004000u
-#define SF2000_STAGE_GAP_TICKS 0x00010000u
-#define SF2000_TICK_OFF_TICKS 0x00004000u
-#define SF2000_TICK_GAP_TICKS 0x00008000u
+#define SF2000_STAGE_OFF_TICKS 0x00002000u
+#define SF2000_STAGE_ON_TICKS 0x00001000u
+#define SF2000_STAGE_GAP_TICKS 0x00004000u
+#define SF2000_TICK_OFF_TICKS 0x00001000u
+#define SF2000_TICK_GAP_TICKS 0x00002000u
 #define SF2000_QEMU_DIRECT_DELAY_SHIFT 12
 #define SF2000_GMA_KSEG1 ((volatile unsigned char *)CKSEG1ADDR(0x18808000))
 #define SF2000_GMA_DESC_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x00f00000))
@@ -111,8 +111,12 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_PROGRESS_NAME_LEN 32u
 #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
 #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
-#define SF2000_WDT_BOOT_COUNT 0xffe00000u
-#define SF2000_WDT_BOOT_CONF 100u
+#define SF2000_WDT_BOOT_USEC 30000000u
+#define SF2000_WDT_BOOT_TICKS ((SF2000_WDT_BOOT_USEC * 27u) / 128u)
+#define SF2000_WDT_BOOT_COUNT (0u - SF2000_WDT_BOOT_TICKS)
+#define SF2000_WDT_BOOT_CONF 0x26u
+#define SF2000_WDT_RESTART_COUNT 0xfffff000u
+#define SF2000_WDT_RESTART_CONF 0x67u
 
 static unsigned int sf2000_screen_seq;
 
@@ -157,8 +161,9 @@ static void sf2000_machine_restart(char *command)
 
 	pr_emerg("sf2000: watchdog restart\n");
 	local_irq_disable();
-	*wdt_count = 0xffffff00;
-	*wdt_conf = 100;
+	*wdt_conf = 0;
+	*wdt_count = SF2000_WDT_RESTART_COUNT;
+	*wdt_conf = SF2000_WDT_RESTART_CONF;
 	while (1)
 		;
 }
@@ -352,9 +357,12 @@ static void sf2000_watchdog_arm(const char *name)
 	if (!sf2000_rom_handoff_present())
 		return;
 
+	*SF2000_WDT_CONF_KSEG1 = 0;
 	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
 	*SF2000_WDT_CONF_KSEG1 = SF2000_WDT_BOOT_CONF;
-	pr_info("sf2000: early watchdog armed\n");
+	pr_info("sf2000: early watchdog armed count=%#x conf=%#x timeout_us=%u\n",
+		SF2000_WDT_BOOT_COUNT, SF2000_WDT_BOOT_CONF,
+		SF2000_WDT_BOOT_USEC);
 	sf2000_progress_mark(name, 3, SF2000_WDT_BOOT_COUNT);
 }
 

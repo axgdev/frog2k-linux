@@ -33,8 +33,10 @@ typedef unsigned long uintptr;
 #define MAPPING_REG 0xb8800220u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
-#define WDT_BOOT_COUNT 0xffe00000u
-#define WDT_BOOT_CONF 100u
+#define WDT_BOOT_USEC 30000000u
+#define WDT_BOOT_TICKS ((WDT_BOOT_USEC * 27u) / 128u)
+#define WDT_BOOT_COUNT (0u - WDT_BOOT_TICKS)
+#define WDT_BOOT_CONF 0x26u
 #define BOOTROM_BASE 0xbfc00000u
 #define ROM_F_MOUNT_ADDR 0x8101f044u
 #define ROM_F_OPEN_ADDR 0x8101f0d4u
@@ -43,9 +45,9 @@ typedef unsigned long uintptr;
 #define ROM_CACHE_FLUSH_ADDR 0x810032f4u
 #define BACKLIGHT_R05 (1u << 5)
 #define STATUS_L25 (1u << 25)
-#define BACKLIGHT_OFF_TICKS 0x00008000u
-#define BACKLIGHT_ON_TICKS 0x00004000u
-#define BACKLIGHT_STAGE_GAP_TICKS 0x00010000u
+#define BACKLIGHT_OFF_TICKS 0x00002000u
+#define BACKLIGHT_ON_TICKS 0x00001000u
+#define BACKLIGHT_STAGE_GAP_TICKS 0x00004000u
 #define MAPPING_LINUX_BIT (1u << 24)
 #define QEMU_DIRECT_DELAY_SHIFT 12
 #define LOG_SECTOR_SIZE 512u
@@ -57,7 +59,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 short-wdt-0060"
+#define LOADER_BUILD_TAG "2026-05-12 rom-wdt-0061"
 
 typedef unsigned long long u64;
 
@@ -683,6 +685,17 @@ static void bootlog_wdt_arm(const char *name)
 	if (!rom_handoff_present())
 		return;
 
+	bootlog_init();
+	if (log_ready) {
+		bootlog_puts("wdt arm before count=");
+		bootlog_hex(mmio_read32(WDT0_COUNT));
+		bootlog_puts(" conf=");
+		bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+		bootlog_puts("\n");
+		bootlog_flush();
+	}
+
+	mmio_write8(WDT0_CONF, 0);
 	mmio_write32(WDT0_COUNT, WDT_BOOT_COUNT);
 	mmio_write8(WDT0_CONF, WDT_BOOT_CONF);
 	progress_mark(name, 3, WDT_BOOT_COUNT);
@@ -695,6 +708,8 @@ static void bootlog_wdt_arm(const char *name)
 	bootlog_hex(mmio_read32(WDT0_COUNT));
 	bootlog_puts(" conf=");
 	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+	bootlog_puts(" timeout_us=");
+	bootlog_hex(WDT_BOOT_USEC);
 	bootlog_puts(" name=");
 	bootlog_puts(name);
 	bootlog_puts("\n");
