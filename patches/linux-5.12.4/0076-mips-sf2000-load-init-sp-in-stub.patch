@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000076 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: load init stack in copied stub
+
+The init handoff trampoline proved that the copied stub runs and reaches the
+final branch to /init, but it also showed the live stack register had drifted
+to a kernel address before the trampoline. The saved pt_regs stack and the
+copied init stack were both correct before the assembly return path, so avoid
+depending on the final restored SP value.
+
+Generate the copied init stub after the stack copy is complete and bake the
+KSEG0 copied init stack address into the stub. The existing 0x51510006 and
+0x51510008 retained markers now report the exact stack value used immediately
+before the /init jump.
+---
+ fs/binfmt_elf.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -215,10 +215,12 @@ static int sf2000_elf_copy_identity_segment(struct file *file,
+ 	return 0;
+ }
+ 
+-static void sf2000_elf_copy_identity_stub(unsigned long entry)
++static void sf2000_elf_copy_identity_stub(unsigned long entry,
++		unsigned long sp)
+ {
+ 	u32 *stub = (u32 *)CKSEG1ADDR(SF2000_IDENTITY_STUB_ADDR);
+ 	unsigned long target = CKSEG0ADDR(entry);
++	unsigned long stack = CKSEG0ADDR(sp);
+ 	unsigned long trampoline = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
+ 		64 * sizeof(u32));
+ 
+@@ -240,8 +242,8 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry)
+ 	stub[12] = 0xaf5b0014; /* sw k1,20(k0) */
+ 	stub[13] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
+ 	stub[14] = 0xaf5b0018; /* sw k1,24(k0) */
+-	stub[15] = 0x3c1b8000; /* lui k1,0x8000 */
+-	stub[16] = 0x03bbe825; /* or sp,sp,k1 */
++	stub[15] = 0x3c1d0000 | ((stack >> 16) & 0xffff);
++	stub[16] = 0x37bd0000 | (stack & 0xffff); /* ori sp,sp,lo(stack) */
+ 	stub[17] = 0x3c1b5151; /* lui k1,0x5151 */
+ 	stub[18] = 0x377b0006; /* ori k1,k1,6 */
+ 	stub[19] = 0xaf5b0014; /* sw k1,20(k0) */
+@@ -267,5 +269,6 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry)
+ 		SF2000_IDENTITY_STUB_ADDR + PAGE_SIZE);
+ 	sf2000_elf_value("elf-id-stub", (unsigned int)target);
++	sf2000_elf_value("elf-id-stub-sp", (unsigned int)stack);
+ }
+ 
+ static int sf2000_elf_copy_identity(struct file *file,
+@@ -288,7 +291,6 @@ static int sf2000_elf_copy_identity(struct file *file,
+ 			if (ret)
+ 				return ret;
+ 	}
+-	sf2000_elf_copy_identity_stub(entry);
+ 	sf2000_elf_mark("elf-id-copy-done");
+ 	return 0;
+ }
+@@ -1697,6 +1699,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	sf2000_elf_value("elf-id-stack-final-ret", (unsigned int)retval);
+ 	if (retval)
+ 		goto out;
++	sf2000_elf_copy_identity_stub(elf_entry, bprm->p);
+ 	current->mm->start_stack = bprm->p;
+ 	sf2000_elf_value("elf-before-start-thread", (unsigned int)elf_entry);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+-- 
+2.45.0
