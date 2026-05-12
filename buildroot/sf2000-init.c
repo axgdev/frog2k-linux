@@ -5,8 +5,10 @@ typedef unsigned int size_t;
 #define SYS_open 4005
 #define SYS_close 4006
 #define SYS_execve 4011
+#define SYS_fork 4002
 #define SYS_pause 4029
 #define SYS_dup2 4063
+#define SYS_wait4 4114
 #define SYS_mmap 4090
 #define SYS_nanosleep 4166
 #define SYS_mmap2 4210
@@ -41,11 +43,14 @@ struct timespec {
 	long tv_nsec;
 };
 
-static char *const init_argv[] = { "/sbin/init", 0 };
+static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const heartbeat_argv[] = { "/usr/sbin/sf2000-heartbeat", 0 };
+static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
 	"TERM=linux",
+	"SF2000_PAD_PROFILE=sf2000",
 	0
 };
 
@@ -99,6 +104,25 @@ static long syscall3(long nr, long a0, long a1, long a2)
 	__asm__ volatile (
 		"syscall"
 		: "+r"(r2), "=r"(r7)
+		: "r"(r4), "r"(r5), "r"(r6)
+		: "$3", "$8", "$9", "$10", "$11", "$12", "$13",
+		  "$14", "$15", "$24", "$25", "hi", "lo", "memory");
+	if (r7)
+		return -r2;
+	return r2;
+}
+
+static long syscall4(long nr, long a0, long a1, long a2, long a3)
+{
+	register long r2 __asm__("$2") = nr;
+	register long r4 __asm__("$4") = a0;
+	register long r5 __asm__("$5") = a1;
+	register long r6 __asm__("$6") = a2;
+	register long r7 __asm__("$7") = a3;
+
+	__asm__ volatile (
+		"syscall"
+		: "+r"(r2), "+r"(r7)
 		: "r"(r4), "r"(r5), "r"(r6)
 		: "$3", "$8", "$9", "$10", "$11", "$12", "$13",
 		  "$14", "$15", "$24", "$25", "hi", "lo", "memory");
@@ -316,6 +340,50 @@ static void log_message(const char *message)
 		syscall1(SYS_close, console_fd);
 }
 
+static void log_hex_word(unsigned int value)
+{
+	static const char digits[] = "0123456789abcdef";
+	char buf[11];
+	unsigned int i;
+
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (i = 0; i < 8; i++)
+		buf[2 + i] = digits[(value >> ((7 - i) * 4)) & 0xf];
+	buf[10] = '\n';
+	write_all(1, buf);
+}
+
+static void spawn_service(const char *name, char *const argv[])
+{
+	long pid;
+
+	log_message(name);
+	pid = syscall1(SYS_fork, 0);
+	if (pid < 0) {
+		log_message("sf2000_buildroot: fork failed\n");
+		return;
+	}
+	if (pid == 0) {
+		long ret = syscall3(SYS_execve, (long)argv[0], (long)argv,
+			(long)init_envp);
+
+		log_message("sf2000_buildroot: service exec failed\n");
+		log_message("sf2000_buildroot: service path ");
+		log_message(argv[0]);
+		log_message("\n");
+		log_message("sf2000_buildroot: service exec ret ");
+		log_hex_word((unsigned int)ret);
+		syscall1(SYS_exit, 127);
+	}
+}
+
+static void reap_children(void)
+{
+	while (syscall4(SYS_wait4, -1, 0, 1, 0) > 0)
+		;
+}
+
 void _start(void)
 {
 	setup_stdio();
@@ -330,11 +398,17 @@ void _start(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
-	syscall3(SYS_execve, (long)init_argv[0], (long)init_argv, (long)init_envp);
+	spawn_service("sf2000_buildroot: starting screen\n", screen_argv);
+	sleep_ms(500);
+	spawn_service("sf2000_buildroot: starting heartbeat\n", heartbeat_argv);
+	sleep_ms(500);
+	spawn_service("sf2000_buildroot: starting pad\n", pad_argv);
 
-	log_message("sf2000_buildroot: /sbin/init exec failed\n");
-	for (;;)
+	log_message("sf2000_buildroot: direct init supervisor running\n");
+	for (;;) {
+		reap_children();
 		syscall1(SYS_pause, 0);
+	}
 
 	syscall1(SYS_exit, 1);
 }
