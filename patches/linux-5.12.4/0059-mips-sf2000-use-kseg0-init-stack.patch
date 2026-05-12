@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000059 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: use KSEG0 init stack
+
+The physical SF2000 executes the identity stub, clears ERL, and records
+reserved0=0x51510005 with Status.ERL clear. It still stops before the first
+syscall or assembly exception marker.
+
+The generated /init entry stores callee-saved registers to the stack before it
+executes its first syscall. After ERL is cleared that low stack address needs a
+normal TLB translation, which is still the fragile path on this core. Keep the
+copied stack content, but switch $sp to its KSEG0 alias in the handoff stub so
+the first /init stack stores can complete without depending on a user stack
+TLB entry. Record reserved0=0x51510006 and the new stack value before jumping.
+---
+ fs/binfmt_elf.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -237,11 +237,17 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry)
+ 	stub[12] = 0xaf5b0014; /* sw k1,20(k0) */
+ 	stub[13] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
+ 	stub[14] = 0xaf5b0018; /* sw k1,24(k0) */
+-	stub[15] = 0x3c1b0000 | ((target >> 16) & 0xffff);
+-	stub[16] = 0x377b0000 | (target & 0xffff);
+-	stub[17] = 0xaf5b001c; /* sw k1,28(k0) */
+-	stub[18] = 0x03600008; /* jr k1 */
+-	stub[19] = 0x00000000; /* nop */
++	stub[15] = 0x3c1b8000; /* lui k1,0x8000 */
++	stub[16] = 0x03bbe825; /* or sp,sp,k1 */
++	stub[17] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[18] = 0x377b0006; /* ori k1,k1,6 */
++	stub[19] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[20] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[21] = 0x3c1b0000 | ((target >> 16) & 0xffff);
++	stub[22] = 0x377b0000 | (target & 0xffff);
++	stub[23] = 0xaf5b001c; /* sw k1,28(k0) */
++	stub[24] = 0x03600008; /* jr k1 */
++	stub[25] = 0x00000000; /* nop */
+ 	flush_cache_all();
+ 	flush_icache_all();
+ 	flush_icache_range(SF2000_IDENTITY_STUB_ADDR,
+-- 
+2.45.0
