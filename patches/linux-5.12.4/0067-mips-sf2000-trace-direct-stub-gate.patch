@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000067 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace direct stub gate
+
+The physical direct-stub-epc-branch image still stops with the retained
+post-RESTORE_SOME marker, so the assembly path is reached but one of the
+direct-stub gate checks rejects the branch before the 0x51510007 marker.
+
+Record retained markers for the branch-enable flag, the EBase comparison, and
+the saved EPC comparison. These markers use only k0/k1 because all user
+registers have already been restored on this path.
+---
+ arch/mips/kernel/entry.S | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -142,18 +142,40 @@ restore_partial:		# restore partial frame
+ 	sync
+ 	li	k0, 0x8101f044
+ 	lw	k1, 0(k0)
++	lui	k0, 0xa13f
++	sw	k1, 24(k0)
++	li	k1, 0x51510010
++	sw	k1, 20(k0)
++	lw	k1, 24(k0)
++	sync
+ 	beqz	k1, 1f
+ 	 nop
+ 	li	k0, -1
+ 	beq	k1, k0, 1f
+ 	 nop
++	lui	k0, 0xa13f
++	li	k1, 0x51510011
++	sw	k1, 20(k0)
++	sync
+ 	mfc0	k1, CP0_EBASE
+ 	srl	k1, k1, 12
+ 	andi	k1, k1, 0x1fff
++	lui	k0, 0xa13f
++	sw	k1, 24(k0)
++	li	k1, 0x51510012
++	sw	k1, 20(k0)
++	lw	k1, 24(k0)
++	sync
+ 	li	k0, 0x1002
+ 	bne	k1, k0, 1f
+ 	 nop
+ 	LONG_L	k1, PT_EPC(sp)
++	lui	k0, 0xa13f
++	sw	k1, 24(k0)
++	li	k1, 0x51510013
++	sw	k1, 20(k0)
++	lw	k1, 24(k0)
++	sync
+ 	li	k0, 0x004002f0
+ 	beq	k1, k0, 2f
+ 	 nop
+-- 
+2.45.0
