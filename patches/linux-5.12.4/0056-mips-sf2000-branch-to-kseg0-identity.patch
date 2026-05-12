@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000056 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: branch to kseg0 identity text
+
+The physical device still stops after the direct identity branch marker even
+after reserving the low identity executable range and flushing I-cache. That
+suggests this core is not fetching executable instructions from low kuseg
+while ERL is set in the same way QEMU does.
+
+For the SF2000 identity handoff, keep the saved status in kernel mode and
+branch to the KSEG0 alias of the copied /init entry. This keeps the first
+instruction fetch in a kernel-addressable physical window while retaining the
+same low physical stack and data addresses. Mark this variant as 0x51510003
+in the retained header so the next device log identifies it unambiguously.
+---
+ arch/mips/kernel/entry.S   | 4 +++-
+ arch/mips/kernel/process.c | 1 +
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -145,11 +145,13 @@ restore_partial:		# restore partial frame
+ 	beqz	k1, 1f
+ 	 nop
+ 	lui	k0, 0xa13f
+-	li	k1, 0x51510002
++	li	k1, 0x51510003
+ 	sw	k1, 20(k0)
+ 	LONG_L	k1, PT_R29(sp)
+ 	sw	k1, 24(k0)
+ 	LONG_L	k0, PT_EPC(sp)
++	li	k1, 0x80000000
++	or	k0, k0, k1
+ 	lui	k1, 0xa13f
+ 	sw	k0, 28(k1)
+ 	sync
+diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -114,6 +114,7 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ 	if (sf2000_identity_userspace_enabled()) {
+ 		status |= ST0_ERL;
+ 		status &= ~ST0_EXL;
++		status &= ~KU_MASK;
+ 		/*
+ 		 * Avoid an interrupt between RESTORE_SP and the final eret.
+ 		 */
+-- 
+2.45.0
