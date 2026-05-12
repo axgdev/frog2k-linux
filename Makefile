@@ -38,6 +38,7 @@ BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
 BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
 BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
+BUILDROOT_INIT_ENTRY := buildroot/sf2000-init-entry.S
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
@@ -195,12 +196,13 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) Makefile
+$(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding -fno-builtin \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
 		-fno-pic -G 0 -Wall -Wextra \
-		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
+		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack \
+		-o '$@' '$(BUILDROOT_INIT_ENTRY)' '$(BUILDROOT_INIT_SRC)'
 	'$(STRIP_MIPS)' '$@'
 
 $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile

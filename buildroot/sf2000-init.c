@@ -384,7 +384,7 @@ static void reap_children(void)
 		;
 }
 
-void _start(void)
+void sf2000_init_main(void)
 {
 	setup_stdio();
 	if (early_watchdog_disable() == 0)
