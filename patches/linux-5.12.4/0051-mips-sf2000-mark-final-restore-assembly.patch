@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000051 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: mark final restore assembly
+
+The physical SF2000 reaches sf2000_ret_before_restore() for the first /init
+return but never reaches the syscall, generic exception, or TLB fault markers.
+That leaves an important ambiguity: the CPU may be dying while RESTORE_SOME
+writes the user Status value and reloads saved registers, before the final
+eret is even executed.
+
+Write a tiny no-call marker into the retained progress header immediately
+after RESTORE_SOME. The loader already dumps these reserved words on warm
+boot, so the next physical log can distinguish a RESTORE_SOME failure from a
+final eret/refill failure without perturbing the generated TLB refill handler.
+---
+ arch/mips/kernel/entry.S | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -128,5 +128,20 @@ restore_partial:		# restore partial frame
+ 	RESTORE_SOME
++#ifdef CONFIG_MIPS_SF2000
++	/*
++	 * No calls here: user registers have been restored and CP0_STATUS may
++	 * already contain the final user/ERL value. k0/k1 are not user ABI
++	 * state, and 0xa13f0010 is the retained progress header reserved area.
++	 */
++	lui	k0, 0xa13f
++	li	k1, 0x51510001
++	sw	k1, 16(k0)
++	mfc0	k1, CP0_STATUS
++	sw	k1, 20(k0)
++	MFC0	k1, CP0_EPC
++	sw	k1, 24(k0)
++	sync
++#endif
+ 	RESTORE_SP_AND_RET
+ 	.set	at
+ 
+ work_pending:
+-- 
+2.45.0

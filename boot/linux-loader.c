@@ -54,7 +54,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 asm-exception-faultlog"
+#define LOADER_BUILD_TAG "2026-05-12 final-restore-marker"
 
 typedef unsigned long long u64;
 
@@ -527,6 +527,12 @@ static void bootlog_dump_previous_progress(void)
 	bootlog_hex(progress_log->write_index);
 	bootlog_puts(" wrapped=");
 	bootlog_hex(progress_log->wrapped);
+	bootlog_puts(" reserved0=");
+	bootlog_hex(progress_log->reserved[0]);
+	bootlog_puts(" reserved1=");
+	bootlog_hex(progress_log->reserved[1]);
+	bootlog_puts(" reserved2=");
+	bootlog_hex(progress_log->reserved[2]);
 	bootlog_puts("\n");
 
 	count = progress_log->wrapped ? PROGRESS_ENTRIES : progress_log->write_index;
