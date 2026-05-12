@@ -515,6 +515,7 @@ static void bootlog_dump_previous_progress(void)
 	u32 i;
 	u32 start;
 	u32 count;
+	int header_usable;
 
 	bootlog_puts("progress raw addr=");
 	bootlog_hex(PROGRESS_ADDR);
@@ -536,12 +537,17 @@ static void bootlog_dump_previous_progress(void)
 	bootlog_hex(progress_log->reserved[2]);
 	bootlog_puts("\n");
 
-	if (progress_log->magic != PROGRESS_MAGIC ||
-	    progress_log->version != PROGRESS_VERSION ||
-	    progress_log->seq == 0)
+	header_usable = progress_log->version == PROGRESS_VERSION &&
+		progress_log->seq != 0 &&
+		progress_log->write_index <= PROGRESS_ENTRIES &&
+		progress_log->wrapped <= 1 &&
+		(progress_log->magic == PROGRESS_MAGIC ||
+		 progress_log->magic == 0);
+	if (!header_usable)
 		return;
 
-	bootlog_puts("previous progress addr=");
+	bootlog_puts(progress_log->magic == PROGRESS_MAGIC ?
+		"previous progress addr=" : "previous progress damaged addr=");
 	bootlog_hex(PROGRESS_ADDR);
 	bootlog_puts(" seq=");
 	bootlog_hex(progress_log->seq);

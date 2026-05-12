@@ -26,6 +26,14 @@
 NESTED(handle_sys, PT_SIZE, sp)
 	.set	noat
 	SAVE_SOME
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa13f0000
+	li	k1, 0x51510030
+	sw	k1, 20(k0)
+	sw	v0, 24(k0)
+	mfc0	k1, CP0_EPC
+	sw	k1, 28(k0)
+#endif
 	TRACE_IRQS_ON_RELOAD
 	STI
 	.set	at
@@ -74,8 +82,21 @@ loads_done:
 	.set	pop
 
 #ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa13f0000
+	li	k1, 0x51510031
+	sw	k1, 20(k0)
+	sw	v0, 24(k0)
+	lw	k1, PT_R29(sp)
+	sw	k1, 28(k0)
+	li	k1, 0x51510032
+	sw	k1, 20(k0)
 	move	a0, v0
 	jal	sf2000_syscall_mark
+	nop
+	li	k0, 0xa13f0000
+	li	k1, 0x51510033
+	sw	k1, 20(k0)
+	sw	v0, 24(k0)
 	lw	v0, PT_R2(sp)
 	lw	a0, PT_R4(sp)
 	lw	a1, PT_R5(sp)
@@ -106,7 +127,22 @@ syscall_common:
 
 	beqz	t2, illegal_syscall
 
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa13f0000
+	li	k1, 0x51510034
+	sw	k1, 20(k0)
+	sw	v0, 24(k0)
+	sw	t2, 28(k0)
+#endif
 	jalr	t2			# Do The Real Thing (TM)
+	nop
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa13f0000
+	li	k1, 0x51510035
+	sw	k1, 20(k0)
+	sw	v0, 24(k0)
+	sw	a3, 28(k0)
+#endif
 
 	li	t0, -EMAXERRNO - 1	# error?
 	sltu	t0, t0, v0
