@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000073 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: gate stub branch by pt EPC
+
+The uncached-stub-latch physical log still reaches marker 0x51510015 with a
+zero latch value. The trace also shows the C restore hook has already rewritten
+the saved pt_regs EPC to the copied KSEG0 stub at 0x80401000 immediately before
+the assembly restore path.
+
+Use that saved pt_regs EPC as the one-shot gate instead of carrying a separate
+memory latch. The status and EBase checks still restrict the direct branch to
+the SF2000 ERL init handoff, and the PT_EPC check confirms that the C side
+selected the copied init stub.
+---
+ arch/mips/kernel/entry.S | 11 +++--------
+ fs/binfmt_elf.c          |  5 -----
+ 2 files changed, 3 insertions(+), 13 deletions(-)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -163,20 +163,16 @@
+ 	li	k0, 0x1002
+ 	bne	k1, k0, 1f
+ 	 nop
+-	li	k0, 0xa0401068
+-	lw	k1, 0(k0)
++	LONG_L	k1, PT_EPC(sp)
+ 	lui	k0, 0xa13f
+ 	sw	k1, 24(k0)
+-	li	k1, 0x51510015
++	li	k1, 0x51510016
+ 	sw	k1, 20(k0)
+ 	lw	k1, 24(k0)
+ 	sync
+-	li	k0, 0x5151b002
++	li	k0, 0x80401000
+ 	bne	k1, k0, 1f
+ 	 nop
+-	li	k1, 0
+-	li	k0, 0xa0401068
+-	sw	k1, 0(k0)
+ 	lui	k0, 0xa13f
+ 	li	k1, 0x51510007
+ 	sw	k1, 20(k0)
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -78,9 +78,6 @@
+ #define SF2000_IDENTITY_STACK_PAGE \
+ 	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
+ #define SF2000_IDENTITY_STUB_ADDR 0x00401000UL
+-#define SF2000_IDENTITY_STUB_FLAG_ADDR \
+-	(SF2000_IDENTITY_STUB_ADDR + 26 * sizeof(u32))
+-#define SF2000_IDENTITY_STUB_FLAG_MAGIC 0x5151b002UL
+ 
+ static int sf2000_elf_install_entry_page(struct file *file,
+ 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+@@ -251,8 +248,6 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry)
+ 	stub[23] = 0xaf5b001c; /* sw k1,28(k0) */
+ 	stub[24] = 0x03600008; /* jr k1 */
+ 	stub[25] = 0x00000000; /* nop */
+-	*(u32 *)CKSEG1ADDR(SF2000_IDENTITY_STUB_FLAG_ADDR) =
+-		SF2000_IDENTITY_STUB_FLAG_MAGIC;
+ 	flush_cache_all();
+ 	flush_icache_all();
+ 	flush_icache_range(SF2000_IDENTITY_STUB_ADDR,
+-- 
+2.45.0
