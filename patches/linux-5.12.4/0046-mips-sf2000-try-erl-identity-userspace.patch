@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Tue, 12 May 2026 03:20:00 +0000
+Subject: [PATCH] mips: sf2000: try ERL identity userspace
+
+The physical SF2000 reaches the hand-installed /init entry PTE, prepares a
+random TLB entry, and then stops before the marker immediately after tlbwr.
+Earlier indexed TLB writes were unsafe too, so avoid returning to userspace
+through a freshly written TLB entry for the next diagnostic step.
+
+Move the kernel to 0x80600000 so physical RAM around 0x00400000 is free for
+ET_EXEC user binaries, copy ELF PT_LOAD segments to their identity physical
+addresses, and enter SF2000 userspace with Status.ERL set and a low physical
+stack. This is an SF2000-only bring-up path intended to prove whether the
+kernel can return to /init and service syscalls without relying on CP0 TLB
+writes on the return path.
+---
+ arch/mips/Makefile         |  4 +++
+ arch/mips/kernel/process.c | 19 +++++++++++
+ fs/binfmt_elf.c            | 81 ++++++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 101 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/Makefile b/arch/mips/Makefile
+--- a/arch/mips/Makefile
++++ b/arch/mips/Makefile
+@@ -260,6 +260,10 @@ ifdef CONFIG_PHYSICAL_START
+ load-y					= $(CONFIG_PHYSICAL_START)
+ endif
+ 
++ifdef CONFIG_MIPS_SF2000
++load-y					= 0x80600000
++endif
++
+ entry-y				= $(shell $(objtree)/arch/mips/tools/elf-entry vmlinux)
+ cflags-y			+= -I$(srctree)/arch/mips/include/asm/mach-generic
+ drivers-$(CONFIG_PCI)		+= arch/mips/pci/
+diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -39,6 +39,8 @@
+ #include <asm/reg.h>
+ #include <asm/stacktrace.h>
+ 
++#define SF2000_IDENTITY_USER_STACK 0x013e0000UL
++
+ #ifdef CONFIG_HOTPLUG_CPU
+ void arch_cpu_idle_dead(void)
+ {
+@@ -51,6 +53,15 @@ asmlinkage void ret_from_kernel_thread(void);
+ 
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 		unsigned int value);
++extern int sf2000_rom_handoff_present(void);
++
++static bool sf2000_identity_userspace_enabled(void)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || !sf2000_rom_handoff_present())
++		return false;
++
++	return (read_c0_ebase() & 0x1ffff000) == 0x01002000;
++}
+ 
+ void sf2000_ret_after_kernel_thread(void)
+ {
+@@ -78,6 +89,15 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ 	/* New thread loses kernel privileges. */
+ 	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_CU2|ST0_FR|KU_MASK);
+ 	status |= KU_USER;
++	if (sf2000_identity_userspace_enabled()) {
++		status |= ST0_ERL;
++		sp = SF2000_IDENTITY_USER_STACK;
++		sf2000_progress_mark("mips-start-thread-ebase", 9,
++			read_c0_ebase());
++		sf2000_progress_mark("mips-start-thread-erl-status", 9,
++			status);
++		sf2000_progress_mark("mips-start-thread-erl-sp", 9, sp);
++	}
+ 	regs->cp0_status = status;
+ 	lose_fpu(0);
+ 	clear_thread_flag(TIF_MSA_CTX_LIVE);
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -52,6 +52,7 @@
+ #include <asm/mipsregs.h>
+ #include <asm/param.h>
+ #include <asm/page.h>
++#include <asm/addrspace.h>
+ #include <asm/pgtable-bits.h>
+ 
+ #ifdef CONFIG_MIPS
+@@ -190,8 +191,7 @@ static int sf2000_elf_install_entry_page(struct file *file,
+ 		pte = pte_offset_map(pmd, address);
+ 		sf2000_elf_value("elf-entry-pte", (unsigned int)pte_val(*pte));
+ 		sf2000_elf_mark("elf-entry-before-random-tlb");
+-		sf2000_elf_random_tlb(address, *pte);
+-		sf2000_elf_mark("elf-entry-after-random-tlb");
++		sf2000_elf_mark("elf-entry-skip-random-tlb");
+ 		pte_unmap(pte);
+ 	}
+ out_unlock:
+@@ -200,6 +200,77 @@ out_page:
+ 	put_page(page);
+ 	return ret;
+ }
++
++static int sf2000_elf_copy_identity_segment(struct file *file,
++		const struct elf_phdr *phdr)
++{
++	unsigned long vaddr = phdr->p_vaddr;
++	unsigned long filesz = phdr->p_filesz;
++	unsigned long memsz = phdr->p_memsz;
++	unsigned long done = 0;
++	unsigned char *buf;
++	loff_t pos = phdr->p_offset;
++
++	if (vaddr >= KSEG0 || filesz > memsz)
++		return -EINVAL;
++
++	sf2000_elf_value("elf-id-seg-vaddr", (unsigned int)vaddr);
++	sf2000_elf_value("elf-id-seg-filesz", (unsigned int)filesz);
++	sf2000_elf_value("elf-id-seg-memsz", (unsigned int)memsz);
++	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	while (done < filesz) {
++		unsigned long chunk = min_t(unsigned long, PAGE_SIZE,
++			filesz - done);
++		void *dst = (void *)CKSEG1ADDR(vaddr + done);
++		int ret;
++
++		ret = kernel_read(file, buf, chunk, &pos);
++		sf2000_elf_value("elf-id-read-ret", (unsigned int)ret);
++		if (ret < 0) {
++			kfree(buf);
++			return ret;
++		}
++		if (ret == 0) {
++			kfree(buf);
++			return -EIO;
++		}
++		memcpy(dst, buf, ret);
++		done += ret;
++	}
++	kfree(buf);
++
++	if (memsz > filesz)
++		memset((void *)CKSEG1ADDR(vaddr + filesz), 0, memsz - filesz);
++	flush_cache_all();
++	sf2000_elf_value("elf-id-done", (unsigned int)vaddr);
++	return 0;
++}
++
++static int sf2000_elf_copy_identity(struct file *file,
++		const struct elf_phdr *phdrs, int phnum)
++{
++	int i;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return 0;
++
++	sf2000_elf_mark("elf-id-copy-entry");
++	for (i = 0; i < phnum; i++) {
++		int ret;
++
++		if (phdrs[i].p_type != PT_LOAD)
++			continue;
++		ret = sf2000_elf_copy_identity_segment(file, &phdrs[i]);
++		sf2000_elf_value("elf-id-copy-ret", (unsigned int)ret);
++		if (ret)
++			return ret;
++	}
++	sf2000_elf_mark("elf-id-copy-done");
++	return 0;
++}
+ #else
+ static inline void sf2000_elf_mark(const char *name) { }
+ static inline void sf2000_elf_value(const char *name, unsigned int value) { }
+@@ -208,6 +279,11 @@ static inline int sf2000_elf_install_entry_page(struct file *file,
+ {
+ 	return 0;
+ }
++static inline int sf2000_elf_copy_identity(struct file *file,
++		const struct elf_phdr *phdrs, int phnum)
++{
++	return 0;
++}
+ #endif
+ 
+ #ifndef ELF_COMPAT
+@@ -1489,6 +1565,11 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	sf2000_elf_value("elf-entry-install-ret", (unsigned int)retval);
+ 	if (retval)
+ 		goto out;
++	retval = sf2000_elf_copy_identity(bprm->file, elf_phdata,
++		elf_ex->e_phnum);
++	sf2000_elf_value("elf-id-copy-final-ret", (unsigned int)retval);
++	if (retval)
++		goto out;
+ 	sf2000_elf_value("elf-before-start-thread", (unsigned int)elf_entry);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+ 	sf2000_elf_value("elf-after-start-thread", (unsigned int)bprm->p);
+-- 
+2.50.1
