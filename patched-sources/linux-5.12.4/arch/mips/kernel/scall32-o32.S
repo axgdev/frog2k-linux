@@ -52,6 +52,14 @@ NESTED(handle_sys, PT_SIZE, sp)
 	 */
 	lw	t0, PT_R29(sp)		# get old user stack pointer
 
+#ifdef CONFIG_MIPS_SF2000
+	li	t5, 0xe0000000
+	and	t4, t0, t5
+	li	t5, 0xa0000000
+	beq	t4, t5, sf2000_kseg_stack_args
+	nop
+#endif
+
 	/*
 	 * We intentionally keep the kernel stack a little below the top of
 	 * userspace so we don't have to do a slower byte accurate check here.
@@ -74,6 +82,17 @@ load_a5: user_lw(t6, 20(t0))		# argument #6 from usp
 load_a6: user_lw(t7, 24(t0))		# argument #7 from usp
 load_a7: user_lw(t8, 28(t0))		# argument #8 from usp
 loads_done:
+
+#ifdef CONFIG_MIPS_SF2000
+	b	sf2000_stack_args_ready
+	nop
+sf2000_kseg_stack_args:
+	move	t5, zero
+	move	t6, zero
+	move	t7, zero
+	move	t8, zero
+sf2000_stack_args_ready:
+#endif
 
 	sw	t5, 16(sp)		# argument #5 to ksp
 	sw	t6, 20(sp)		# argument #6 to ksp
