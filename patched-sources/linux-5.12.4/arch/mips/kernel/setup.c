@@ -101,9 +101,13 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_GMA_LINEBUF 0x3b8
 #define SF2000_GMA_DESC_PHYS 0x00f00000u
 #define SF2000_GMA_FB_PHYS 0x00f10000u
+#define SF2000_GMA_RESERVE_PHYS 0x00f00000u
+#define SF2000_GMA_RESERVE_SIZE 0x00040000u
 #define SF2000_SCREEN_W 320
 #define SF2000_SCREEN_H 240
 #define SF2000_SCREEN_PITCH (SF2000_SCREEN_W * 2)
+#define SF2000_PROGRESS_PHYS 0x013f0000u
+#define SF2000_PROGRESS_RESERVE_SIZE 0x00020000u
 #define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
 #define SF2000_PROGRESS_MAGIC 0x52504653u
 #define SF2000_PROGRESS_VERSION 1u
@@ -328,6 +332,18 @@ static void sf2000_screen_mark(unsigned int kind, unsigned int detail)
 	sf2000_screen_digit(252, 154, detail % 10, 0xffff, dim, 4);
 
 	sf2000_screen_present();
+}
+
+static void __init sf2000_reserve_diag_mem(void)
+{
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+		return;
+
+	memblock_reserve(SF2000_GMA_RESERVE_PHYS, SF2000_GMA_RESERVE_SIZE);
+	memblock_reserve(SF2000_PROGRESS_PHYS, SF2000_PROGRESS_RESERVE_SIZE);
+	pr_info("sf2000: reserved diag memory gma=%#x+%#x progress=%#x+%#x\n",
+		SF2000_GMA_RESERVE_PHYS, SF2000_GMA_RESERVE_SIZE,
+		SF2000_PROGRESS_PHYS, SF2000_PROGRESS_RESERVE_SIZE);
 }
 
 static void sf2000_progress_copy_name(volatile char *dst, const char *src)
@@ -1094,6 +1110,7 @@ static void __init arch_mem_init(char **cmdline_p)
 
 	early_init_fdt_reserve_self();
 	early_init_fdt_scan_reserved_mem();
+	sf2000_reserve_diag_mem();
 
 #ifndef CONFIG_NUMA
 	memblock_set_node(0, PHYS_ADDR_MAX, &memblock.memory, 0);

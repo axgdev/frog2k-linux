@@ -48,6 +48,15 @@
 extern void sf2000_progress_mark(const char *name, unsigned int kind,
 		unsigned int value);
 
+static void sf2000_namei_raw_mark(unsigned int marker, unsigned int value)
+{
+	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
+
+	diag[8] = marker;
+	diag[9] = value;
+	diag[10] = (unsigned int)__builtin_return_address(0);
+}
+
 static int sf2000_getname_identity(char *dst, const char __user *filename,
 		int max)
 {
@@ -58,6 +67,7 @@ static int sf2000_getname_identity(char *dst, const char __user *filename,
 	if (addr < 0x00400000UL || addr >= 0x01000000UL)
 		return -EAGAIN;
 
+	sf2000_namei_raw_mark(0x51510200, (unsigned int)addr);
 	sf2000_progress_mark("getname-id-entry", 13, (unsigned int)addr);
 	src = (const volatile unsigned char *)((addr & 0x1fffffffUL) |
 		0xa0000000UL);
@@ -66,6 +76,7 @@ static int sf2000_getname_identity(char *dst, const char __user *filename,
 
 		dst[len] = c;
 		if (!c) {
+			sf2000_namei_raw_mark(0x51510201, (unsigned int)len);
 			sf2000_progress_mark("getname-id-done", 13,
 					(unsigned int)len);
 			return len;
@@ -73,9 +84,13 @@ static int sf2000_getname_identity(char *dst, const char __user *filename,
 	}
 
 	sf2000_progress_mark("getname-id-too-long", 13, (unsigned int)max);
+	sf2000_namei_raw_mark(0x51510202, (unsigned int)max);
 	return max;
 }
 #else
+static inline void sf2000_namei_raw_mark(unsigned int marker,
+		unsigned int value) { }
+
 static int sf2000_getname_identity(char *dst, const char __user *filename,
 		int max)
 {
@@ -189,11 +204,13 @@ getname_flags(const char __user *filename, int flags, int *empty)
 	len = sf2000_getname_identity(kname, filename, EMBEDDED_NAME_MAX);
 	if (len == -EAGAIN) {
 #ifdef CONFIG_MIPS_SF2000
+		sf2000_namei_raw_mark(0x51510203, (unsigned int)filename);
 		sf2000_progress_mark("getname-before-usercopy", 13,
 				(unsigned int)filename);
 #endif
 		len = strncpy_from_user(kname, filename, EMBEDDED_NAME_MAX);
 #ifdef CONFIG_MIPS_SF2000
+		sf2000_namei_raw_mark(0x51510204, (unsigned int)len);
 		sf2000_progress_mark("getname-after-usercopy", 13,
 				(unsigned int)len);
 #endif

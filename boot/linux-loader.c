@@ -60,7 +60,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-12 no-rom-write-0063"
+#define LOADER_BUILD_TAG "2026-05-12 reserve-diag-0064"
 
 typedef unsigned long long u64;
 
@@ -551,7 +551,7 @@ static void bootlog_dump_raw_diag(void)
 
 	bootlog_puts("raw diag addr=");
 	bootlog_hex(RAW_DIAG_ADDR);
-	for (i = 0; i < 12; i++) {
+	for (i = 0; i < 16; i++) {
 		bootlog_puts(" w");
 		bootlog_hex(i);
 		bootlog_puts("=");
