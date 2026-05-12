@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: shorten boot watchdog
+
+The getname-identity build did not visibly watchdog-reboot on the physical
+device, so manual power cycling lost the retained progress buffer.  The boot
+watchdog count was far from overflow, while the known ROM reboot path uses a
+near-overflow count.
+
+Use a shorter physical-ROM boot watchdog count, but do not arm it in direct
+blank-ROM QEMU runs.  Progress logging keeps petting the same count on real
+hardware, so forward progress should keep booting while a hard hang should
+reset quickly enough to retain and dump the progress log on the next loader
+entry.
+---
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -111,7 +111,7 @@
+ #define SF2000_PROGRESS_NAME_LEN 32u
+ #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
+ #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
+-#define SF2000_WDT_BOOT_COUNT 0xff000000u
++#define SF2000_WDT_BOOT_COUNT 0xffe00000u
+ #define SF2000_WDT_BOOT_CONF 100u
+ 
+ static unsigned int sf2000_screen_seq;
+@@ -339,6 +339,8 @@
+ {
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
++	if (!sf2000_rom_handoff_present())
++		return;
+ 
+ 	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
+ }
+@@ -347,6 +349,8 @@
+ {
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
++	if (!sf2000_rom_handoff_present())
++		return;
+ 
+ 	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
+ 	*SF2000_WDT_CONF_KSEG1 = SF2000_WDT_BOOT_CONF;
+-- 
+2.45.0

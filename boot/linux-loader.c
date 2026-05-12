@@ -33,7 +33,7 @@ typedef unsigned long uintptr;
 #define MAPPING_REG 0xb8800220u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
-#define WDT_BOOT_COUNT 0xff000000u
+#define WDT_BOOT_COUNT 0xffe00000u
 #define WDT_BOOT_CONF 100u
 #define BOOTROM_BASE 0xbfc00000u
 #define ROM_F_MOUNT_ADDR 0x8101f044u
@@ -57,7 +57,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 getname-identity-0059"
+#define LOADER_BUILD_TAG "2026-05-12 short-wdt-0060"
 
 typedef unsigned long long u64;
 
@@ -680,6 +680,9 @@ static void bootlog_wdt_state(void)
 
 static void bootlog_wdt_arm(const char *name)
 {
+	if (!rom_handoff_present())
+		return;
+
 	mmio_write32(WDT0_COUNT, WDT_BOOT_COUNT);
 	mmio_write8(WDT0_CONF, WDT_BOOT_CONF);
 	progress_mark(name, 3, WDT_BOOT_COUNT);

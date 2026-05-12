@@ -111,7 +111,7 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_PROGRESS_NAME_LEN 32u
 #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
 #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
-#define SF2000_WDT_BOOT_COUNT 0xff000000u
+#define SF2000_WDT_BOOT_COUNT 0xffe00000u
 #define SF2000_WDT_BOOT_CONF 100u
 
 static unsigned int sf2000_screen_seq;
@@ -339,6 +339,8 @@ static void sf2000_watchdog_pet(void)
 {
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
+	if (!sf2000_rom_handoff_present())
+		return;
 
 	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
 }
@@ -346,6 +348,8 @@ static void sf2000_watchdog_pet(void)
 static void sf2000_watchdog_arm(const char *name)
 {
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+		return;
+	if (!sf2000_rom_handoff_present())
 		return;
 
 	*SF2000_WDT_COUNT_KSEG1 = SF2000_WDT_BOOT_COUNT;
