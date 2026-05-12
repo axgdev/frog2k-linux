@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000075 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: force init stack and add handoff trampoline
+
+The ErrorEPC-gated physical log reached marker 0x51510006, proving the copied
+stub executed and branched toward /init. The same marker reported SP as
+0x80ff5e90 even though the copied init stack was prepared at 0x013df6f0, so
+the final return frame is not carrying the expected R29 value.
+
+Remember the copied init stack globally when binfmt prepares it, log both the
+restore-frame stack and the copied stack from the return hook, and force R29 to
+the copied stack for the first init handoff.
+
+Also route the stub through a tiny trampoline in the copied stub page. The
+trampoline records marker 0x51510008 with the final SP and target immediately
+before jumping to the copied /init entry. This makes the next physical run
+distinguish a bad restore stack from a fault in the first userspace
+instructions.
+---
+ arch/mips/kernel/process.c |  9 +++++++++
+ fs/binfmt_elf.c            | 26 +++++++++++++++++++++++++-
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -54,6 +54,7 @@
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 		unsigned int value);
+ extern int sf2000_rom_handoff_present(void);
+ int sf2000_identity_branch_enabled;
++unsigned long sf2000_identity_init_sp;
+ static bool sf2000_identity_handoff_used;
+ 
+ #define SF2000_INIT_ENTRY 0x004002f0UL
+@@ -87,6 +88,8 @@
+ 		return;
+ 	sf2000_progress_mark("ret-restore-status", 9, regs->cp0_status);
+ 	sf2000_progress_mark("ret-restore-epc", 9, regs->cp0_epc);
++	sf2000_progress_mark("ret-restore-sp", 9, regs->regs[29]);
++	sf2000_progress_mark("ret-restore-init-sp", 9, sf2000_identity_init_sp);
+ 	if (regs->cp0_status & ST0_EXL) {
+ 		regs->cp0_status &= ~ST0_EXL;
+ 		sf2000_progress_mark("ret-restore-status-fixed", 9,
+@@ -100,6 +103,12 @@
+ 			sf2000_progress_mark("ret-restore-stub-epc", 9,
+ 				SF2000_IDENTITY_STUB_KSEG0);
+ 			regs->cp0_epc = SF2000_IDENTITY_STUB_KSEG0;
++			if (sf2000_identity_init_sp) {
++				regs->regs[29] = sf2000_identity_init_sp;
++				sf2000_progress_mark("ret-restore-sp-fixed", 9,
++					regs->regs[29]);
++			}
+ 			sf2000_progress_mark("ret-restore-stub-errorepc", 9,
+ 				SF2000_IDENTITY_STUB_KSEG0);
+ 			write_c0_errorepc(SF2000_IDENTITY_STUB_KSEG0);
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -59,6 +59,7 @@
+ #ifdef CONFIG_MIPS
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 		unsigned int value);
++extern unsigned long sf2000_identity_init_sp;
+ 
+ static void sf2000_elf_mark(const char *name)
+ {
+@@ -218,6 +219,8 @@
+ {
+ 	u32 *stub = (u32 *)CKSEG1ADDR(SF2000_IDENTITY_STUB_ADDR);
+ 	unsigned long target = CKSEG0ADDR(entry);
++	unsigned long trampoline = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
++		64 * sizeof(u32));
+ 
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
+@@ -243,11 +246,22 @@
+ 	stub[18] = 0x377b0006; /* ori k1,k1,6 */
+ 	stub[19] = 0xaf5b0014; /* sw k1,20(k0) */
+ 	stub[20] = 0xaf5d0018; /* sw sp,24(k0) */
+-	stub[21] = 0x3c1b0000 | ((target >> 16) & 0xffff);
+-	stub[22] = 0x377b0000 | (target & 0xffff);
++	stub[21] = 0x3c1b0000 | ((trampoline >> 16) & 0xffff);
++	stub[22] = 0x377b0000 | (trampoline & 0xffff);
+ 	stub[23] = 0xaf5b001c; /* sw k1,28(k0) */
+ 	stub[24] = 0x03600008; /* jr k1 */
+ 	stub[25] = 0x00000000; /* nop */
++	stub[64] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[65] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[66] = 0x377b0008; /* ori k1,k1,8 */
++	stub[67] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[68] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[69] = 0x3c1b0000 | ((target >> 16) & 0xffff);
++	stub[70] = 0x377b0000 | (target & 0xffff);
++	stub[71] = 0xaf5b001c; /* sw k1,28(k0) */
++	stub[72] = 0x0000000f; /* sync */
++	stub[73] = 0x03600008; /* jr k1 */
++	stub[74] = 0x00000000; /* nop */
+ 	flush_cache_all();
+ 	flush_icache_all();
+ 	flush_icache_range(SF2000_IDENTITY_STUB_ADDR,
+@@ -371,6 +392,9 @@
+ 	if (ret)
+ 		return ret;
+ 	*sp = low_sp;
++	sf2000_identity_init_sp = low_sp;
++	sf2000_elf_value("elf-id-stack-global",
++		(unsigned int)sf2000_identity_init_sp);
+ 	sf2000_elf_value("elf-id-stack-done", (unsigned int)*sp);
+ 	return 0;
+ }
+-- 
+2.45.0
