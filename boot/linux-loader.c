@@ -59,7 +59,8 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 rom-wdt-0061"
+#define PROGRESS_LIVE_MAGIC 0x4c495645u
+#define LOADER_BUILD_TAG "2026-05-12 live-log-0062"
 
 typedef unsigned long long u64;
 
@@ -459,6 +460,36 @@ static void progress_reset(void)
 		progress_log->entries[i].name_ptr = 0;
 		progress_log->entries[i].name[0] = '\0';
 	}
+}
+
+static void progress_set_live_log_sector(void)
+{
+	u32 sector_index;
+	u32 lba = 0;
+
+	if (!log_ready || log_limit < LOG_SECTOR_SIZE * 2u)
+		return;
+
+	sector_index = log_limit / LOG_SECTOR_SIZE;
+	if (sector_index == 0)
+		return;
+	sector_index--;
+
+	if (log_file_lba(sector_index, &lba) != 0)
+		return;
+
+	progress_log->reserved[0] = PROGRESS_LIVE_MAGIC;
+	progress_log->reserved[1] = log_fs.pdrv;
+	progress_log->reserved[2] = lba;
+
+	bootlog_puts("live progress sector index=");
+	bootlog_hex(sector_index);
+	bootlog_puts(" pdrv=");
+	bootlog_hex(log_fs.pdrv);
+	bootlog_puts(" lba=");
+	bootlog_hex(lba);
+	bootlog_puts("\n");
+	bootlog_flush();
 }
 
 static void progress_mark(const char *name, u32 kind, u32 value)
@@ -1182,6 +1213,7 @@ void linux_loader_main(void)
 	disable_interrupts();
 	bootlog_init();
 	progress_reset();
+	progress_set_live_log_sector();
 	bootlog_wdt_state();
 	backlight_stage_mark("loader-entry", 1);
 	bootlog_stage("loader-entry", 1);
