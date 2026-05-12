@@ -79,14 +79,6 @@ static void sf2000_elf_value(const char *name, unsigned int value)
 #define SF2000_IDENTITY_STACK_PAGE \
 	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
 #define SF2000_IDENTITY_STUB_ADDR 0x00401000UL
-#define SF2000_ROM_F_MOUNT_KSEG0 ((volatile unsigned int *)0x8101f044)
-
-static int sf2000_elf_rom_handoff_present(void)
-{
-	unsigned int word = *SF2000_ROM_F_MOUNT_KSEG0;
-
-	return word != 0 && word != 0xffffffffu;
-}
 
 static int sf2000_elf_install_entry_page(struct file *file,
 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
@@ -229,10 +221,9 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	u32 *stub = (u32 *)CKSEG1ADDR(SF2000_IDENTITY_STUB_ADDR);
 	u32 *entry_text = (u32 *)CKSEG1ADDR(entry);
 	u32 *syscall_text = (u32 *)CKSEG1ADDR(entry - 0x1fc);
-	unsigned long target = CKSEG0ADDR(entry);
+	unsigned long target = entry;
 	unsigned long syscall_target = CKSEG0ADDR(entry - 0x1fc);
-	unsigned long stack = sf2000_elf_rom_handoff_present() ?
-		CKSEG1ADDR(sp) : CKSEG0ADDR(sp);
+	unsigned long stack = sp;
 	unsigned long probe = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
 		96 * sizeof(u32));
 	unsigned long syscall_probe = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
@@ -278,8 +269,18 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[70] = 0x377b0000 | (target & 0xffff);
 	stub[71] = 0xaf5b001c; /* sw k1,28(k0) */
 	stub[72] = 0x0000000f; /* sync */
-	stub[73] = 0x03600008; /* jr k1 */
+	stub[73] = 0x409b7000; /* mtc0 k1,CP0_EPC */
 	stub[74] = 0x00000000; /* nop */
+	stub[75] = 0x00000000; /* nop */
+	stub[76] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
+	stub[77] = 0x377b001f; /* ori k1,k1,ST0_IE|EXL|ERL|KSU */
+	stub[78] = 0x3b7b001f; /* xori k1,k1,ST0_IE|EXL|ERL|KSU */
+	stub[79] = 0x377b0012; /* ori k1,k1,ST0_EXL|KSU_USER */
+	stub[80] = 0x409b6000; /* mtc0 k1,CP0_STATUS */
+	stub[81] = 0x00000000; /* nop */
+	stub[82] = 0x00000000; /* nop */
+	stub[83] = 0x42000018; /* eret */
+	stub[84] = 0x00000000; /* nop */
 	stub[96] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[97] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[98] = 0x377b0009; /* ori k1,k1,9 */
@@ -371,14 +372,10 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[279] = 0x377b0000 | ((syscall_target + 20) & 0xffff);
 	stub[280] = 0x03600008; /* jr k1 */
 	stub[281] = 0x00000000; /* nop */
-	entry_text[0] = 0x3c1b0000 | ((probe >> 16) & 0xffff);
-	entry_text[1] = 0x377b0000 | (probe & 0xffff);
-	entry_text[2] = 0x03600008; /* jr k1 */
-	entry_text[3] = 0x00000000; /* nop */
-	syscall_text[0] = 0x3c1b0000 | ((syscall_probe >> 16) & 0xffff);
-	syscall_text[1] = 0x377b0000 | (syscall_probe & 0xffff);
-	syscall_text[2] = 0x03600008; /* jr k1 */
-	syscall_text[3] = 0x00000000; /* nop */
+	sf2000_elf_value("elf-id-entry-word0", entry_text[0]);
+	sf2000_elf_value("elf-id-entry-word1", entry_text[1]);
+	sf2000_elf_value("elf-id-syscall-word0", syscall_text[0]);
+	sf2000_elf_value("elf-id-syscall-word1", syscall_text[1]);
 	flush_cache_all();
 	flush_icache_all();
 	flush_icache_range(SF2000_IDENTITY_STUB_ADDR,
@@ -508,7 +505,7 @@ out_unlock:
 	sf2000_elf_value("elf-id-stack-remap", (unsigned int)ret);
 	if (ret)
 		return ret;
-	*sp = sf2000_elf_rom_handoff_present() ? CKSEG1ADDR(low_sp) : low_sp;
+	*sp = low_sp;
 	sf2000_identity_init_sp = *sp;
 	sf2000_elf_value("elf-id-stack-global",
 		(unsigned int)sf2000_identity_init_sp);
