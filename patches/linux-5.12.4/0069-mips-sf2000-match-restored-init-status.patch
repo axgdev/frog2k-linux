@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000069 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: match restored init status
+
+The status-gated physical image reaches the post-RESTORE_SOME status marker,
+but the retained value is 0x8002 after RESTORE_SOME has rewritten CP0_STATUS,
+not the pre-restore 0x8004 recorded by the C return path.
+
+Match the status value observed at the assembly decision point. Other kernel
+returns in the same trace use 0x8003 after the same mask, so this keeps the
+direct stub branch limited to the final /init return.
+---
+ arch/mips/kernel/entry.S | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -151,7 +151,7 @@ restore_partial:		# restore partial frame
+ 	sw	k1, 20(k0)
+ 	lw	k1, 24(k0)
+ 	sync
+-	li	k0, 0x8004
++	li	k0, 0x8002
+ 	bne	k1, k0, 1f
+ 	 nop
+ 	mfc0	k1, CP0_EBASE
+-- 
+2.45.0
