@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000081 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: split copied init prologue probe
+
+The direct-syscall-probe image stops at marker 0x51510009, before the copied
+/init prologue reaches marker 0x5151000a. Split the replayed prologue into
+smaller retained checkpoints so the next hardware run identifies whether the
+stack adjustment, argument setup, or first stack stores are failing.
+
+Move the direct syscall probe farther down the stub page to leave room for the
+expanded entry probe. The final path is unchanged: after the split prologue
+reaches marker 0x5151000a, it records 0x5151000e and jumps directly to the
+syscall probe.
+---
+ fs/binfmt_elf.c | 93 +++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 70 insertions(+), 23 deletions(-)
+
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -227,10 +227,9 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
+ 	unsigned long probe = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
+ 		96 * sizeof(u32));
+ 	unsigned long syscall_probe = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
+-		160 * sizeof(u32));
++		256 * sizeof(u32));
+ 	unsigned long trampoline = CKSEG0ADDR(SF2000_IDENTITY_STUB_ADDR +
+ 		64 * sizeof(u32));
+-	unsigned int i;
+ 
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
+@@ -279,55 +278,83 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
+ 	stub[100] = 0xaf5d0018; /* sw sp,24(k0) */
+ 	stub[101] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
+ 	stub[102] = 0xaf5b001c; /* sw k1,28(k0) */
+-	for (i = 0; i < 11; i++)
+-		stub[103 + i] = entry_text[i];
+-	stub[114] = 0x3c1aa13f; /* lui k0,0xa13f */
+-	stub[115] = 0x3c1b5151; /* lui k1,0x5151 */
+-	stub[116] = 0x377b000a; /* ori k1,k1,10 */
+-	stub[117] = 0xaf5b0014; /* sw k1,20(k0) */
+-	stub[118] = 0xaf5d0018; /* sw sp,24(k0) */
+-	stub[119] = 0xaf45001c; /* sw a1,28(k0) */
+-	stub[120] = 0x0000000f; /* sync */
+-	stub[121] = 0x3c1f0000 | (((target + 52) >> 16) & 0xffff);
+-	stub[122] = 0x37ff0000 | ((target + 52) & 0xffff);
+-	stub[123] = 0xafb00010; /* sw s0,16(sp) */
+-	stub[124] = 0x3c1aa13f; /* lui k0,0xa13f */
+-	stub[125] = 0x3c1b5151; /* lui k1,0x5151 */
+-	stub[126] = 0x377b000e; /* ori k1,k1,14 */
+-	stub[127] = 0xaf5b0014; /* sw k1,20(k0) */
+-	stub[128] = 0xaf5f0018; /* sw ra,24(k0) */
+-	stub[129] = 0xaf45001c; /* sw a1,28(k0) */
+-	stub[130] = 0x0000000f; /* sync */
+-	stub[131] = 0x3c1b0000 | ((syscall_probe >> 16) & 0xffff);
+-	stub[132] = 0x377b0000 | (syscall_probe & 0xffff);
+-	stub[133] = 0x03600008; /* jr k1 */
+-	stub[134] = 0x00000000; /* nop */
+-	stub[160] = 0x3c1aa13f; /* lui k0,0xa13f */
+-	stub[161] = 0x3c1b5151; /* lui k1,0x5151 */
+-	stub[162] = 0x377b000b; /* ori k1,k1,11 */
+-	stub[163] = 0xaf5b0014; /* sw k1,20(k0) */
+-	stub[164] = 0xaf5d0018; /* sw sp,24(k0) */
+-	stub[165] = 0xaf5f001c; /* sw ra,28(k0) */
+-	stub[166] = 0x00801025; /* move v0,a0 */
+-	stub[167] = 0x00a02025; /* move a0,a1 */
+-	stub[168] = 0x00c02825; /* move a1,a2 */
+-	stub[169] = 0x00e03025; /* move a2,a3 */
+-	stub[170] = 0x3c1b5151; /* lui k1,0x5151 */
+-	stub[171] = 0x377b000c; /* ori k1,k1,12 */
+-	stub[172] = 0xaf5b0014; /* sw k1,20(k0) */
+-	stub[173] = 0xaf420018; /* sw v0,24(k0) */
+-	stub[174] = 0xaf44001c; /* sw a0,28(k0) */
+-	stub[175] = 0x0000000c; /* syscall */
+-	stub[176] = 0x3c1aa13f; /* lui k0,0xa13f */
+-	stub[177] = 0x3c1b5151; /* lui k1,0x5151 */
+-	stub[178] = 0x377b000d; /* ori k1,k1,13 */
+-	stub[179] = 0xaf5b0014; /* sw k1,20(k0) */
+-	stub[180] = 0xaf420018; /* sw v0,24(k0) */
+-	stub[181] = 0xaf47001c; /* sw a3,28(k0) */
+-	stub[182] = 0x3c1b0000 | (((syscall_target + 20) >> 16) & 0xffff);
+-	stub[183] = 0x377b0000 | ((syscall_target + 20) & 0xffff);
+-	stub[184] = 0x03600008; /* jr k1 */
+-	stub[185] = 0x00000000; /* nop */
++	stub[103] = entry_text[0]; /* addiu sp,sp,-40 */
++	stub[104] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[105] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[106] = 0x377b0020; /* ori k1,k1,0x20 */
++	stub[107] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[108] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[109] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
++	stub[110] = 0xaf5b001c; /* sw k1,28(k0) */
++	stub[111] = entry_text[1]; /* lui a1,0x40 */
++	stub[112] = entry_text[2]; /* move a3,zero */
++	stub[113] = entry_text[3]; /* move a2,zero */
++	stub[114] = entry_text[4]; /* addiu a1,a1,1544 */
++	stub[115] = entry_text[5]; /* li a0,4005 */
++	stub[116] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[117] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[118] = 0x377b0021; /* ori k1,k1,0x21 */
++	stub[119] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[120] = 0xaf450018; /* sw a1,24(k0) */
++	stub[121] = 0xaf44001c; /* sw a0,28(k0) */
++	stub[122] = entry_text[6]; /* sw ra,36(sp) */
++	stub[123] = entry_text[7]; /* sw s4,32(sp) */
++	stub[124] = entry_text[8]; /* sw s3,28(sp) */
++	stub[125] = entry_text[9]; /* sw s2,24(sp) */
++	stub[126] = entry_text[10]; /* sw s1,20(sp) */
++	stub[127] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[128] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[129] = 0x377b0022; /* ori k1,k1,0x22 */
++	stub[130] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[131] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[132] = 0xaf5f001c; /* sw ra,28(k0) */
++	stub[133] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[134] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[135] = 0x377b000a; /* ori k1,k1,10 */
++	stub[136] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[137] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[138] = 0xaf45001c; /* sw a1,28(k0) */
++	stub[139] = 0x0000000f; /* sync */
++	stub[140] = 0x3c1f0000 | (((target + 52) >> 16) & 0xffff);
++	stub[141] = 0x37ff0000 | ((target + 52) & 0xffff);
++	stub[142] = 0xafb00010; /* sw s0,16(sp) */
++	stub[143] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[144] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[145] = 0x377b000e; /* ori k1,k1,14 */
++	stub[146] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[147] = 0xaf5f0018; /* sw ra,24(k0) */
++	stub[148] = 0xaf45001c; /* sw a1,28(k0) */
++	stub[149] = 0x0000000f; /* sync */
++	stub[150] = 0x3c1b0000 | ((syscall_probe >> 16) & 0xffff);
++	stub[151] = 0x377b0000 | (syscall_probe & 0xffff);
++	stub[152] = 0x03600008; /* jr k1 */
++	stub[153] = 0x00000000; /* nop */
++	stub[256] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[257] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[258] = 0x377b000b; /* ori k1,k1,11 */
++	stub[259] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[260] = 0xaf5d0018; /* sw sp,24(k0) */
++	stub[261] = 0xaf5f001c; /* sw ra,28(k0) */
++	stub[262] = 0x00801025; /* move v0,a0 */
++	stub[263] = 0x00a02025; /* move a0,a1 */
++	stub[264] = 0x00c02825; /* move a1,a2 */
++	stub[265] = 0x00e03025; /* move a2,a3 */
++	stub[266] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[267] = 0x377b000c; /* ori k1,k1,12 */
++	stub[268] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[269] = 0xaf420018; /* sw v0,24(k0) */
++	stub[270] = 0xaf44001c; /* sw a0,28(k0) */
++	stub[271] = 0x0000000c; /* syscall */
++	stub[272] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[273] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[274] = 0x377b000d; /* ori k1,k1,13 */
++	stub[275] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[276] = 0xaf420018; /* sw v0,24(k0) */
++	stub[277] = 0xaf47001c; /* sw a3,28(k0) */
++	stub[278] = 0x3c1b0000 | (((syscall_target + 20) >> 16) & 0xffff);
++	stub[279] = 0x377b0000 | ((syscall_target + 20) & 0xffff);
++	stub[280] = 0x03600008; /* jr k1 */
++	stub[281] = 0x00000000; /* nop */
+ 	entry_text[0] = 0x3c1b0000 | ((probe >> 16) & 0xffff);
+ 	entry_text[1] = 0x377b0000 | (probe & 0xffff);
+ 	entry_text[2] = 0x03600008; /* jr k1 */
+-- 
+2.45.0
