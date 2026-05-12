@@ -1,0 +1,136 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Tue, 12 May 2026 06:00:00 +0000
+Subject: [PATCH] mips: sf2000: use normal stack and log early faults
+
+The physical SF2000 now reaches the final ERL return with a clean status
+value, but still does not reach the first syscall from /init. After eret
+clears ERL, normal user translation is active again; forcing the process
+stack to a low physical address leaves the first stack touch unmapped.
+
+Keep the normal exec-created user stack, and add progress markers to the
+C-level page-fault and common trap paths. If the next physical log still stops
+before these markers, the failure is below the C handlers, likely in the TLB
+refill/vector path.
+---
+ arch/mips/kernel/process.c |  1 -
+ arch/mips/kernel/traps.c   | 25 +++++++++++++++++++++++++
+ arch/mips/mm/fault.c       | 17 +++++++++++++++++
+ 3 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -114,7 +114,6 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+ 	if (sf2000_identity_userspace_enabled()) {
+ 		status |= ST0_ERL;
+ 		status &= ~ST0_EXL;
+-		sp = SF2000_IDENTITY_USER_STACK;
+ 		sf2000_progress_mark("mips-start-thread-ebase", 9,
+ 			read_c0_ebase());
+ 		sf2000_progress_mark("mips-start-thread-errorepc-before", 9,
+diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -108,6 +108,8 @@ void (*board_bind_eic_interrupt)(int irq, int regset);
+ void (*board_ebase_setup)(void);
+ void(*board_cache_error_setup)(void);
+ extern void sf2000_visible_tick(const char *name);
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
+ #define SF2000_ROM_F_MOUNT_KSEG0 ((volatile unsigned int *)0x8101f044)
+ 
+ static void sf2000_trap_tick(const char *name)
+@@ -116,6 +118,12 @@ static void sf2000_trap_tick(const char *name)
+ 		sf2000_visible_tick(name);
+ }
+ 
++static void sf2000_exception_mark(const char *name, unsigned long value)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 11, (unsigned int)value);
++}
++
+ static int __init sf2000_rom_handoff_present(void)
+ {
+ 	unsigned int word;
+@@ -1009,6 +1017,11 @@ void do_trap_or_bp(struct pt_regs *regs, unsigned int code, int si_code,
+ {
+ 	char b[40];
+ 
++	sf2000_exception_mark("trap-or-bp-epc", regs->cp0_epc);
++	sf2000_exception_mark("trap-or-bp-code", code);
++	sf2000_exception_mark("trap-or-bp-status", regs->cp0_status);
++	sf2000_exception_mark("trap-or-bp-cause", regs->cp0_cause);
++
+ #ifdef CONFIG_KGDB_LOW_LEVEL_TRAP
+ 	if (kgdb_ll_trap(DIE_TRAP, str, regs, code, current->thread.trap_nr,
+ 			 SIGTRAP) == NOTIFY_STOP)
+@@ -1207,6 +1220,11 @@ asmlinkage void do_ri(struct pt_regs *regs)
+ 	unsigned int opcode = 0;
+ 	int status = -1;
+ 
++	sf2000_exception_mark("ri-epc", regs->cp0_epc);
++	sf2000_exception_mark("ri-status", regs->cp0_status);
++	sf2000_exception_mark("ri-cause", regs->cp0_cause);
++	sf2000_exception_mark("ri-badvaddr", read_c0_badvaddr());
++
+ 	/*
+ 	 * Avoid any kernel code. Just emulate the R2 instruction
+ 	 * as quickly as possible.
+@@ -1711,6 +1729,11 @@ asmlinkage void do_cpu(struct pt_regs *regs)
+ 
+ asmlinkage void do_reserved(struct pt_regs *regs)
+ {
++	sf2000_exception_mark("reserved-epc", regs->cp0_epc);
++	sf2000_exception_mark("reserved-status", regs->cp0_status);
++	sf2000_exception_mark("reserved-cause", regs->cp0_cause);
++	sf2000_exception_mark("reserved-badvaddr", read_c0_badvaddr());
++
+ 	/*
+ 	 * Game over - no way to handle this if it ever occurs.	 Most probably
+ 	 * caused by a new unknown cpu type or after another deadly
+diff --git a/arch/mips/mm/fault.c b/arch/mips/mm/fault.c
+--- a/arch/mips/mm/fault.c
++++ b/arch/mips/mm/fault.c
+@@ -23,13 +23,23 @@
+ #include <linux/uaccess.h>
+ 
+ #include <asm/branch.h>
++#include <asm/mipsregs.h>
+ #include <asm/mmu_context.h>
+ #include <asm/ptrace.h>
+ #include <asm/highmem.h>		/* For VMALLOC_END */
+ #include <linux/kdebug.h>
+ 
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
+ int show_unhandled_signals = 1;
+ 
++static void sf2000_fault_mark(const char *name, unsigned long value)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 10, (unsigned int)value);
++}
++
+ /*
+  * This routine handles page faults.  It determines the address,
+  * and the problem, and then passes it off to one of the appropriate
+@@ -329,6 +339,13 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
+ {
+ 	enum ctx_state prev_state;
+ 
++	sf2000_fault_mark("page-fault-entry", address);
++	sf2000_fault_mark("page-fault-write", write);
++	sf2000_fault_mark("page-fault-epc", regs->cp0_epc);
++	sf2000_fault_mark("page-fault-status", regs->cp0_status);
++	sf2000_fault_mark("page-fault-cause", regs->cp0_cause);
++	sf2000_fault_mark("page-fault-badvaddr", read_c0_badvaddr());
++
+ 	prev_state = exception_enter();
+ 	__do_page_fault(regs, write, address);
+ 	exception_exit(prev_state);
+-- 
+2.49.0
+
