@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Tue, 12 May 2026 01:45:00 +0000
+Subject: [PATCH] mips: sf2000: use random init tlb write
+
+The physical SF2000 stops inside update_mmu_cache() after the direct /init
+entry PTE is found. That helper uses the normal R4K probe/indexed update path,
+which is the same class of TLB operation that already proved unsafe during
+early TLB flushes on this SoC.
+
+Keep the direct /init entry page installation, but replace update_mmu_cache()
+with a narrow SF2000-only random TLB write. Load EntryHi with the entry VPN2
+and current ASID, load EntryLo0/1 from the installed PTE, issue tlbwr, and
+restore the previous CP0 state. RAM progress markers around the random write
+show whether the hardware accepts tlbwr and whether the kernel reaches the
+final userspace return again.
+---
+ fs/binfmt_elf.c | 58 +++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 54 insertions(+), 4 deletions(-)
+
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+index b3546c926..3ed9e312c 100644
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -46,8 +46,13 @@
+ #include <linux/cred.h>
+ #include <linux/dax.h>
+ #include <linux/uaccess.h>
++#include <linux/irqflags.h>
++#include <asm/cpu.h>
++#include <asm/hazards.h>
++#include <asm/mipsregs.h>
+ #include <asm/param.h>
+ #include <asm/page.h>
++#include <asm/pgtable-bits.h>
+ 
+ #ifdef CONFIG_MIPS
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+@@ -65,6 +70,51 @@ static void sf2000_elf_value(const char *name, unsigned int value)
+ 		sf2000_progress_mark(name, 8, value);
+ }
+ 
++static void sf2000_elf_random_tlb(unsigned long address, pte_t entry)
++{
++	unsigned long flags;
++	unsigned long old_entryhi;
++	unsigned long old_pagemask;
++	unsigned long entryhi;
++	unsigned long entrylo = pte_to_entrylo(pte_val(entry));
++	unsigned long odd = address & PAGE_SIZE;
++	unsigned long entrylo0 = 0;
++	unsigned long entrylo1 = 0;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	address &= PAGE_MASK << 1;
++	if (pte_val(entry) & _PAGE_GLOBAL) {
++		entrylo0 = entrylo;
++		entrylo1 = entrylo;
++	} else if (odd) {
++		entrylo1 = entrylo;
++	} else {
++		entrylo0 = entrylo;
++	}
++
++	local_irq_save(flags);
++	old_entryhi = read_c0_entryhi();
++	old_pagemask = read_c0_pagemask();
++	entryhi = address | (old_entryhi & cpu_asid_mask(&current_cpu_data));
++	sf2000_elf_value("elf-entry-random-hi", (unsigned int)entryhi);
++	sf2000_elf_value("elf-entry-random-lo0", (unsigned int)entrylo0);
++	sf2000_elf_value("elf-entry-random-lo1", (unsigned int)entrylo1);
++	write_c0_pagemask(PM_DEFAULT_MASK);
++	write_c0_entryhi(entryhi);
++	write_c0_entrylo0(entrylo0);
++	write_c0_entrylo1(entrylo1);
++	mtc0_tlbw_hazard();
++	sf2000_elf_mark("elf-entry-before-tlbwr");
++	tlb_write_random();
++	tlbw_use_hazard();
++	sf2000_elf_mark("elf-entry-after-tlbwr");
++	write_c0_entryhi(old_entryhi);
++	write_c0_pagemask(old_pagemask);
++	local_irq_restore(flags);
++}
++
+ static int sf2000_elf_install_entry_page(struct file *file,
+ 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+ {
+@@ -139,9 +189,9 @@ static int sf2000_elf_install_entry_page(struct file *file,
+ 		pmd = pmd_offset(pud, address);
+ 		pte = pte_offset_map(pmd, address);
+ 		sf2000_elf_value("elf-entry-pte", (unsigned int)pte_val(*pte));
+-		sf2000_elf_mark("elf-entry-before-update-tlb");
+-		update_mmu_cache(vma, address, pte);
+-		sf2000_elf_mark("elf-entry-after-update-tlb");
++		sf2000_elf_mark("elf-entry-before-random-tlb");
++		sf2000_elf_random_tlb(address, *pte);
++		sf2000_elf_mark("elf-entry-after-random-tlb");
+ 		pte_unmap(pte);
+ 	}
+ out_unlock:
+-- 
+2.50.1
