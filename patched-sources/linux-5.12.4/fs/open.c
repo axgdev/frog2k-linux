@@ -41,12 +41,14 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_open_mark(const char *name, unsigned int value)
 {
+	static unsigned int mark_count;
 	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
 
 	diag[8] = 0x51510100;
 	diag[9] = value;
 	diag[10] = (unsigned int)__builtin_return_address(0);
-	sf2000_progress_mark(name, 13, value);
+	if (mark_count++ < 256)
+		sf2000_progress_mark(name, 13, value);
 }
 #else
 static inline void sf2000_open_mark(const char *name, unsigned int value) { }
