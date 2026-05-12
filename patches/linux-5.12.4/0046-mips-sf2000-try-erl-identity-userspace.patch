@@ -16,9 +16,9 @@ kernel can return to /init and service syscalls without relying on CP0 TLB
 writes on the return path.
 ---
  arch/mips/Makefile         |  4 +++
- arch/mips/kernel/process.c | 19 +++++++++++
+ arch/mips/kernel/process.c | 24 +++++++++++++
  fs/binfmt_elf.c            | 81 ++++++++++++++++++++++++++++++++++++++++++++--
- 3 files changed, 101 insertions(+), 3 deletions(-)
+ 3 files changed, 106 insertions(+), 3 deletions(-)
 
 diff --git a/arch/mips/Makefile b/arch/mips/Makefile
 --- a/arch/mips/Makefile
@@ -62,7 +62,7 @@ diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
  
  void sf2000_ret_after_kernel_thread(void)
  {
-@@ -78,6 +89,15 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
+@@ -78,6 +89,20 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
  	/* New thread loses kernel privileges. */
  	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_CU2|ST0_FR|KU_MASK);
  	status |= KU_USER;
@@ -71,6 +71,11 @@ diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
 +		sp = SF2000_IDENTITY_USER_STACK;
 +		sf2000_progress_mark("mips-start-thread-ebase", 9,
 +			read_c0_ebase());
++		sf2000_progress_mark("mips-start-thread-errorepc-before", 9,
++			read_c0_errorepc());
++		write_c0_errorepc(pc);
++		sf2000_progress_mark("mips-start-thread-errorepc-after", 9,
++			read_c0_errorepc());
 +		sf2000_progress_mark("mips-start-thread-erl-status", 9,
 +			status);
 +		sf2000_progress_mark("mips-start-thread-erl-sp", 9, sp);
