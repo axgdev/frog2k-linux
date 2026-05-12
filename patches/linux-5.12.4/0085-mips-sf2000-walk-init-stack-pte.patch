@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000085 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: walk init stack pte directly
+
+The loader-watchdog hardware log confirms the loader watchdog is working, and
+the kernel reaches the /init identity stack copy. It then traps with Reserved
+Instruction at __kmap_pgprot's tlbwi before the elf-id-stack-gup marker.
+
+That puts the TLB writer inside get_user_pages(), not in the later stack copy.
+Use the direct page-table walk that previously reached elf-id-stack-pte on the
+physical device, then keep the uncached physical alias copy from the last
+patch. This avoids both get_user_pages() and kmap() in the SF2000-only forced
+/init stack path.
+---
+ fs/binfmt_elf.c | 48 ++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 40 insertions(+), 8 deletions(-)
+
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -418,7 +418,11 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
+ 	struct page *page = NULL;
+-	long pinned;
++	pgd_t *pgd;
++	p4d_t *p4d;
++	pud_t *pud;
++	pmd_t *pmd;
++	pte_t *pte;
+ 	void *src;
+ 	void *dst;
+ 	unsigned long src_phys;
+@@ -435,17 +439,45 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
+ 	sf2000_elf_value("elf-id-stack-low", (unsigned int)low_sp);
+ 
+ 	mmap_read_lock(mm);
+-	pinned = get_user_pages(src_addr, 1, FOLL_FORCE, &page, NULL);
+-	mmap_read_unlock(mm);
+-	sf2000_elf_value("elf-id-stack-gup", (unsigned int)pinned);
+-	if (pinned < 0)
+-		return (int)pinned;
+-	if (pinned != 1) {
+-		if (page)
+-			put_page(page);
+-		return -EFAULT;
++	pgd = pgd_offset(mm, src_addr);
++	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	p4d = p4d_offset(pgd, src_addr);
++	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pud = pud_offset(p4d, src_addr);
++	if (pud_none(*pud) || pud_bad(*pud)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pmd = pmd_offset(pud, src_addr);
++	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pte = pte_offset_map(pmd, src_addr);
++	if (!pte) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	if (!pte_present(*pte)) {
++		ret = -EFAULT;
++		goto out_pte;
+ 	}
++	sf2000_elf_value("elf-id-stack-pte", (unsigned int)pte_val(*pte));
++	page = pte_page(*pte);
++	get_page(page);
++out_pte:
++	pte_unmap(pte);
++out_unlock:
++	mmap_read_unlock(mm);
++	if (ret)
++		return ret;
+ 
+ 	src_phys = (unsigned long)page_to_phys(page);
+ 	sf2000_elf_value("elf-id-stack-phys", (unsigned int)src_phys);

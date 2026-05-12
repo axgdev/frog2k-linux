@@ -418,7 +418,11 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma;
 	struct page *page = NULL;
-	long pinned;
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
 	void *src;
 	void *dst;
 	unsigned long src_phys;
@@ -435,16 +439,44 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
 	sf2000_elf_value("elf-id-stack-low", (unsigned int)low_sp);
 
 	mmap_read_lock(mm);
-	pinned = get_user_pages(src_addr, 1, FOLL_FORCE, &page, NULL);
-	mmap_read_unlock(mm);
-	sf2000_elf_value("elf-id-stack-gup", (unsigned int)pinned);
-	if (pinned < 0)
-		return (int)pinned;
-	if (pinned != 1) {
-		if (page)
-			put_page(page);
-		return -EFAULT;
+	pgd = pgd_offset(mm, src_addr);
+	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
+		ret = -EFAULT;
+		goto out_unlock;
 	}
+	p4d = p4d_offset(pgd, src_addr);
+	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+		ret = -EFAULT;
+		goto out_unlock;
+	}
+	pud = pud_offset(p4d, src_addr);
+	if (pud_none(*pud) || pud_bad(*pud)) {
+		ret = -EFAULT;
+		goto out_unlock;
+	}
+	pmd = pmd_offset(pud, src_addr);
+	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
+		ret = -EFAULT;
+		goto out_unlock;
+	}
+	pte = pte_offset_map(pmd, src_addr);
+	if (!pte) {
+		ret = -EFAULT;
+		goto out_unlock;
+	}
+	if (!pte_present(*pte)) {
+		ret = -EFAULT;
+		goto out_pte;
+	}
+	sf2000_elf_value("elf-id-stack-pte", (unsigned int)pte_val(*pte));
+	page = pte_page(*pte);
+	get_page(page);
+out_pte:
+	pte_unmap(pte);
+out_unlock:
+	mmap_read_unlock(mm);
+	if (ret)
+		return ret;
 
 	src_phys = (unsigned long)page_to_phys(page);
 	sf2000_elf_value("elf-id-stack-phys", (unsigned int)src_phys);
