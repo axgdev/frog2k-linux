@@ -80,6 +80,57 @@ static void sf2000_elf_value(const char *name, unsigned int value)
 	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
 #define SF2000_IDENTITY_STUB_ADDR 0x00401000UL
 
+static void sf2000_elf_random_tlb(unsigned long address, pte_t entry,
+		int stack)
+{
+	unsigned long flags;
+	unsigned long old_entryhi;
+	unsigned long old_pagemask;
+	unsigned long entryhi;
+	unsigned long entrylo = pte_to_entrylo(pte_val(entry));
+	unsigned long odd = address & PAGE_SIZE;
+	unsigned long entrylo0 = 0;
+	unsigned long entrylo1 = 0;
+
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+		return;
+
+	address &= PAGE_MASK << 1;
+	if (pte_val(entry) & _PAGE_GLOBAL) {
+		entrylo0 = entrylo;
+		entrylo1 = entrylo;
+	} else if (odd) {
+		entrylo1 = entrylo;
+	} else {
+		entrylo0 = entrylo;
+	}
+
+	local_irq_save(flags);
+	old_entryhi = read_c0_entryhi();
+	old_pagemask = read_c0_pagemask();
+	entryhi = address | (old_entryhi & cpu_asid_mask(&current_cpu_data));
+	sf2000_elf_value(stack ? "elf-stack-random-hi" :
+			"elf-entry-random-hi", (unsigned int)entryhi);
+	sf2000_elf_value(stack ? "elf-stack-random-lo0" :
+			"elf-entry-random-lo0", (unsigned int)entrylo0);
+	sf2000_elf_value(stack ? "elf-stack-random-lo1" :
+			"elf-entry-random-lo1", (unsigned int)entrylo1);
+	write_c0_pagemask(PM_DEFAULT_MASK);
+	write_c0_entryhi(entryhi);
+	write_c0_entrylo0(entrylo0);
+	write_c0_entrylo1(entrylo1);
+	mtc0_tlbw_hazard();
+	sf2000_elf_mark(stack ? "elf-stack-before-tlbwr" :
+			"elf-entry-before-tlbwr");
+	tlb_write_random();
+	tlbw_use_hazard();
+	sf2000_elf_mark(stack ? "elf-stack-after-tlbwr" :
+			"elf-entry-after-tlbwr");
+	write_c0_entryhi(old_entryhi);
+	write_c0_pagemask(old_pagemask);
+	local_irq_restore(flags);
+}
+
 static int sf2000_elf_install_entry_page(struct file *file,
 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
 {
@@ -155,7 +206,8 @@ static int sf2000_elf_install_entry_page(struct file *file,
 		pte = pte_offset_map(pmd, address);
 		sf2000_elf_value("elf-entry-pte", (unsigned int)pte_val(*pte));
 		sf2000_elf_mark("elf-entry-before-random-tlb");
-		sf2000_elf_mark("elf-entry-skip-random-tlb");
+		sf2000_elf_random_tlb(address, *pte, 0);
+		sf2000_elf_mark("elf-entry-after-random-tlb");
 		pte_unmap(pte);
 	}
 out_unlock:
@@ -279,8 +331,14 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[80] = 0x409b6000; /* mtc0 k1,CP0_STATUS */
 	stub[81] = 0x00000000; /* nop */
 	stub[82] = 0x00000000; /* nop */
-	stub[83] = 0x42000018; /* eret */
-	stub[84] = 0x00000000; /* nop */
+	stub[83] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
+	stub[84] = 0xaf5b0020; /* sw k1,32(k0) */
+	stub[85] = 0x3c1b5151; /* lui k1,0x5151 */
+	stub[86] = 0x377b0010; /* ori k1,k1,16 */
+	stub[87] = 0xaf5b0024; /* sw k1,36(k0) */
+	stub[88] = 0x0000000f; /* sync */
+	stub[89] = 0x42000018; /* eret */
+	stub[90] = 0x00000000; /* nop */
 	stub[96] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[97] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[98] = 0x377b0009; /* ori k1,k1,9 */
@@ -501,6 +559,20 @@ out_unlock:
 		ret = remap_pfn_range(vma, SF2000_IDENTITY_STACK_BASE,
 			SF2000_IDENTITY_STACK_BASE >> PAGE_SHIFT,
 			SF2000_IDENTITY_STACK_SIZE, vma->vm_page_prot);
+	if (!ret) {
+		pgd = pgd_offset(mm, SF2000_IDENTITY_STACK_PAGE);
+		p4d = p4d_offset(pgd, SF2000_IDENTITY_STACK_PAGE);
+		pud = pud_offset(p4d, SF2000_IDENTITY_STACK_PAGE);
+		pmd = pmd_offset(pud, SF2000_IDENTITY_STACK_PAGE);
+		pte = pte_offset_map(pmd, SF2000_IDENTITY_STACK_PAGE);
+		if (pte) {
+			sf2000_elf_value("elf-stack-pte",
+					(unsigned int)pte_val(*pte));
+			sf2000_elf_random_tlb(SF2000_IDENTITY_STACK_PAGE,
+					*pte, 1);
+			pte_unmap(pte);
+		}
+	}
 	mmap_write_unlock(mm);
 	sf2000_elf_value("elf-id-stack-remap", (unsigned int)ret);
 	if (ret)
