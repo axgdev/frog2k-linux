@@ -109,10 +109,6 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_PROGRESS_VERSION 1u
 #define SF2000_PROGRESS_ENTRIES 1024u
 #define SF2000_PROGRESS_NAME_LEN 32u
-#define SF2000_PROGRESS_LIVE_MAGIC 0x4c495645u
-#define SF2000_LIVE_SECTOR_SIZE 512u
-#define SF2000_ROM_DISK_WRITE_KSEG0 0x81020020u
-#define SF2000_ROM_CACHE_FLUSH_KSEG0 0x810032f4u
 #define SF2000_WDT_COUNT_KSEG1 ((volatile u32 *)CKSEG1ADDR(0x18818500))
 #define SF2000_WDT_CONF_KSEG1 ((volatile u8 *)CKSEG1ADDR(0x18818504))
 #define SF2000_WDT_BOOT_USEC 30000000u
@@ -123,15 +119,9 @@ static const char builtin_cmdline[] __initconst = "";
 #define SF2000_WDT_RESTART_CONF 0x67u
 
 static unsigned int sf2000_screen_seq;
-static unsigned int sf2000_live_write_count;
-
 void sf2000_progress_mark(const char *name, unsigned int kind,
 	unsigned int value);
 void sf2000_syscall_mark(unsigned int nr);
-
-typedef int (*sf2000_rom_disk_write_fn)(unsigned char pdrv, const void *buff,
-	unsigned int sector, unsigned int count);
-typedef void (*sf2000_rom_cache_flush_fn)(const void *addr, unsigned long len);
 
 struct sf2000_progress_entry {
 	unsigned int seq;
@@ -349,79 +339,6 @@ static void sf2000_progress_copy_name(volatile char *dst, const char *src)
 	dst[i] = '\0';
 }
 
-static void sf2000_live_putc(char *buf, unsigned int *pos, char ch)
-{
-	if (*pos + 1u >= SF2000_LIVE_SECTOR_SIZE)
-		return;
-	buf[*pos] = ch;
-	(*pos)++;
-	buf[*pos] = '\0';
-}
-
-static void sf2000_live_puts(char *buf, unsigned int *pos, const char *s)
-{
-	while (*s != '\0')
-		sf2000_live_putc(buf, pos, *s++);
-}
-
-static void sf2000_live_hex(char *buf, unsigned int *pos, unsigned int value)
-{
-	static const char digits[] = "0123456789abcdef";
-	int shift;
-
-	sf2000_live_puts(buf, pos, "0x");
-	for (shift = 28; shift >= 0; shift -= 4)
-		sf2000_live_putc(buf, pos, digits[(value >> shift) & 0xf]);
-}
-
-static void sf2000_live_progress_write(const char *name, unsigned int kind,
-	unsigned int value, unsigned int seq)
-{
-	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
-	sf2000_rom_disk_write_fn disk_write =
-		(sf2000_rom_disk_write_fn)SF2000_ROM_DISK_WRITE_KSEG0;
-	sf2000_rom_cache_flush_fn cache_flush =
-		(sf2000_rom_cache_flush_fn)SF2000_ROM_CACHE_FLUSH_KSEG0;
-	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
-	unsigned int pos = 0;
-	unsigned int i;
-
-	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
-		return;
-	if (!sf2000_rom_handoff_present())
-		return;
-	if (log->reserved[0] != SF2000_PROGRESS_LIVE_MAGIC ||
-	    log->reserved[2] == 0 || log->reserved[2] == 0xffffffffu)
-		return;
-
-	for (i = 0; i < SF2000_LIVE_SECTOR_SIZE; i++)
-		sector[i] = 0;
-
-	sf2000_live_puts(sector, &pos, "sf2000-linux live progress\n");
-	sf2000_live_puts(sector, &pos, "write=");
-	sf2000_live_hex(sector, &pos, ++sf2000_live_write_count);
-	sf2000_live_puts(sector, &pos, " seq=");
-	sf2000_live_hex(sector, &pos, seq);
-	sf2000_live_puts(sector, &pos, " kind=");
-	sf2000_live_hex(sector, &pos, kind);
-	sf2000_live_puts(sector, &pos, " value=");
-	sf2000_live_hex(sector, &pos, value);
-	sf2000_live_puts(sector, &pos, " pdrv=");
-	sf2000_live_hex(sector, &pos, log->reserved[1]);
-	sf2000_live_puts(sector, &pos, " lba=");
-	sf2000_live_hex(sector, &pos, log->reserved[2]);
-	sf2000_live_puts(sector, &pos, "\nname=");
-	sf2000_live_puts(sector, &pos, name);
-	sf2000_live_puts(sector, &pos, "\nwdt_count=");
-	sf2000_live_hex(sector, &pos, *SF2000_WDT_COUNT_KSEG1);
-	sf2000_live_puts(sector, &pos, " wdt_conf=");
-	sf2000_live_hex(sector, &pos, *SF2000_WDT_CONF_KSEG1);
-	sf2000_live_puts(sector, &pos, "\n");
-
-	cache_flush(sector, SF2000_LIVE_SECTOR_SIZE);
-	disk_write((unsigned char)log->reserved[1], sector, log->reserved[2], 1);
-}
-
 static void sf2000_watchdog_pet(void)
 {
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
@@ -511,7 +428,6 @@ void sf2000_progress_mark(const char *name, unsigned int kind,
 	}
 	log->write_index = index;
 	log->seq = seq;
-	sf2000_live_progress_write(name, kind, value, seq);
 	sf2000_watchdog_pet();
 }
 EXPORT_SYMBOL(sf2000_progress_mark);
