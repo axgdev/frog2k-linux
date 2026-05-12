@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000068 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: status gate init stub branch
+
+The physical trace reaches the final /init return and rewrites pt_regs EPC and
+ErrorEPC to the copied KSEG0 stub, but the post-RESTORE_SOME gate observes the
+saved EPC as 0x80400108 and rejects the direct branch. At that point the exact
+saved EPC is less reliable than the architectural state: the final userspace
+handoff is the only observed restore with ERL set and KSU=user
+(Status & 0x8007 == 0x8004).
+
+Gate the direct branch on that final status value plus the SF2000 EBase page
+instead of the transient saved EPC. This keeps ordinary kernel returns on the
+normal path and sends only the final /init handoff to the copied KSEG0 stub.
+---
+ arch/mips/kernel/entry.S | 26 +++++++-------------------
+ 1 file changed, 7 insertions(+), 19 deletions(-)
+
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -140,23 +140,17 @@ restore_partial:		# restore partial frame
+ 	MFC0	k1, CP0_EPC
+ 	sw	k1, 28(k0)
+ 	sync
+-	li	k0, 0x8101f044
+-	lw	k1, 0(k0)
++	mfc0	k1, CP0_STATUS
++	andi	k1, k1, 0x8007
+ 	lui	k0, 0xa13f
+ 	sw	k1, 24(k0)
+-	li	k1, 0x51510010
++	li	k1, 0x51510014
+ 	sw	k1, 20(k0)
+ 	lw	k1, 24(k0)
+ 	sync
+-	beqz	k1, 1f
+-	 nop
+-	li	k0, -1
+-	beq	k1, k0, 1f
++	li	k0, 0x8004
++	bne	k1, k0, 1f
+ 	 nop
+-	lui	k0, 0xa13f
+-	li	k1, 0x51510011
+-	sw	k1, 20(k0)
+-	sync
+ 	mfc0	k1, CP0_EBASE
+ 	srl	k1, k1, 12
+ 	andi	k1, k1, 0x1fff
+@@ -169,20 +163,6 @@ restore_partial:		# restore partial frame
+ 	li	k0, 0x1002
+ 	bne	k1, k0, 1f
+ 	 nop
+-	LONG_L	k1, PT_EPC(sp)
+-	lui	k0, 0xa13f
+-	sw	k1, 24(k0)
+-	li	k1, 0x51510013
+-	sw	k1, 20(k0)
+-	lw	k1, 24(k0)
+-	sync
+-	li	k0, 0x004002f0
+-	beq	k1, k0, 2f
+-	 nop
+-	li	k0, 0x80401000
+-	bne	k1, k0, 1f
+-	 nop
+-2:
+ 	lui	k0, 0xa13f
+ 	li	k1, 0x51510007
+ 	sw	k1, 20(k0)
+-- 
+2.45.0
