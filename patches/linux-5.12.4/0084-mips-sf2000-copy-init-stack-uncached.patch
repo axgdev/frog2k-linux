@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000084 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: copy init stack through uncached alias
+
+The uncached-init-stack hardware log gets as far as the copied /init stack
+path, then traps with Reserved Instruction at __kmap_pgprot's tlbwi. The GUP
+path pinned the page, but kmap(page) tried to install a temporary TLB mapping
+on a CPU where Linux TLB writes are not yet viable.
+
+Copy the pinned stack page through its KSEG1 physical alias instead. That keeps
+the page pinning and existing stack remap diagnostics, but avoids another TLB
+writer before the first userspace instruction can run.
+---
+ fs/binfmt_elf.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -423,6 +423,7 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
+ 	long pinned;
+ 	void *src;
+ 	void *dst;
++	unsigned long src_phys;
+ 	unsigned long mapped;
+ 	unsigned long src_addr = *sp & PAGE_MASK;
+ 	unsigned long low_sp = SF2000_IDENTITY_STACK_PAGE +
+@@ -442,12 +443,14 @@ static int sf2000_elf_copy_identity_stack(unsigned long *sp)
+ 		return -EFAULT;
+ 	}
+ 
+-	src = kmap(page);
++	src_phys = (unsigned long)page_to_phys(page);
++	sf2000_elf_value("elf-id-stack-phys", (unsigned int)src_phys);
++	src = (void *)CKSEG1ADDR(src_phys);
++	sf2000_elf_value("elf-id-stack-copy-src", (unsigned int)src);
+ 	dst = (void *)CKSEG1ADDR(SF2000_IDENTITY_STACK_BASE);
+ 	memset(dst, 0, SF2000_IDENTITY_STACK_SIZE);
+ 	dst = (void *)CKSEG1ADDR(SF2000_IDENTITY_STACK_PAGE);
+ 	memcpy(dst, src, PAGE_SIZE);
+-	kunmap(page);
+ 	put_page(page);
+ 	flush_cache_all();
+ 	mapped = vm_mmap(NULL, SF2000_IDENTITY_STACK_BASE,
