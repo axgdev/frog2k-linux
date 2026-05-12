@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000054 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: drop unused ELF TLB primer
+
+The random TLB primer was an earlier diagnostic experiment and is no longer
+called. Drop it so the SF2000 kernel build stays warning-clean.
+---
+ fs/binfmt_elf.c | 45 ---------------------------------------------
+ 1 file changed, 45 deletions(-)
+
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -77,51 +77,6 @@ static void sf2000_elf_value(const char *name, unsigned int value)
+ #define SF2000_IDENTITY_STACK_PAGE \
+ 	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
+ 
+-static void sf2000_elf_random_tlb(unsigned long address, pte_t entry)
+-{
+-	unsigned long flags;
+-	unsigned long old_entryhi;
+-	unsigned long old_pagemask;
+-	unsigned long entryhi;
+-	unsigned long entrylo = pte_to_entrylo(pte_val(entry));
+-	unsigned long odd = address & PAGE_SIZE;
+-	unsigned long entrylo0 = 0;
+-	unsigned long entrylo1 = 0;
+-
+-	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+-		return;
+-
+-	address &= PAGE_MASK << 1;
+-	if (pte_val(entry) & _PAGE_GLOBAL) {
+-		entrylo0 = entrylo;
+-		entrylo1 = entrylo;
+-	} else if (odd) {
+-		entrylo1 = entrylo;
+-	} else {
+-		entrylo0 = entrylo;
+-	}
+-
+-	local_irq_save(flags);
+-	old_entryhi = read_c0_entryhi();
+-	old_pagemask = read_c0_pagemask();
+-	entryhi = address | (old_entryhi & cpu_asid_mask(&current_cpu_data));
+-	sf2000_elf_value("elf-entry-random-hi", (unsigned int)entryhi);
+-	sf2000_elf_value("elf-entry-random-lo0", (unsigned int)entrylo0);
+-	sf2000_elf_value("elf-entry-random-lo1", (unsigned int)entrylo1);
+-	write_c0_pagemask(PM_DEFAULT_MASK);
+-	write_c0_entryhi(entryhi);
+-	write_c0_entrylo0(entrylo0);
+-	write_c0_entrylo1(entrylo1);
+-	mtc0_tlbw_hazard();
+-	sf2000_elf_mark("elf-entry-before-tlbwr");
+-	tlb_write_random();
+-	tlbw_use_hazard();
+-	sf2000_elf_mark("elf-entry-after-tlbwr");
+-	write_c0_entryhi(old_entryhi);
+-	write_c0_pagemask(old_pagemask);
+-	local_irq_restore(flags);
+-}
+-
+ static int sf2000_elf_install_entry_page(struct file *file,
+ 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+ {
+-- 
+2.45.0

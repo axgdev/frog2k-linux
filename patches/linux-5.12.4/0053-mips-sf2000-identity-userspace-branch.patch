@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000053 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: branch into identity userspace
+
+The physical SF2000 now reaches the assembly marker immediately after
+RESTORE_SOME with ERL userspace status and the /init entry in EPC, but then
+watchdog-resets before any TLB, generic exception, or syscall marker. Masking
+IE ruled out the pending-interrupt window, leaving the first eret into normal
+kuseg translation as the next boundary.
+
+Keep the first /init transition inside the identity window. Copy the final
+exec stack page to a low physical page in the no-map bootrom scratch area,
+map that physical page at the same low userspace address, pass the low stack
+to start_thread(), then use a SF2000-only return path that restores SP and
+branches directly to the identity-copied EPC while ERL remains set. Normal
+non-ERL returns still use RESTORE_SP_AND_RET.
+---
+ arch/mips/kernel/entry.S |  17 ++++++++
+ fs/binfmt_elf.c          | 120 +++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 137 insertions(+)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -140,6 +140,23 @@ restore_partial:		# restore partial frame
+ 	MFC0	k1, CP0_EPC
+ 	sw	k1, 28(k0)
+ 	sync
++	LONG_L	k1, PT_STATUS(sp)
++	andi	k1, ST0_ERL
++	beqz	k1, 1f
++	 nop
++	lui	k0, 0xa13f
++	li	k1, 0x51510002
++	sw	k1, 20(k0)
++	LONG_L	k1, PT_R29(sp)
++	sw	k1, 24(k0)
++	LONG_L	k0, PT_EPC(sp)
++	lui	k1, 0xa13f
++	sw	k0, 28(k1)
++	sync
++	RESTORE_SP
++	jr	k0
++	 nop
++1:
+ #endif
+ 	RESTORE_SP_AND_RET
+ 	.set	at
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -71,6 +71,12 @@ static void sf2000_elf_value(const char *name, unsigned int value)
+ 		sf2000_progress_mark(name, 8, value);
+ }
+ 
++#define SF2000_IDENTITY_STACK_BASE 0x012e0000UL
++#define SF2000_IDENTITY_STACK_SIZE 0x00110000UL
++#define SF2000_IDENTITY_STACK_TOP 0x013e0000UL
++#define SF2000_IDENTITY_STACK_PAGE \
++	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
++
+ static void sf2000_elf_random_tlb(unsigned long address, pte_t entry)
+ {
+ 	unsigned long flags;
+@@ -271,6 +277,102 @@ static int sf2000_elf_copy_identity(struct file *file,
+ 	sf2000_elf_mark("elf-id-copy-done");
+ 	return 0;
+ }
++
++static int sf2000_elf_copy_identity_stack(unsigned long *sp)
++{
++	struct mm_struct *mm = current->mm;
++	struct vm_area_struct *vma;
++	struct page *page = NULL;
++	pgd_t *pgd;
++	p4d_t *p4d;
++	pud_t *pud;
++	pmd_t *pmd;
++	pte_t *pte;
++	void *src;
++	void *dst;
++	unsigned long mapped;
++	unsigned long src_addr = *sp & PAGE_MASK;
++	unsigned long low_sp = SF2000_IDENTITY_STACK_PAGE +
++		(*sp & ~PAGE_MASK);
++	int ret = 0;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return 0;
++
++	sf2000_elf_value("elf-id-stack-src", (unsigned int)*sp);
++	sf2000_elf_value("elf-id-stack-low", (unsigned int)low_sp);
++	mmap_read_lock(mm);
++	pgd = pgd_offset(mm, src_addr);
++	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	p4d = p4d_offset(pgd, src_addr);
++	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pud = pud_offset(p4d, src_addr);
++	if (pud_none(*pud) || pud_bad(*pud)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pmd = pmd_offset(pud, src_addr);
++	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	pte = pte_offset_map(pmd, src_addr);
++	if (!pte) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++	if (!pte_present(*pte)) {
++		ret = -EFAULT;
++		goto out_pte;
++	}
++	sf2000_elf_value("elf-id-stack-pte", (unsigned int)pte_val(*pte));
++	page = pte_page(*pte);
++	get_page(page);
++out_pte:
++	pte_unmap(pte);
++out_unlock:
++	mmap_read_unlock(mm);
++	if (ret)
++		return ret;
++
++	src = kmap(page);
++	dst = (void *)CKSEG1ADDR(SF2000_IDENTITY_STACK_BASE);
++	memset(dst, 0, SF2000_IDENTITY_STACK_SIZE);
++	dst = (void *)CKSEG1ADDR(SF2000_IDENTITY_STACK_PAGE);
++	memcpy(dst, src, PAGE_SIZE);
++	kunmap(page);
++	put_page(page);
++	flush_cache_all();
++	mapped = vm_mmap(NULL, SF2000_IDENTITY_STACK_BASE,
++		SF2000_IDENTITY_STACK_SIZE,
++		PROT_READ | PROT_WRITE,
++		MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, 0);
++	sf2000_elf_value("elf-id-stack-mmap", (unsigned int)mapped);
++	if (IS_ERR_VALUE(mapped))
++		return (int)mapped;
++	mmap_write_lock(mm);
++	vma = find_vma(mm, SF2000_IDENTITY_STACK_BASE);
++	sf2000_elf_value("elf-id-stack-vma", (unsigned int)vma);
++	if (!vma || vma->vm_start > SF2000_IDENTITY_STACK_BASE)
++		ret = -EFAULT;
++	else
++		ret = remap_pfn_range(vma, SF2000_IDENTITY_STACK_BASE,
++			SF2000_IDENTITY_STACK_BASE >> PAGE_SHIFT,
++			SF2000_IDENTITY_STACK_SIZE, vma->vm_page_prot);
++	mmap_write_unlock(mm);
++	sf2000_elf_value("elf-id-stack-remap", (unsigned int)ret);
++	if (ret)
++		return ret;
++	*sp = low_sp;
++	sf2000_elf_value("elf-id-stack-done", (unsigned int)*sp);
++	return 0;
++}
+ #else
+ static inline void sf2000_elf_mark(const char *name) { }
+ static inline void sf2000_elf_value(const char *name, unsigned int value) { }
+@@ -284,6 +386,10 @@ static inline int sf2000_elf_copy_identity(struct file *file,
+ {
+ 	return 0;
+ }
++static inline int sf2000_elf_copy_identity_stack(unsigned long *sp)
++{
++	return 0;
++}
+ #endif
+ 
+ #ifndef ELF_COMPAT
+@@ -1570,6 +1676,11 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	sf2000_elf_value("elf-id-copy-final-ret", (unsigned int)retval);
+ 	if (retval)
+ 		goto out;
++	retval = sf2000_elf_copy_identity_stack(&bprm->p);
++	sf2000_elf_value("elf-id-stack-final-ret", (unsigned int)retval);
++	if (retval)
++		goto out;
++	current->mm->start_stack = bprm->p;
+ 	sf2000_elf_value("elf-before-start-thread", (unsigned int)elf_entry);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+ 	sf2000_elf_value("elf-after-start-thread", (unsigned int)bprm->p);
+-- 
+2.45.0
