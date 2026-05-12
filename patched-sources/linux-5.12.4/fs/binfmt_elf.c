@@ -243,7 +243,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
 
-	stub[0] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[0] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[1] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[2] = 0x377b0004; /* ori k1,k1,4 */
 	stub[3] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -269,7 +269,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[23] = 0xaf5b001c; /* sw k1,28(k0) */
 	stub[24] = 0x03600008; /* jr k1 */
 	stub[25] = 0x00000000; /* nop */
-	stub[64] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[64] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[65] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[66] = 0x377b0008; /* ori k1,k1,8 */
 	stub[67] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -280,7 +280,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[72] = 0x0000000f; /* sync */
 	stub[73] = 0x03600008; /* jr k1 */
 	stub[74] = 0x00000000; /* nop */
-	stub[96] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[96] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[97] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[98] = 0x377b0009; /* ori k1,k1,9 */
 	stub[99] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -288,7 +288,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[101] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
 	stub[102] = 0xaf5b001c; /* sw k1,28(k0) */
 	stub[103] = entry_text[0]; /* addiu sp,sp,-40 */
-	stub[104] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[104] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[105] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[106] = 0x377b0020; /* ori k1,k1,0x20 */
 	stub[107] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -300,14 +300,14 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[113] = entry_text[3]; /* move a2,zero */
 	stub[114] = entry_text[4]; /* addiu a1,a1,1544 */
 	stub[115] = entry_text[5]; /* li a0,4005 */
-	stub[116] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[116] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[117] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[118] = 0x377b0021; /* ori k1,k1,0x21 */
 	stub[119] = 0xaf5b0014; /* sw k1,20(k0) */
 	stub[120] = 0xaf450018; /* sw a1,24(k0) */
 	stub[121] = 0xaf44001c; /* sw a0,28(k0) */
 	stub[122] = 0xaf400000; /* sw zero,0(sp) */
-	stub[123] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[123] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[124] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[125] = 0x377b0023; /* ori k1,k1,0x23 */
 	stub[126] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -318,13 +318,13 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[131] = entry_text[8]; /* sw s3,28(sp) */
 	stub[132] = entry_text[9]; /* sw s2,24(sp) */
 	stub[133] = entry_text[10]; /* sw s1,20(sp) */
-	stub[134] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[134] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[135] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[136] = 0x377b0022; /* ori k1,k1,0x22 */
 	stub[137] = 0xaf5b0014; /* sw k1,20(k0) */
 	stub[138] = 0xaf5d0018; /* sw sp,24(k0) */
 	stub[139] = 0xaf5f001c; /* sw ra,28(k0) */
-	stub[140] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[140] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[141] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[142] = 0x377b000a; /* ori k1,k1,10 */
 	stub[143] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -334,7 +334,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[147] = 0x3c1f0000 | (((target + 52) >> 16) & 0xffff);
 	stub[148] = 0x37ff0000 | ((target + 52) & 0xffff);
 	stub[149] = 0xafb00010; /* sw s0,16(sp) */
-	stub[150] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[150] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[151] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[152] = 0x377b000e; /* ori k1,k1,14 */
 	stub[153] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -345,7 +345,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[158] = 0x377b0000 | (syscall_probe & 0xffff);
 	stub[159] = 0x03600008; /* jr k1 */
 	stub[160] = 0x00000000; /* nop */
-	stub[256] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[256] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[257] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[258] = 0x377b000b; /* ori k1,k1,11 */
 	stub[259] = 0xaf5b0014; /* sw k1,20(k0) */
@@ -361,7 +361,7 @@ static void sf2000_elf_copy_identity_stub(unsigned long entry,
 	stub[269] = 0xaf420018; /* sw v0,24(k0) */
 	stub[270] = 0xaf44001c; /* sw a0,28(k0) */
 	stub[271] = 0x0000000c; /* syscall */
-	stub[272] = 0x3c1aa13f; /* lui k0,0xa13f */
+	stub[272] = 0x3c1aa140; /* lui k0,0xa140 */
 	stub[273] = 0x3c1b5151; /* lui k1,0x5151 */
 	stub[274] = 0x377b000d; /* ori k1,k1,13 */
 	stub[275] = 0xaf5b0014; /* sw k1,20(k0) */

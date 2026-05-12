@@ -27,7 +27,7 @@ NESTED(handle_sys, PT_SIZE, sp)
 	.set	noat
 	SAVE_SOME
 #ifdef CONFIG_MIPS_SF2000
-	li	k0, 0xa13f0000
+	li	k0, 0xa1400000
 	li	k1, 0x51510030
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)
@@ -82,7 +82,7 @@ loads_done:
 	.set	pop
 
 #ifdef CONFIG_MIPS_SF2000
-	li	k0, 0xa13f0000
+	li	k0, 0xa1400000
 	li	k1, 0x51510031
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)
@@ -93,7 +93,7 @@ loads_done:
 	move	a0, v0
 	jal	sf2000_syscall_mark
 	nop
-	li	k0, 0xa13f0000
+	li	k0, 0xa1400000
 	li	k1, 0x51510033
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)
@@ -128,7 +128,7 @@ syscall_common:
 	beqz	t2, illegal_syscall
 
 #ifdef CONFIG_MIPS_SF2000
-	li	k0, 0xa13f0000
+	li	k0, 0xa1400000
 	li	k1, 0x51510034
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)
@@ -137,7 +137,7 @@ syscall_common:
 	jalr	t2			# Do The Real Thing (TM)
 	nop
 #ifdef CONFIG_MIPS_SF2000
-	li	k0, 0xa13f0000
+	li	k0, 0xa1400000
 	li	k1, 0x51510035
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)

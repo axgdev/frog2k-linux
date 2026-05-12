@@ -52,11 +52,12 @@ typedef unsigned long uintptr;
 #define LOG_LIMIT 262144u
 #define FA_READ 0x01u
 #define PROGRESS_ADDR 0xa13f0000u
+#define RAW_DIAG_ADDR 0xa1400000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 loader-watchdog"
+#define LOADER_BUILD_TAG "2026-05-12 raw-diag-block"
 
 typedef unsigned long long u64;
 
@@ -510,6 +511,22 @@ static void bootlog_progress_entry(volatile struct progress_entry *entry)
 	bootlog_puts("\n");
 }
 
+static void bootlog_dump_raw_diag(void)
+{
+	volatile u32 *diag = (volatile u32 *)RAW_DIAG_ADDR;
+	u32 i;
+
+	bootlog_puts("raw diag addr=");
+	bootlog_hex(RAW_DIAG_ADDR);
+	for (i = 0; i < 12; i++) {
+		bootlog_puts(" w");
+		bootlog_hex(i);
+		bootlog_puts("=");
+		bootlog_hex(diag[i]);
+	}
+	bootlog_puts("\n");
+}
+
 static void bootlog_dump_previous_progress(void)
 {
 	u32 i;
@@ -536,6 +553,7 @@ static void bootlog_dump_previous_progress(void)
 	bootlog_puts(" reserved2=");
 	bootlog_hex(progress_log->reserved[2]);
 	bootlog_puts("\n");
+	bootlog_dump_raw_diag();
 
 	header_usable = progress_log->version == PROGRESS_VERSION &&
 		progress_log->seq != 0 &&
