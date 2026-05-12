@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000050 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: log assembly exception entry
+
+The physical SF2000 now reaches the final return to /init with a normal exec
+stack, but it does not emit C-level page fault, reserved instruction, trap, or
+syscall markers before the watchdog resets it.
+
+Add markers at the first assembly handlers that have completed SAVE_ALL so the
+next warm-boot log can tell whether the CPU reached the TLB fault trampoline or
+a normal exception trampoline. This keeps the diagnostic below do_page_fault()
+and do_* exception C handlers without touching the generated refill handler.
+---
+ arch/mips/kernel/genex.S  |  8 ++++++++
+ arch/mips/kernel/traps.c  | 21 +++++++++++++++++++++
+ arch/mips/mm/fault.c      | 19 +++++++++++++++++++
+ arch/mips/mm/tlbex-fault.S |  8 ++++++++
+ 4 files changed, 56 insertions(+)
+
+diff --git a/arch/mips/kernel/genex.S b/arch/mips/kernel/genex.S
+index 40d6a4e93223..f29b7f29b2ef 100644
+--- a/arch/mips/kernel/genex.S
++++ b/arch/mips/kernel/genex.S
+@@ -548,6 +548,14 @@ NESTED(handle_\exception, PT_SIZE, sp)
+ 	__build_clear_\clear
+ 	.set	at
+ 	__BUILD_\verbose \exception
++#ifdef CONFIG_MIPS_SF2000
++	mfc0	a0, CP0_CAUSE
++	MFC0	a1, CP0_EPC
++	mfc0	a2, CP0_STATUS
++	MFC0	a3, CP0_BADVADDR
++	jal	sf2000_gen_exception_asm_mark
++	 nop
++#endif
+ 	move	a0, sp
+ 	jal	do_\handler
+ 	j	ret_from_exception
+diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
+index 679917c21543..d42753c093e9 100644
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -125,6 +125,27 @@ static void sf2000_exception_mark(const char *name, unsigned long value)
+ 		sf2000_progress_mark(name, 11, (unsigned int)value);
+ }
+ 
++void sf2000_gen_exception_asm_mark(unsigned long cause, unsigned long epc,
++		unsigned long status, unsigned long badvaddr)
++{
++	static unsigned int count;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	if (count >= 64)
++		return;
++	count++;
++
++	sf2000_progress_mark("genex-asm-cause", 12, (unsigned int)cause);
++	sf2000_progress_mark("genex-asm-epc", 12, (unsigned int)epc);
++	sf2000_progress_mark("genex-asm-status", 12, (unsigned int)status);
++	sf2000_progress_mark("genex-asm-badvaddr", 12,
++			     (unsigned int)badvaddr);
++	sf2000_progress_mark("genex-asm-count", 12, count);
++}
++EXPORT_SYMBOL(sf2000_gen_exception_asm_mark);
++
+ static int __init sf2000_rom_handoff_present(void)
+ {
+ 	unsigned int word;
+diff --git a/arch/mips/mm/fault.c b/arch/mips/mm/fault.c
+index 71db338a7947..0fbf124c69fa 100644
+--- a/arch/mips/mm/fault.c
++++ b/arch/mips/mm/fault.c
+@@ -42,6 +42,25 @@ static void sf2000_fault_mark(const char *name, unsigned long value)
+ 		sf2000_progress_mark(name, 10, (unsigned int)value);
+ }
+ 
++void sf2000_tlb_fault_asm_mark(unsigned long badvaddr, unsigned long epc,
++		unsigned long status, unsigned long cause)
++{
++	static unsigned int count;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	if (count >= 64)
++		return;
++	count++;
++
++	sf2000_progress_mark("tlb-asm-badvaddr", 12, (unsigned int)badvaddr);
++	sf2000_progress_mark("tlb-asm-epc", 12, (unsigned int)epc);
++	sf2000_progress_mark("tlb-asm-status", 12, (unsigned int)status);
++	sf2000_progress_mark("tlb-asm-cause", 12, (unsigned int)cause);
++	sf2000_progress_mark("tlb-asm-count", 12, count);
++}
++
+ /*
+  * This routine handles page faults.  It determines the address,
+  * and the problem, and then passes it off to one of the appropriate
+diff --git a/arch/mips/mm/tlbex-fault.S b/arch/mips/mm/tlbex-fault.S
+index c89d43b9f1a8..6860cb120076 100644
+--- a/arch/mips/mm/tlbex-fault.S
++++ b/arch/mips/mm/tlbex-fault.S
+@@ -13,6 +13,14 @@
+ 	NESTED(tlb_do_page_fault_\write, PT_SIZE, sp)
+ 	.cfi_signal_frame
+ 	SAVE_ALL docfi=1
++#ifdef CONFIG_MIPS_SF2000
++	MFC0	a0, CP0_BADVADDR
++	MFC0	a1, CP0_EPC
++	mfc0	a2, CP0_STATUS
++	mfc0	a3, CP0_CAUSE
++	jal	sf2000_tlb_fault_asm_mark
++	 nop
++#endif
+ 	MFC0	a2, CP0_BADVADDR
+ 	KMODE
+ 	move	a0, sp
+-- 
+2.45.0
