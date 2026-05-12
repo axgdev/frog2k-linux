@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000057 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: add identity stub probe
+
+The physical SF2000 still stops after the retained marker immediately before
+the final branch target, even when that target is the KSEG0 alias of /init.
+Add a tiny copied identity stub at 0x00401000 and branch there first. The stub
+does not use a stack or Linux calls; it only writes retained marker 0x51510004
+and then jumps to the KSEG0 /init entry.
+
+This separates target fetch/execution failure from failure inside the first
+/init instructions in the next physical log.
+---
+ arch/mips/kernel/entry.S |  4 +---
+ fs/binfmt_elf.c          | 31 +++++++++++++++++++++++++++++--
+ 2 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/arch/mips/kernel/entry.S b/arch/mips/kernel/entry.S
+--- a/arch/mips/kernel/entry.S
++++ b/arch/mips/kernel/entry.S
+@@ -149,9 +149,7 @@ restore_partial:		# restore partial frame
+ 	sw	k1, 20(k0)
+ 	LONG_L	k1, PT_R29(sp)
+ 	sw	k1, 24(k0)
+-	LONG_L	k0, PT_EPC(sp)
+-	li	k1, 0x80000000
+-	or	k0, k0, k1
++	li	k0, 0x80401000
+ 	lui	k1, 0xa13f
+ 	sw	k0, 28(k1)
+ 	sync
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -77,6 +77,7 @@ static void sf2000_elf_value(const char *name, unsigned int value)
+ #define SF2000_IDENTITY_STACK_TOP 0x013e0000UL
+ #define SF2000_IDENTITY_STACK_PAGE \
+ 	(SF2000_IDENTITY_STACK_TOP - PAGE_SIZE)
++#define SF2000_IDENTITY_STUB_ADDR 0x00401000UL
+ 
+ static int sf2000_elf_install_entry_page(struct file *file,
+ 		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+@@ -213,8 +214,34 @@ static int sf2000_elf_copy_identity_segment(struct file *file,
+ 	return 0;
+ }
+ 
++static void sf2000_elf_copy_identity_stub(unsigned long entry)
++{
++	u32 *stub = (u32 *)CKSEG1ADDR(SF2000_IDENTITY_STUB_ADDR);
++	unsigned long target = CKSEG0ADDR(entry);
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++
++	stub[0] = 0x3c1aa13f; /* lui k0,0xa13f */
++	stub[1] = 0x3c1b5151; /* lui k1,0x5151 */
++	stub[2] = 0x377b0004; /* ori k1,k1,4 */
++	stub[3] = 0xaf5b0014; /* sw k1,20(k0) */
++	stub[4] = 0x401b6000; /* mfc0 k1,CP0_STATUS */
++	stub[5] = 0xaf5b0018; /* sw k1,24(k0) */
++	stub[6] = 0x3c1b0000 | ((target >> 16) & 0xffff);
++	stub[7] = 0x377b0000 | (target & 0xffff);
++	stub[8] = 0xaf5b001c; /* sw k1,28(k0) */
++	stub[9] = 0x03600008; /* jr k1 */
++	stub[10] = 0x00000000; /* nop */
++	flush_cache_all();
++	flush_icache_all();
++	flush_icache_range(SF2000_IDENTITY_STUB_ADDR,
++		SF2000_IDENTITY_STUB_ADDR + PAGE_SIZE);
++	sf2000_elf_value("elf-id-stub", (unsigned int)target);
++}
++
+ static int sf2000_elf_copy_identity(struct file *file,
+-		const struct elf_phdr *phdrs, int phnum)
++		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+ {
+ 	int i;
+ 
+@@ -232,6 +259,7 @@ static int sf2000_elf_copy_identity(struct file *file,
+ 		if (ret)
+ 			return ret;
+ 	}
++	sf2000_elf_copy_identity_stub(entry);
+ 	sf2000_elf_mark("elf-id-copy-done");
+ 	return 0;
+ }
+@@ -340,7 +368,7 @@ static inline int sf2000_elf_install_entry_page(struct file *file,
+ 	return 0;
+ }
+ static inline int sf2000_elf_copy_identity(struct file *file,
+-		const struct elf_phdr *phdrs, int phnum)
++		const struct elf_phdr *phdrs, int phnum, unsigned long entry)
+ {
+ 	return 0;
+ }
+@@ -1630,7 +1658,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	if (retval)
+ 		goto out;
+ 	retval = sf2000_elf_copy_identity(bprm->file, elf_phdata,
+-		elf_ex->e_phnum);
++		elf_ex->e_phnum, elf_entry);
+ 	sf2000_elf_value("elf-id-copy-final-ret", (unsigned int)retval);
+ 	if (retval)
+ 		goto out;
+-- 
+2.45.0
