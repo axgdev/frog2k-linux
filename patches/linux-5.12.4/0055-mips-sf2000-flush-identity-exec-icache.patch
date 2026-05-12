@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000055 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: flush identity exec icache
+
+The physical device reaches the direct ERL branch marker with EPC in the
+identity-copied /init text, but does not reach the first userspace syscall.
+After copying executable bytes through KSEG1, explicitly flush the instruction
+cache so the first physical fetch observes the copied ELF image.
+---
+ fs/binfmt_elf.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -47,6 +47,7 @@
+ #include <linux/dax.h>
+ #include <linux/uaccess.h>
+ #include <linux/irqflags.h>
++#include <asm/cacheflush.h>
+ #include <asm/cpu.h>
+ #include <asm/hazards.h>
+ #include <asm/mipsregs.h>
+@@ -206,6 +207,8 @@ static int sf2000_elf_copy_identity_segment(struct file *file,
+ 	if (memsz > filesz)
+ 		memset((void *)CKSEG1ADDR(vaddr + filesz), 0, memsz - filesz);
+ 	flush_cache_all();
++	flush_icache_all();
++	flush_icache_range(vaddr, vaddr + memsz);
+ 	sf2000_elf_value("elf-id-done", (unsigned int)vaddr);
+ 	return 0;
+ }
+-- 
+2.45.0

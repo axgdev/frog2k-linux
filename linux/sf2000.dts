@@ -60,6 +60,11 @@
 			no-map;
 		};
 
+		identity_exec: identity-exec@400000 {
+			reg = <0x00400000 0x00400000>;
+			no-map;
+		};
+
 		bootrom_scratch: bootrom-scratch@1000000 {
 			reg = <0x01000000 0x03000000>;
 			no-map;
