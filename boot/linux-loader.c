@@ -33,6 +33,8 @@ typedef unsigned long uintptr;
 #define MAPPING_REG 0xb8800220u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
+#define WDT_BOOT_COUNT 0xff000000u
+#define WDT_BOOT_CONF 100u
 #define BOOTROM_BASE 0xbfc00000u
 #define ROM_F_MOUNT_ADDR 0x8101f044u
 #define ROM_F_OPEN_ADDR 0x8101f0d4u
@@ -54,7 +56,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define LOADER_BUILD_TAG "2026-05-12 uncached-stack-copy"
+#define LOADER_BUILD_TAG "2026-05-12 loader-watchdog"
 
 typedef unsigned long long u64;
 
@@ -514,6 +516,26 @@ static void bootlog_dump_previous_progress(void)
 	u32 start;
 	u32 count;
 
+	bootlog_puts("progress raw addr=");
+	bootlog_hex(PROGRESS_ADDR);
+	bootlog_puts(" magic=");
+	bootlog_hex(progress_log->magic);
+	bootlog_puts(" version=");
+	bootlog_hex(progress_log->version);
+	bootlog_puts(" seq=");
+	bootlog_hex(progress_log->seq);
+	bootlog_puts(" write=");
+	bootlog_hex(progress_log->write_index);
+	bootlog_puts(" wrapped=");
+	bootlog_hex(progress_log->wrapped);
+	bootlog_puts(" reserved0=");
+	bootlog_hex(progress_log->reserved[0]);
+	bootlog_puts(" reserved1=");
+	bootlog_hex(progress_log->reserved[1]);
+	bootlog_puts(" reserved2=");
+	bootlog_hex(progress_log->reserved[2]);
+	bootlog_puts("\n");
+
 	if (progress_log->magic != PROGRESS_MAGIC ||
 	    progress_log->version != PROGRESS_VERSION ||
 	    progress_log->seq == 0)
@@ -628,6 +650,26 @@ static void bootlog_wdt_state(void)
 	bootlog_hex(mmio_read32(WDT0_COUNT));
 	bootlog_puts(" conf=");
 	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
+static void bootlog_wdt_arm(const char *name)
+{
+	mmio_write32(WDT0_COUNT, WDT_BOOT_COUNT);
+	mmio_write8(WDT0_CONF, WDT_BOOT_CONF);
+	progress_mark(name, 3, WDT_BOOT_COUNT);
+
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("wdt armed count=");
+	bootlog_hex(mmio_read32(WDT0_COUNT));
+	bootlog_puts(" conf=");
+	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+	bootlog_puts(" name=");
+	bootlog_puts(name);
 	bootlog_puts("\n");
 	bootlog_flush();
 }
@@ -1145,6 +1187,7 @@ void linux_loader_main(void)
 	disable_interrupts();
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);
+	bootlog_wdt_arm("loader-watchdog-armed");
 	write_status(0);
 	jump_to_kernel(entry, dtb_dest);
 
