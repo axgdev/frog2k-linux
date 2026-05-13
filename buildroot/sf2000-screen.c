@@ -372,28 +372,6 @@ static const char *const panel_control_names[] = {
 	"T04", "T05", "T06"
 };
 
-static const struct pinmux_setting panel_rgb_pads[] = {
-	{ PINPAD_T06, PINMUX_PRGB_R7 },
-	{ PINPAD_T05, PINMUX_PRGB_R6 },
-	{ PINPAD_T04, PINMUX_PRGB_R5 },
-	{ PINPAD_T03, PINMUX_PRGB_R4 },
-	{ PINPAD_T02, PINMUX_PRGB_R3 },
-	{ PINPAD_T14, PINMUX_PRGB_G7 },
-	{ PINPAD_T13, PINMUX_PRGB_G6 },
-	{ PINPAD_T12, PINMUX_PRGB_G5 },
-	{ PINPAD_T11, PINMUX_PRGB_G4 },
-	{ PINPAD_T10, PINMUX_PRGB_G3 },
-	{ PINPAD_T09, PINMUX_PRGB_G2 },
-	{ PINPAD_L06, PINMUX_PRGB_B7 },
-	{ PINPAD_L05, PINMUX_PRGB_B6 },
-	{ PINPAD_L04, PINMUX_PRGB_B5 },
-	{ PINPAD_L03, PINMUX_PRGB_B4 },
-	{ PINPAD_L02, PINMUX_PRGB_B3 },
-	{ PINPAD_L07, PINMUX_PRGB_CLK },
-	{ PINPAD_L09, PINMUX_PRGB_VSYNC },
-	{ PINPAD_L10, PINMUX_PRGB_DE },
-};
-
 static uint32_t mmio_read32(volatile uint8_t *base, uint32_t off)
 {
 	return *(volatile uint32_t *)(base + off);
@@ -678,12 +656,28 @@ static void panel_control_pinmux(void)
 
 static void panel_rgb_pinmux(void)
 {
-	unsigned i;
-
 	panel_lcd_setup_enable();
 	panel_vou_rgb_enable();
-	for (i = 0; i < ARRAY_SIZE(panel_rgb_pads); i++)
-		pinmux_set_pad(panel_rgb_pads[i].pad, panel_rgb_pads[i].mux);
+
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
+		(mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu) |
+		0x06060000u);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x08,
+		(mmio_read32(sysio, PINMUX_T_OFF + 0x08) & 0x000000ffu) |
+		0x06060600u);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x0c,
+		(mmio_read32(sysio, PINMUX_T_OFF + 0x0c) & 0xff000000u) |
+		0x00060606u);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x00,
+		(mmio_read32(sysio, PINMUX_T_OFF + 0x00) & 0x0000ffffu) |
+		0x06060000u);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x04,
+		(mmio_read32(sysio, PINMUX_T_OFF + 0x04) & 0xff000000u) |
+		0x00060606u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x08,
+		(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0xff00ffffu) |
+		0x00060000u);
 }
 
 static void panel_config_outputs(void)
@@ -1087,9 +1081,25 @@ static void draw_text(unsigned x, unsigned y, const char *text, uint16_t fg,
 	}
 }
 
-static void draw_background(void)
+static void draw_background_variant(unsigned variant)
 {
 	unsigned y;
+	uint16_t top;
+	uint16_t bottom;
+
+	if (variant == 1u) {
+		top = rgb565(28, 3, 3);
+		bottom = rgb565(10, 2, 2);
+	} else if (variant == 2u) {
+		top = rgb565(3, 48, 8);
+		bottom = rgb565(1, 18, 4);
+	} else if (variant == 3u) {
+		top = rgb565(3, 12, 30);
+		bottom = rgb565(1, 5, 12);
+	} else {
+		top = rgb565(0, 10, 18);
+		bottom = rgb565(1, 8, 5);
+	}
 
 	for (y = 0; y < HEIGHT; y++) {
 		unsigned x;
@@ -1103,8 +1113,8 @@ static void draw_background(void)
 		}
 	}
 
-	fill_rect(0, 0, WIDTH, 31, rgb565(0, 10, 18));
-	fill_rect(0, 209, WIDTH, 31, rgb565(1, 8, 5));
+	fill_rect(0, 0, WIDTH, 31, top);
+	fill_rect(0, 209, WIDTH, 31, bottom);
 	fill_rect(0, 31, WIDTH, 2, rgb565(31, 46, 0));
 	fill_rect(0, 207, WIDTH, 2, rgb565(31, 46, 0));
 }
@@ -1121,7 +1131,7 @@ static void draw_diag_screen(const char *phase, const char *variant,
 	uint16_t dark = rgb565(0, 4, 6);
 	unsigned i;
 
-	draw_background();
+	draw_background_variant(madctl);
 	draw_text(20, 8, "SF2000 LINUX", yellow, rgb565(0, 10, 18), 3);
 	draw_text(18, 48, "BUILDROOT USERSPACE OK", white, dark, 2);
 	draw_text(18, 72, phase, green, dark, 2);
@@ -1146,14 +1156,25 @@ static void write_desc32(unsigned idx, uint32_t value)
 	((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[idx] = value;
 }
 
-static void build_gma_descriptor(void)
+static uint32_t gma_descriptor_d0(unsigned variant)
+{
+	uint32_t d0 = (6u << 4) | (32u << 16) | (170u << 24);
+
+	if (variant != 2u)
+		d0 |= 1u;
+	if (variant != 1u)
+		d0 |= 1u << 8;
+	return d0;
+}
+
+static void build_gma_descriptor_variant(unsigned variant)
 {
 	unsigned i;
 
 	for (i = 0; i < 16; i++)
 		write_desc32(i, 0);
 
-	write_desc32(0, (6u << 4) | (1u << 8) | (32u << 16) | (170u << 24));
+	write_desc32(0, gma_descriptor_d0(variant));
 	write_desc32(1, 0);
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
@@ -1161,6 +1182,11 @@ static void build_gma_descriptor(void)
 	write_desc32(5, 0xffu | (PITCH << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
+}
+
+static void build_gma_descriptor(void)
+{
+	build_gma_descriptor_variant(0);
 }
 
 static void flush_present_memory(void)
@@ -1218,6 +1244,20 @@ static void log_gma_ready(void)
 	snprintf(line, sizeof(line),
 		"sf2000-screen: gma console ready desc=0x%08x fb=0x%08x %ux%u pitch=%u\n",
 		GMA_DESC_PHYS, GMA_FRAME_PHYS, WIDTH, HEIGHT, PITCH);
+	log_line(line);
+	append_file_log(line);
+}
+
+static void log_gma_regs(const char *name, unsigned variant)
+{
+	char line[192];
+
+	snprintf(line, sizeof(line),
+		"sf2000-screen: %s variant=%u d0=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x line=0x%08x\n",
+		name, variant, gma_descriptor_d0(variant),
+		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
+		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA),
+		mmio_read32(gma, GMA_LINEBUF));
 	log_line(line);
 	append_file_log(line);
 }
@@ -1295,6 +1335,7 @@ static void run_rgb_diag(unsigned *frame)
 static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
+	unsigned last_variant = 99;
 
 	log_line("sf2000-screen: rgb-only diag begin\n");
 	append_file_log("sf2000-screen: rgb-only diag begin\n");
@@ -1305,11 +1346,21 @@ static void run_rgb_only_diag(unsigned *frame)
 	build_gma_descriptor();
 
 	while (!stopping) {
+		unsigned variant = (*frame / 2u) % 3u;
+		char variant_name[24];
+
 		(*frame)++;
-		draw_diag_screen("RGB ONLY NO PANEL BUS", "GMA PRGB", 0,
-			*frame);
+		variant = (*frame / 2u) % 3u;
+		snprintf(variant_name, sizeof(variant_name), "GMA D%u", variant);
+		build_gma_descriptor_variant(variant);
+		draw_diag_screen("RGB ONLY NO PANEL BUS", variant_name,
+			(uint8_t)(variant + 1u), *frame);
 		panel_rgb_pinmux();
 		present_frame();
+		if (variant != last_variant) {
+			log_gma_regs("rgb descriptor cycle", variant);
+			last_variant = variant;
+		}
 		if (!ready_published) {
 			publish_marker("/run/sf2000-screen-ready", "ready\n");
 			log_gma_ready();
