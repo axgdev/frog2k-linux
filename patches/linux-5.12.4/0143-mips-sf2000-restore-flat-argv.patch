@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000143 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Wed, 13 May 2026 07:05:00 +0000
+Subject: [PATCH] mips: sf2000: restore FLAT argv setup
+
+The 0106 hardware log shows the raw bFLT bootstrap executes and then
+successfully execs /sbin/init.  BusyBox is loaded as a second bFLT image,
+but it prints ": applet not found" and exits 127.
+
+That points to the temporary SF2000 NOMMU argv suppression added for the
+earliest raw /init handoff.  It zeroes bprm->argc and bprm->envc for every
+FLAT binary, so BusyBox runs without a usable argv[0] and cannot resolve the
+init applet.
+
+The KSEG0 userspace copy path has since been made functional enough for
+execve to copy /sbin/init, argv, and envp.  Remove the bring-up shortcut and
+let create_flat_tables build the normal bFLT argument table for both the raw
+bootstrap and the Buildroot BusyBox init.
+---
+ fs/binfmt_flat.c | 15 ---------------
+ 1 file changed, 15 deletions(-)
+
+--- a/fs/binfmt_flat.c
++++ b/fs/binfmt_flat.c
+@@ -1072,21 +1072,6 @@ static int load_flat_binary(struct linux_binprm *bprm)
+ 
+ 	/* copy the arg pages onto the stack */
+ 	res = transfer_args_to_stack(bprm, &current->mm->start_stack);
+-#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
+-	/*
+-	 * Early SF2000 NOMMU bring-up only needs the raw bFLT /init to run.
+-	 * Avoid the generic argument string scanner until the MIPS NOMMU user
+-	 * string path is validated on this CPU.
+-	 */
+-	if (!res) {
+-		bprm->argc = 0;
+-		bprm->envc = 0;
+-		current->mm->arg_start = current->mm->start_stack;
+-		current->mm->arg_end = current->mm->start_stack;
+-		current->mm->env_start = current->mm->start_stack;
+-		current->mm->env_end = current->mm->start_stack;
+-	}
+-#endif
+ 	if (!res)
+ 		res = create_flat_tables(bprm, current->mm->start_stack);
+ #endif
+-- 
+2.45.0

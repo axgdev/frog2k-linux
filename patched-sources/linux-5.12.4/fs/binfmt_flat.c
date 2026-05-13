@@ -1071,21 +1071,6 @@ static int load_flat_binary(struct linux_binprm *bprm)
 
 	/* copy the arg pages onto the stack */
 	res = transfer_args_to_stack(bprm, &current->mm->start_stack);
-#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
-	/*
-	 * Early SF2000 NOMMU bring-up only needs the raw bFLT /init to run.
-	 * Avoid the generic argument string scanner until the MIPS NOMMU user
-	 * string path is validated on this CPU.
-	 */
-	if (!res) {
-		bprm->argc = 0;
-		bprm->envc = 0;
-		current->mm->arg_start = current->mm->start_stack;
-		current->mm->arg_end = current->mm->start_stack;
-		current->mm->env_start = current->mm->start_stack;
-		current->mm->env_end = current->mm->start_stack;
-	}
-#endif
 	if (!res)
 		res = create_flat_tables(bprm, current->mm->start_stack);
 #endif
