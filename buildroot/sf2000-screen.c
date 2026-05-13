@@ -1212,6 +1212,36 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
+static void run_rgb_only_diag(unsigned *frame)
+{
+	int ready_published = 0;
+
+	log_line("sf2000-screen: rgb-only diag begin\n");
+	append_file_log("sf2000-screen: rgb-only diag begin\n");
+	panel_lcd_setup_enable();
+	panel_rgb_pinmux();
+	build_gma_descriptor();
+
+	while (!stopping) {
+		(*frame)++;
+		draw_diag_screen("RGB ONLY NO PANEL BUS", "GMA PRGB", 0,
+			*frame);
+		panel_rgb_pinmux();
+		present_frame();
+		if (!ready_published) {
+			publish_marker("/run/sf2000-screen-ready", "ready\n");
+			log_gma_ready();
+			ready_published = 1;
+		}
+		backlight_set(1);
+		sleep_ms(900);
+		backlight_set(0);
+		sleep_ms(70);
+		backlight_set(1);
+		sleep_ms(900);
+	}
+}
+
 int main(int argc, char **argv, char **envp)
 {
 	int fd;
@@ -1248,6 +1278,9 @@ int main(int argc, char **argv, char **envp)
 	startup_backlight_diagnostic();
 
 	build_gma_descriptor();
+	if (!env_is((const char *const *)envp, "SF2000_DIRECT_PANEL", "1"))
+		run_rgb_only_diag(&frame);
+
 	log_line("sf2000-screen: before panel init\n");
 	panel_init_variant(first_variant);
 	log_line("sf2000-screen: after panel init\n");
