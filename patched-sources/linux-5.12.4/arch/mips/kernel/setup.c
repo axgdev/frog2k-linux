@@ -29,6 +29,7 @@
 #include <linux/of_fdt.h>
 #include <linux/dmi.h>
 #include <linux/crash_dump.h>
+#include <linux/pm.h>
 
 #include <asm/addrspace.h>
 #include <asm/bootinfo.h>
@@ -157,24 +158,40 @@ static void sf2000_machine_restart(char *command)
 {
 	volatile u32 *wdt_count = (volatile u32 *)CKSEG1ADDR(0x18818500);
 	volatile u8 *wdt_conf = (volatile u8 *)CKSEG1ADDR(0x18818504);
+	volatile u32 *raw = (volatile u32 *)CKSEG1ADDR(0x01400000);
 
 	(void)command;
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
 
 	pr_emerg("sf2000: watchdog restart\n");
+	sf2000_progress_mark("sf2000-restart-entry", 15, *wdt_conf);
+	raw[48] = 0x51510600;
+	raw[49] = *wdt_count;
+	raw[50] = *wdt_conf;
 	local_irq_disable();
 	*wdt_conf = 0;
 	*wdt_count = SF2000_WDT_RESTART_COUNT;
 	*wdt_conf = SF2000_WDT_RESTART_CONF;
+	raw[51] = 0x51510601;
+	raw[52] = *wdt_count;
+	raw[53] = *wdt_conf;
+	sf2000_progress_mark("sf2000-restart-armed", 15, *wdt_conf);
 	while (1)
 		;
 }
 
+static void sf2000_machine_power_off(void)
+{
+	sf2000_machine_restart("poweroff");
+}
+
 static void __init sf2000_restart_init(void)
 {
-	if (IS_ENABLED(CONFIG_MIPS_SF2000))
+	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
 		_machine_restart = sf2000_machine_restart;
+		pm_power_off = sf2000_machine_power_off;
+	}
 }
 
 int sf2000_rom_handoff_present(void)
