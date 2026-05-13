@@ -37,6 +37,8 @@ extern char **environ;
 #define KSEG1ADDR(x) ((volatile uint8_t *)((uintptr_t)(x) | 0xa0000000u))
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_LCD_SETUP_OFF 0x094u
+#define VOU_HD_MODE 0x000u
+#define VOU_HD_CTRL 0x084u
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_B_OFF 0x4c0u
 #define PINMUX_R_OFF 0x4e0u
@@ -541,13 +543,45 @@ static uint32_t gpio_bit_for_pad(unsigned pad)
 
 static void pinmux_set_pad(unsigned pad, unsigned mux)
 {
-	mmio_write8(sysio, pinmux_off_for_pad(pad), (uint8_t)mux);
+	uint32_t off = pinmux_off_for_pad(pad);
+	uint32_t aligned = off & ~3u;
+	uint32_t shift = (off & 3u) * 8u;
+	uint32_t value = mmio_read32(sysio, aligned);
+
+	value &= ~(0xffu << shift);
+	value |= (uint32_t)(mux & 0xffu) << shift;
+	mmio_write32(sysio, aligned, value);
 }
 
 static void panel_lcd_setup_enable(void)
 {
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF,
 		mmio_read32(sysio, SYS_LCD_SETUP_OFF) | (1u << 16));
+}
+
+static void runtime_watchdog_arm(void)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0;
+	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) = 0xffe64035u;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0x26;
+}
+
+static void runtime_watchdog_disable(void)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0;
+}
+
+static void panel_vou_rgb_enable(void)
+{
+	uint32_t mode;
+
+	mode = mmio_read32(gma, VOU_HD_MODE);
+	mmio_write32(gma, VOU_HD_MODE, (mode & 0xffffff00u) | 0x15u);
+	mmio_write32(gma, VOU_HD_CTRL, mmio_read32(gma, VOU_HD_CTRL) & ~0x100u);
 }
 
 static void gpio_set_pad(unsigned pad, int high)
@@ -647,6 +681,7 @@ static void panel_rgb_pinmux(void)
 	unsigned i;
 
 	panel_lcd_setup_enable();
+	panel_vou_rgb_enable();
 	for (i = 0; i < ARRAY_SIZE(panel_rgb_pads); i++)
 		pinmux_set_pad(panel_rgb_pads[i].pad, panel_rgb_pads[i].mux);
 }
@@ -885,6 +920,51 @@ static int panel_init_variant(const struct panel_variant *variant)
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: panel init done id=0x%06x init=%s\n",
+		panel_id & 0xffffffu, variant->name);
+	log_line(line);
+	append_file_log(line);
+	return 0;
+}
+
+static int panel_init_sf2000_original_order(void)
+{
+	uint32_t panel_id;
+	char line[128];
+	const struct panel_variant *variant = &panel_variants[0];
+
+	if (!panel_enabled)
+		return 0;
+
+	log_line("sf2000-screen: guarded panel init begin\n");
+	append_file_log("sf2000-screen: guarded panel init begin\n");
+	runtime_watchdog_arm();
+	panel_control_pinmux();
+	gpio_config_input(PINPAD_L08);
+	panel_config_outputs();
+	gpio_set_pad(PINPAD_L10, 1);
+	gpio_set_pad(PINPAD_T01, 1);
+	gpio_set_pad(PINPAD_L07, 1);
+	gpio_set_pad(PINPAD_T00, 1);
+	gpio_set_pad(PINPAD_L01, 1);
+	sleep_ms(120);
+	panel_apply_init_sequence(st7789_sf2000_init);
+	panel_cmd(ST7789_DISPON);
+	panel_restart_frame();
+	panel_id = panel_read_id();
+	if ((panel_id & 0xffffffu) == 0x009306u) {
+		log_line("sf2000-screen: guarded panel 009306 reinit\n");
+		panel_reset();
+		panel_config_outputs();
+		gpio_set_pad(PINPAD_L10, 1);
+		gpio_set_pad(PINPAD_T01, 1);
+		gpio_set_pad(PINPAD_L07, 1);
+		gpio_set_pad(PINPAD_T00, 1);
+		panel_apply_init_sequence(st7789_009306_init);
+		panel_cmd(ST7789_DISPON);
+		panel_restart_frame();
+	}
+	snprintf(line, sizeof(line),
+		"sf2000-screen: guarded panel init done id=0x%06x init=%s\n",
 		panel_id & 0xffffffu, variant->name);
 	log_line(line);
 	append_file_log(line);
@@ -1219,6 +1299,8 @@ static void run_rgb_only_diag(unsigned *frame)
 	log_line("sf2000-screen: rgb-only diag begin\n");
 	append_file_log("sf2000-screen: rgb-only diag begin\n");
 	panel_lcd_setup_enable();
+	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
+		panel_init_sf2000_original_order();
 	panel_rgb_pinmux();
 	build_gma_descriptor();
 
@@ -1239,7 +1321,9 @@ static void run_rgb_only_diag(unsigned *frame)
 		sleep_ms(70);
 		backlight_set(1);
 		sleep_ms(900);
+		watchdog_pet();
 	}
+	runtime_watchdog_disable();
 }
 
 int main(int argc, char **argv, char **envp)
