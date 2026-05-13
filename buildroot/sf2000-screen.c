@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 
+extern char **environ;
+
 #define WIDTH 320u
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
@@ -592,13 +594,13 @@ static void startup_backlight_diagnostic(void)
 
 	backlight_set(0);
 	status_led_set(0);
-	sleep_ms(4000);
+	sleep_ms(650);
 	backlight_set(1);
 	status_led_set(1);
-	sleep_ms(3000);
+	sleep_ms(650);
 	backlight_set(0);
 	status_led_set(0);
-	sleep_ms(4000);
+	sleep_ms(650);
 	backlight_set(1);
 	status_led_set(0);
 
@@ -1139,10 +1141,15 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
-int main(void)
+int main(int argc, char **argv, char **envp)
 {
 	int fd;
 	unsigned frame = 0;
+
+	(void)argc;
+	(void)argv;
+	if (envp)
+		environ = envp;
 	const struct panel_variant *first_variant = &panel_variants[0];
 
 	if (getenv("SF2000_PANEL") && strcmp(getenv("SF2000_PANEL"), "0") == 0)
