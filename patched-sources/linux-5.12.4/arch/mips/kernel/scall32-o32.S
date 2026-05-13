@@ -33,9 +33,26 @@ NESTED(handle_sys, PT_SIZE, sp)
 	sw	v0, 24(k0)
 	mfc0	k1, CP0_EPC
 	sw	k1, 28(k0)
+	lw	k1, PT_STATUS(sp)
+	andi	k1, ST0_ERL
+	bnez	k1, sf2000_erl_syscall_irq_off
+	 nop
 #endif
 	TRACE_IRQS_ON_RELOAD
 	STI
+#ifdef CONFIG_MIPS_SF2000
+	b	sf2000_after_syscall_irq_state
+	 nop
+sf2000_erl_syscall_irq_off:
+	li	k0, 0xa1400000
+	li	k1, 0x51510430
+	sw	k1, 20(k0)
+	lw	k1, PT_STATUS(sp)
+	sw	k1, 24(k0)
+	mfc0	k1, CP0_STATUS
+	sw	k1, 28(k0)
+sf2000_after_syscall_irq_state:
+#endif
 	.set	at
 
 	lw	t1, PT_EPC(sp)		# skip syscall on return
