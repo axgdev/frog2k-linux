@@ -1,0 +1,27 @@
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] mips: sf2000: extend syscall breadcrumbs
+
+The 0112 retained RAM log reaches BusyBox init, but the generic syscall
+breadcrumb cap stops shortly after BusyBox opens and closes /dev/null.  That is
+exactly where init scripts and the SF2000 helper programs should start.
+
+Raise the cap enough to cover the next userspace phase without making every
+long-running heartbeat syscall consume the whole progress ring.
+---
+ arch/mips/kernel/setup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -558,7 +558,7 @@ void sf2000_syscall_mark(unsigned int nr)
+ 
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
+-	if (count >= 64)
++	if (count >= 256)
+ 		return;
+ 
+ 	count++;
+-- 
+2.45.0

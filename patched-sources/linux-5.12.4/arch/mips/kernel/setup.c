@@ -555,7 +555,7 @@ void sf2000_syscall_mark(unsigned int nr)
 
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
-	if (count >= 64)
+	if (count >= 256)
 		return;
 
 	count++;
