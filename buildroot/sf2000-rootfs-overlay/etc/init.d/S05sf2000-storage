@@ -23,6 +23,11 @@ dump_file()
 
 case "$1" in
 	start)
+		waited=0
+		while [ "$waited" -lt 5 ] && [ ! -e /run/sf2000-screen-ready ]; do
+			sleep 1
+			waited=$((waited + 1))
+		done
 		log "probe begin"
 		dump_file proc-partitions /proc/partitions
 		log "sys-block $(ls /sys/block 2>/dev/null | tr '\n' ' ')"

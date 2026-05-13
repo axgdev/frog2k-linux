@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <errno.h>
+#include <linux/input.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,6 +21,7 @@ extern char **environ;
 #define CONSOLE_COLS 52u
 #define CONSOLE_ROWS 28u
 #define CONSOLE_LINE_LEN (CONSOLE_COLS + 1u)
+#define CONSOLE_SCROLLBACK_LINES 512u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -89,6 +91,8 @@ extern char **environ;
 #define PINPAD_L08 8u
 #define PINPAD_L09 9u
 #define PINPAD_L10 10u
+#define PINPAD_L23 23u
+#define PINPAD_L24 24u
 #define PINPAD_L25 25u
 #define PINPAD_R05 69u
 #define PINPAD_T00 96u
@@ -140,6 +144,23 @@ extern char **environ;
 #define ST7789_RAMCTRL 0xb0u
 #define ST7789_RGBCTRL 0xb1u
 
+#ifndef BTN_DPAD_UP
+#define BTN_DPAD_UP 0x220
+#define BTN_DPAD_DOWN 0x221
+#define BTN_DPAD_LEFT 0x222
+#define BTN_DPAD_RIGHT 0x223
+#endif
+
+#define KEY_SHIFTER_LOAD_SPINS 300u
+#define KEY_SHIFTER_SETTLE_SPINS 300u
+#define KEY_SHIFTER_CLOCK_LOW_SPINS 220u
+#define KEY_SHIFTER_CLOCK_HIGH_SPINS 220u
+#define CONSOLE_INPUT_FDS 4u
+#define CONSOLE_BTN_UP 0x01u
+#define CONSOLE_BTN_DOWN 0x02u
+#define CONSOLE_BTN_LEFT 0x04u
+#define CONSOLE_BTN_RIGHT 0x08u
+
 static volatile uint8_t *gma_ram;
 static volatile uint8_t *gma;
 static volatile uint8_t *sysio;
@@ -147,8 +168,10 @@ static volatile int stopping;
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
-static char console_lines[CONSOLE_ROWS][CONSOLE_LINE_LEN];
+static char console_lines[CONSOLE_SCROLLBACK_LINES][CONSOLE_LINE_LEN];
 static unsigned console_line_count;
+static unsigned console_line_start;
+static unsigned console_view_offset;
 
 static uint16_t *framebuffer(void);
 static void panel_restart_frame(void);
@@ -495,6 +518,14 @@ static void sleep_ms(unsigned msec)
 	watchdog_pet();
 }
 
+static void sleep_spins(unsigned count)
+{
+	volatile unsigned spin;
+
+	for (spin = 0; spin < count; spin++)
+		__asm__ volatile ("" ::: "memory");
+}
+
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
 		uint32_t size, const char *name)
 {
@@ -721,6 +752,32 @@ static void status_led_set(int on)
 		return;
 	gpio_config_output(PINPAD_L25);
 	gpio_set_pad(PINPAD_L25, on);
+}
+
+static uint32_t scan_keypad_sf2000(void)
+{
+	uint32_t raw_mask = 0;
+	unsigned i;
+
+	gpio_config_output(PINPAD_L24);
+	gpio_set_pad(PINPAD_L24, 1);
+	gpio_config_output(PINPAD_L23);
+	gpio_set_pad(PINPAD_L23, 0);
+	sleep_spins(KEY_SHIFTER_LOAD_SPINS);
+	gpio_config_input(PINPAD_L23);
+	sleep_spins(KEY_SHIFTER_SETTLE_SPINS);
+
+	for (i = 0; i < 12u; i++) {
+		if (1 ^ gpio_get_pad(PINPAD_L23))
+			raw_mask |= 1u << i;
+
+		gpio_set_pad(PINPAD_L24, 0);
+		sleep_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
+		gpio_set_pad(PINPAD_L24, 1);
+		sleep_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
+	}
+
+	return raw_mask;
 }
 
 static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
@@ -1341,18 +1398,38 @@ static void console_clear(void)
 {
 	unsigned row;
 
-	for (row = 0; row < CONSOLE_ROWS; row++)
+	for (row = 0; row < CONSOLE_SCROLLBACK_LINES; row++)
 		console_lines[row][0] = 0;
 	console_line_count = 0;
+	console_line_start = 0;
+	console_view_offset = 0;
 }
 
-static void console_scroll_one(void)
+static unsigned console_visible_lines(void)
 {
-	unsigned row;
+	return console_line_count < CONSOLE_ROWS ? console_line_count :
+		CONSOLE_ROWS;
+}
 
-	for (row = 1; row < CONSOLE_ROWS; row++)
-		memcpy(console_lines[row - 1], console_lines[row], CONSOLE_LINE_LEN);
-	console_lines[CONSOLE_ROWS - 1][0] = 0;
+static unsigned console_max_view_offset(void)
+{
+	unsigned visible = console_visible_lines();
+
+	return console_line_count > visible ? console_line_count - visible : 0;
+}
+
+static char *console_line_at(unsigned logical)
+{
+	return console_lines[(console_line_start + logical) %
+		CONSOLE_SCROLLBACK_LINES];
+}
+
+static void console_clamp_view(void)
+{
+	unsigned max_offset = console_max_view_offset();
+
+	if (console_view_offset > max_offset)
+		console_view_offset = max_offset;
 }
 
 static void console_add_line(const char *line)
@@ -1360,11 +1437,13 @@ static void console_add_line(const char *line)
 	char *dst;
 	unsigned len = 0;
 
-	if (console_line_count >= CONSOLE_ROWS) {
-		console_scroll_one();
-		dst = console_lines[CONSOLE_ROWS - 1];
+	if (console_line_count >= CONSOLE_SCROLLBACK_LINES) {
+		dst = console_line_at(0);
+		console_line_start = (console_line_start + 1u) %
+			CONSOLE_SCROLLBACK_LINES;
 	} else {
-		dst = console_lines[console_line_count++];
+		dst = console_line_at(console_line_count);
+		console_line_count++;
 	}
 
 	while (line[len] && line[len] != '\n' && line[len] != '\r' &&
@@ -1375,6 +1454,7 @@ static void console_add_line(const char *line)
 		len++;
 	}
 	dst[len] = 0;
+	console_clamp_view();
 }
 
 static void console_add_text(const char *text, size_t len)
@@ -1420,19 +1500,196 @@ static void draw_console_screen(unsigned frame)
 	uint16_t bg = rgb565(0, 2, 3);
 	uint16_t bar = rgb565(0, 10, 14);
 	char title[48];
+	unsigned visible = console_visible_lines();
+	unsigned start = console_line_count > visible ?
+		console_line_count - visible : 0;
 	unsigned row;
+
+	console_clamp_view();
+	if (console_view_offset < start)
+		start -= console_view_offset;
+	else
+		start = 0;
 
 	fill_rect(0, 0, WIDTH, HEIGHT, bg);
 	fill_rect(0, 0, WIDTH, 12, bar);
-	snprintf(title, sizeof(title), "SF2000 LINUX CONSOLE %06u", frame);
+	snprintf(title, sizeof(title), "SF2000 LOG %06u +%03u/%03u",
+		frame, console_view_offset, console_max_view_offset());
 	draw_text(2, 2, title, rgb565(31, 63, 20), bar, 1);
-	for (row = 0; row < console_line_count; row++) {
+	for (row = 0; row < visible; row++) {
 		unsigned y = 16u + row * 8u;
-		const char *line = console_lines[row];
-		uint16_t color = row + 4u >= console_line_count ? fg : dim;
+		const char *line = console_line_at(start + row);
+		uint16_t color = row + 4u >= visible ? fg : dim;
 
 		draw_text(2, y, line, color, bg, 1);
 	}
+}
+
+static int console_scroll_delta(int delta)
+{
+	unsigned old_offset = console_view_offset;
+	unsigned max_offset;
+
+	console_clamp_view();
+	max_offset = console_max_view_offset();
+
+	if (delta > 0) {
+		unsigned step = (unsigned)delta;
+
+		if (step > max_offset - console_view_offset)
+			console_view_offset = max_offset;
+		else
+			console_view_offset += step;
+	} else if (delta < 0) {
+		unsigned step = (unsigned)(-delta);
+
+		if (step > console_view_offset)
+			console_view_offset = 0;
+		else
+			console_view_offset -= step;
+	}
+
+	return console_view_offset != old_offset;
+}
+
+static int console_handle_buttons(uint32_t buttons)
+{
+	int changed = 0;
+	int page = (int)CONSOLE_ROWS - 3;
+
+	if (buttons & CONSOLE_BTN_UP)
+		changed |= console_scroll_delta(1);
+	if (buttons & CONSOLE_BTN_DOWN)
+		changed |= console_scroll_delta(-1);
+	if (buttons & CONSOLE_BTN_LEFT)
+		changed |= console_scroll_delta(page);
+	if (buttons & CONSOLE_BTN_RIGHT)
+		changed |= console_scroll_delta(-page);
+	return changed;
+}
+
+static uint32_t console_button_for_key(uint16_t code)
+{
+	if (code == BTN_DPAD_UP || code == KEY_UP)
+		return CONSOLE_BTN_UP;
+	if (code == BTN_DPAD_DOWN || code == KEY_DOWN)
+		return CONSOLE_BTN_DOWN;
+	if (code == BTN_DPAD_LEFT || code == KEY_LEFT)
+		return CONSOLE_BTN_LEFT;
+	if (code == BTN_DPAD_RIGHT || code == KEY_RIGHT)
+		return CONSOLE_BTN_RIGHT;
+	return 0;
+}
+
+static void console_input_init_fds(int fds[CONSOLE_INPUT_FDS])
+{
+	unsigned i;
+
+	for (i = 0; i < CONSOLE_INPUT_FDS; i++)
+		fds[i] = -1;
+}
+
+static int console_input_has_fd(const int fds[CONSOLE_INPUT_FDS])
+{
+	unsigned i;
+
+	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
+		if (fds[i] >= 0)
+			return 1;
+	}
+	return 0;
+}
+
+static void console_input_close_fds(int fds[CONSOLE_INPUT_FDS])
+{
+	unsigned i;
+
+	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
+		if (fds[i] >= 0)
+			close(fds[i]);
+		fds[i] = -1;
+	}
+}
+
+static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
+{
+	char path[] = "/dev/input/event0";
+	unsigned i;
+
+	console_input_close_fds(fds);
+	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
+		path[16] = (char)('0' + i);
+		fds[i] = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	}
+	if (console_input_has_fd(fds))
+		console_add_line("dpad scroll: evdev up/down left/right");
+	else
+		console_add_line("dpad scroll: raw gpio fallback");
+}
+
+static int console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS])
+{
+	struct input_event ev;
+	unsigned i;
+	int changed = 0;
+
+	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
+		if (fds[i] < 0)
+			continue;
+		while (read(fds[i], &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+			uint32_t button;
+
+			if (ev.type != EV_KEY || ev.value == 0)
+				continue;
+			button = console_button_for_key(ev.code);
+			if (button)
+				changed |= console_handle_buttons(button);
+		}
+	}
+	return changed;
+}
+
+static uint32_t console_buttons_from_raw_keypad(uint32_t raw)
+{
+	uint32_t buttons = 0;
+
+	if (raw & (1u << 8))
+		buttons |= CONSOLE_BTN_UP;
+	if (raw & (1u << 9))
+		buttons |= CONSOLE_BTN_DOWN;
+	if (raw & (1u << 10))
+		buttons |= CONSOLE_BTN_LEFT;
+	if (raw & (1u << 11))
+		buttons |= CONSOLE_BTN_RIGHT;
+	return buttons;
+}
+
+static int console_poll_raw_buttons(void)
+{
+	static uint32_t stable;
+	static uint32_t previous_raw;
+	static unsigned raw_count;
+	uint32_t raw = scan_keypad_sf2000();
+	uint32_t buttons;
+	uint32_t pressed;
+
+	if (raw == previous_raw) {
+		if (raw_count < 3u)
+			raw_count++;
+	} else {
+		previous_raw = raw;
+		raw_count = 0;
+	}
+
+	if (raw_count < 2u || raw == stable)
+		return 0;
+
+	buttons = console_buttons_from_raw_keypad(raw);
+	pressed = buttons & ~console_buttons_from_raw_keypad(stable);
+	stable = raw;
+	if (!pressed)
+		return 0;
+	return console_handle_buttons(pressed);
 }
 
 static void write_desc32(unsigned idx, uint32_t value)
@@ -1640,8 +1897,10 @@ static void run_rgb_diag(unsigned *frame)
 static void run_direct_console(unsigned *frame)
 {
 	char buf[768];
+	int input_fds[CONSOLE_INPUT_FDS];
 	int fd;
 	unsigned idle = 0;
+	unsigned input_retry = 0;
 
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
@@ -1653,9 +1912,10 @@ static void run_direct_console(unsigned *frame)
 	console_clear();
 	console_add_line("sf2000 linux direct lcd console");
 	console_add_line("reading /dev/kmsg");
+	console_input_init_fds(input_fds);
+	console_input_open_fds(input_fds);
 	draw_console_screen(++*frame);
 	panel_push_frame(0);
-	publish_marker("/run/sf2000-screen-ready", "ready\n");
 	log_gma_ready();
 
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -1664,6 +1924,7 @@ static void run_direct_console(unsigned *frame)
 		draw_console_screen(++*frame);
 		panel_push_frame(0);
 	}
+	publish_marker("/run/sf2000-screen-ready", "ready\n");
 
 	while (!stopping) {
 		ssize_t got = -1;
@@ -1681,6 +1942,17 @@ static void run_direct_console(unsigned *frame)
 			} while (got > 0);
 		}
 
+		if (console_input_has_fd(input_fds)) {
+			changed |= console_poll_evdev_buttons(input_fds);
+		} else {
+			changed |= console_poll_raw_buttons();
+			if (++input_retry >= 25u) {
+				console_input_open_fds(input_fds);
+				input_retry = 0;
+				changed = 1;
+			}
+		}
+
 		if (changed || idle >= 8u) {
 			draw_console_screen(++*frame);
 			panel_push_frame(0);
@@ -1693,6 +1965,7 @@ static void run_direct_console(unsigned *frame)
 
 	if (fd >= 0)
 		close(fd);
+	console_input_close_fds(input_fds);
 	runtime_watchdog_disable();
 }
 
