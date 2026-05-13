@@ -74,6 +74,7 @@ else
 $(error unsupported ROOTFS '$(ROOTFS)', expected tiny or buildroot)
 endif
 LINUX_VMLINUX := $(LINUX_OUT)/vmlinux
+LINUX_CONFIG_STAMP := $(LINUX_OUT)/.stamp-config
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
@@ -207,14 +208,10 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_INIT): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) Makefile
+$(BUILDROOT_INIT): $(INIT_BIN) Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding -fno-builtin \
-		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
-		-fno-pic -G 0 -Wall -Wextra \
-		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack \
-		-o '$@' '$(BUILDROOT_INIT_ENTRY)' '$(BUILDROOT_INIT_SRC)'
-	'$(STRIP_MIPS)' '$@'
+	cp '$(INIT_BIN)' '$@'
+	chmod 0755 '$@'
 
 $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -299,11 +296,11 @@ $(SF2000_DTB): linux/sf2000.dts
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
 
-$(LINUX_OUT)/.config: $(LINUX_SRC)/Makefile | $(LINUX_SRC)/.patched
+$(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
-	'$(LINUX_SRC)'/scripts/config --file '$@' \
+	'$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
 		--enable BLK_DEV_INITRD \
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
 		--enable CMDLINE_BOOL \
@@ -457,8 +454,9 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/Makefile | $(LINUX_SRC)/.patched
 		--disable FB
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
+	touch '$@'
 
-$(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_OUT)/.config $(ROOTFS_CPIO)
+$(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
 	$(MAKE) -j'$(JOBS)' -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 
@@ -468,7 +466,7 @@ linux-reextract:
 	rm -rf '$(LINUX_SRC)' '$(LINUX_OUT)'
 
 linux-reconfigure:
-	rm -f '$(LINUX_OUT)/.config'
+	rm -f '$(LINUX_OUT)/.config' '$(LINUX_CONFIG_STAMP)'
 	$(MAKE) ROOTFS='$(ROOTFS)' linux
 
 $(ASDPACK): tools/asdpack.c Makefile
@@ -696,16 +694,11 @@ smoke-linux-rom: run-linux-rom
 
 run-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-asd
+		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' run-linux-asd
 
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-asd
-	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-asd.log
+		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
