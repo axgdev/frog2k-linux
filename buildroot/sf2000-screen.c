@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <fcntl.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,9 @@ extern char **environ;
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define CONSOLE_COLS 52u
+#define CONSOLE_ROWS 28u
+#define CONSOLE_LINE_LEN (CONSOLE_COLS + 1u)
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -143,6 +147,8 @@ static volatile int stopping;
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
+static char console_lines[CONSOLE_ROWS][CONSOLE_LINE_LEN];
+static unsigned console_line_count;
 
 static uint16_t *framebuffer(void);
 static void panel_restart_frame(void);
@@ -1331,6 +1337,104 @@ static void draw_solid_rgb565_screen(unsigned variant)
 		fb[i] = color;
 }
 
+static void console_clear(void)
+{
+	unsigned row;
+
+	for (row = 0; row < CONSOLE_ROWS; row++)
+		console_lines[row][0] = 0;
+	console_line_count = 0;
+}
+
+static void console_scroll_one(void)
+{
+	unsigned row;
+
+	for (row = 1; row < CONSOLE_ROWS; row++)
+		memcpy(console_lines[row - 1], console_lines[row], CONSOLE_LINE_LEN);
+	console_lines[CONSOLE_ROWS - 1][0] = 0;
+}
+
+static void console_add_line(const char *line)
+{
+	char *dst;
+	unsigned len = 0;
+
+	if (console_line_count >= CONSOLE_ROWS) {
+		console_scroll_one();
+		dst = console_lines[CONSOLE_ROWS - 1];
+	} else {
+		dst = console_lines[console_line_count++];
+	}
+
+	while (line[len] && line[len] != '\n' && line[len] != '\r' &&
+			len < CONSOLE_COLS) {
+		char ch = line[len];
+
+		dst[len] = (ch >= 32 && ch <= 126) ? ch : ' ';
+		len++;
+	}
+	dst[len] = 0;
+}
+
+static void console_add_text(const char *text, size_t len)
+{
+	static char partial[CONSOLE_LINE_LEN];
+	static unsigned partial_len;
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		char ch = text[i];
+
+		if (ch == '\r')
+			continue;
+		if (ch == '\n' || partial_len >= CONSOLE_COLS) {
+			partial[partial_len] = 0;
+			console_add_line(partial);
+			partial_len = 0;
+			if (ch == '\n')
+				continue;
+		}
+		if (ch >= 32 && ch <= 126)
+			partial[partial_len++] = ch;
+		else if (ch == '\t')
+			partial[partial_len++] = ' ';
+	}
+}
+
+static void console_add_kmsg_record(const char *record, size_t len)
+{
+	size_t i = 0;
+
+	while (i < len && record[i] != ';')
+		i++;
+	if (i < len && record[i] == ';')
+		i++;
+	console_add_text(record + i, len - i);
+}
+
+static void draw_console_screen(unsigned frame)
+{
+	uint16_t fg = rgb565(26, 58, 26);
+	uint16_t dim = rgb565(12, 32, 22);
+	uint16_t bg = rgb565(0, 2, 3);
+	uint16_t bar = rgb565(0, 10, 14);
+	char title[48];
+	unsigned row;
+
+	fill_rect(0, 0, WIDTH, HEIGHT, bg);
+	fill_rect(0, 0, WIDTH, 12, bar);
+	snprintf(title, sizeof(title), "SF2000 LINUX CONSOLE %06u", frame);
+	draw_text(2, 2, title, rgb565(31, 63, 20), bar, 1);
+	for (row = 0; row < console_line_count; row++) {
+		unsigned y = 16u + row * 8u;
+		const char *line = console_lines[row];
+		uint16_t color = row + 4u >= console_line_count ? fg : dim;
+
+		draw_text(2, y, line, color, bg, 1);
+	}
+}
+
 static void write_desc32(unsigned idx, uint32_t value)
 {
 	((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[idx] = value;
@@ -1533,6 +1637,65 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
+static void run_direct_console(unsigned *frame)
+{
+	char buf[768];
+	int fd;
+	unsigned idle = 0;
+
+	log_line("sf2000-screen: direct text console begin\n");
+	append_file_log("sf2000-screen: direct text console begin\n");
+
+	panel_lcd_setup_enable();
+	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
+		panel_init_sf2000_original_order();
+
+	console_clear();
+	console_add_line("sf2000 linux direct lcd console");
+	console_add_line("reading /dev/kmsg");
+	draw_console_screen(++*frame);
+	panel_push_frame(0);
+	publish_marker("/run/sf2000-screen-ready", "ready\n");
+	log_gma_ready();
+
+	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) {
+		console_add_line("open /dev/kmsg failed");
+		draw_console_screen(++*frame);
+		panel_push_frame(0);
+	}
+
+	while (!stopping) {
+		ssize_t got = -1;
+		int changed = 0;
+
+		if (fd >= 0) {
+			do {
+				got = read(fd, buf, sizeof(buf) - 1u);
+				if (got > 0) {
+					buf[got] = 0;
+					console_add_kmsg_record(buf, (size_t)got);
+					changed = 1;
+					watchdog_pet();
+				}
+			} while (got > 0);
+		}
+
+		if (changed || idle >= 8u) {
+			draw_console_screen(++*frame);
+			panel_push_frame(0);
+			idle = 0;
+		} else {
+			idle++;
+		}
+		sleep_ms(250);
+	}
+
+	if (fd >= 0)
+		close(fd);
+	runtime_watchdog_disable();
+}
+
 static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
@@ -1650,8 +1813,10 @@ int main(int argc, char **argv, char **envp)
 	startup_backlight_diagnostic();
 
 	build_gma_descriptor();
-	if (!env_is((const char *const *)envp, "SF2000_DIRECT_PANEL", "1"))
+	if (env_is((const char *const *)envp, "SF2000_RGB_DIAG", "1"))
 		run_rgb_only_diag(&frame);
+	else
+		run_direct_console(&frame);
 
 	log_line("sf2000-screen: before panel init\n");
 	panel_init_variant(first_variant);
