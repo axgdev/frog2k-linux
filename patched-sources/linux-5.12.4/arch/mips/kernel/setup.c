@@ -406,7 +406,7 @@ static void sf2000_live_hex(char *buf, unsigned int *pos, unsigned int value)
 		sf2000_live_putc(buf, pos, digits[(value >> shift) & 0xf]);
 }
 
-static void sf2000_live_progress_write(const char *name, unsigned int kind,
+static void __attribute__((unused)) sf2000_live_progress_write(const char *name, unsigned int kind,
 	unsigned int value, unsigned int seq)
 {
 	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
@@ -545,7 +545,6 @@ void sf2000_progress_mark(const char *name, unsigned int kind,
 	}
 	log->write_index = index;
 	log->seq = seq;
-	sf2000_live_progress_write(name, kind, value, seq);
 	sf2000_watchdog_pet();
 }
 EXPORT_SYMBOL(sf2000_progress_mark);

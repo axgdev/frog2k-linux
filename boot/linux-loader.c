@@ -60,7 +60,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0111-live-log-sector"
+#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0112-direct-userspace-mmio"
 
 typedef unsigned long long u64;
 
@@ -239,6 +239,7 @@ static struct fatfs log_fs;
 static struct fil log_file;
 static u8 log_sector[LOG_SECTOR_SIZE];
 static u8 log_fat_sector[LOG_SECTOR_SIZE];
+static u8 log_live_sector[LOG_SECTOR_SIZE];
 static u32 log_fat_lba = 0xffffffffu;
 static u32 log_sector_index = 0xffffffffu;
 static u32 log_pos;
@@ -626,6 +627,49 @@ static void bootlog_dump_previous_progress(void)
 			(start + i) % PROGRESS_ENTRIES]);
 }
 
+static void bootlog_dump_previous_live_sector(void)
+{
+	u32 sector_index;
+	u32 lba;
+	u32 i;
+
+	if (!log_ready || log_limit < LOG_SECTOR_SIZE * 2u)
+		return;
+
+	sector_index = log_limit / LOG_SECTOR_SIZE;
+	if (sector_index == 0)
+		return;
+	sector_index--;
+
+	if (log_file_lba(sector_index, &lba) != 0)
+		return;
+	if (rom_disk_read(log_fs.pdrv, log_live_sector, lba, 1) != 0)
+		return;
+
+	bootlog_puts("previous live sector index=");
+	bootlog_hex(sector_index);
+	bootlog_puts(" lba=");
+	bootlog_hex(lba);
+	bootlog_puts(" first=");
+	bootlog_hex(le32(log_live_sector));
+	bootlog_puts("\n");
+
+	if (log_live_sector[0] == 0)
+		return;
+
+	bootlog_puts("previous live text begin\n");
+	for (i = 0; i < LOG_SECTOR_SIZE && log_live_sector[i] != 0; i++) {
+		char ch = (char)log_live_sector[i];
+
+		if (ch == '\n' || ch == '\r' || ch == '\t' ||
+		    (ch >= ' ' && ch <= '~'))
+			bootlog_putc(ch);
+		else
+			bootlog_putc('.');
+	}
+	bootlog_puts("\nprevious live text end\n");
+}
+
 static void bootlog_init(void)
 {
 	int rc;
@@ -659,6 +703,7 @@ static void bootlog_init(void)
 	bootlog_puts("loader build=");
 	bootlog_puts(LOADER_BUILD_TAG);
 	bootlog_puts("\n");
+	bootlog_dump_previous_live_sector();
 	bootlog_dump_previous_progress();
 	bootlog_flush();
 }

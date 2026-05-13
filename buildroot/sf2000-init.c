@@ -22,6 +22,7 @@ typedef unsigned int size_t;
 
 #define SYSIO_BASE_PHYS 0x18800000UL
 #define SYSIO_SIZE 0x1000UL
+#define KSEG1ADDR(x) ((volatile unsigned char *)((unsigned long)(x) | 0xa0000000UL))
 #define PINMUX_L_OFF 0x4a0UL
 #define PINMUX_R_OFF 0x4e0UL
 #define GPIO_L_OUT_OFF 0x54UL
@@ -209,14 +210,15 @@ static int early_watchdog_disable(void)
 	long fd;
 
 	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
-	if (fd < 0)
-		return -1;
-
-	wdt = sys_mmap2(0, WDT_MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
-		fd, WDT_MAP_BASE_PHYS);
-	syscall1(SYS_close, fd);
-	if ((long)wdt < 0)
-		return -2;
+	if (fd < 0) {
+		wdt = KSEG1ADDR(WDT_MAP_BASE_PHYS);
+	} else {
+		wdt = sys_mmap2(0, WDT_MAP_SIZE, PROT_READ | PROT_WRITE,
+			MAP_SHARED, fd, WDT_MAP_BASE_PHYS);
+		syscall1(SYS_close, fd);
+		if ((long)wdt < 0)
+			wdt = KSEG1ADDR(WDT_MAP_BASE_PHYS);
+	}
 
 	mmio_write32(wdt, WDT_REG_OFF + WDT_COUNT_OFF, 0);
 	mmio_write8(wdt, WDT_REG_OFF + WDT_CONF_OFF, 0);
@@ -264,14 +266,15 @@ static int visible_userspace_stage(void)
 	unsigned int i;
 
 	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
-	if (fd < 0)
-		return -1;
-
-	sysio = sys_mmap2(0, SYSIO_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
-		fd, SYSIO_BASE_PHYS);
-	syscall1(SYS_close, fd);
-	if ((long)sysio < 0)
-		return -2;
+	if (fd < 0) {
+		sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+	} else {
+		sysio = sys_mmap2(0, SYSIO_SIZE, PROT_READ | PROT_WRITE,
+			MAP_SHARED, fd, SYSIO_BASE_PHYS);
+		syscall1(SYS_close, fd);
+		if ((long)sysio < 0)
+			sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+	}
 
 	userspace_backlight_set(sysio, 1);
 	userspace_status_led_set(sysio, 0);

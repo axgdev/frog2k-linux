@@ -1,0 +1,38 @@
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] mips: sf2000: avoid ROM disk writes from progress marks
+
+The 0111 image proved that the board no longer reboots after raw /init disables
+WDT0, but the reserved live sector in log.txt stayed zero.  Calling the ROM SD
+writer from the generic progress path is still too risky once Linux is running:
+the first post-WDT syscall can stall before it leaves any useful on-card trace.
+
+Keep the live-sector support code in place while we debug the safer write
+handoff, but do not invoke it from sf2000_progress_mark().  The next diagnostic
+step uses direct userspace MMIO so the screen, heartbeat, and pad helpers do not
+depend on /dev/mem in a NOMMU kernel.
+---
+ arch/mips/kernel/setup.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -381,7 +381,7 @@ static void sf2000_live_hex(char *buf, unsigned int *pos, unsigned int value)
+ 		sf2000_live_putc(buf, pos, digits[(value >> shift) & 0xf]);
+ }
+ 
+-static void sf2000_live_progress_write(const char *name, unsigned int kind,
++static void __attribute__((unused)) sf2000_live_progress_write(const char *name, unsigned int kind,
+ 	unsigned int value, unsigned int seq)
+ {
+ 	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
+@@ -545,7 +545,6 @@ void sf2000_progress_mark(const char *name, unsigned int kind,
+ 	}
+ 	log->write_index = index;
+ 	log->seq = seq;
+-	sf2000_live_progress_write(name, kind, value, seq);
+ 	sf2000_watchdog_pet();
+ }
+ EXPORT_SYMBOL(sf2000_progress_mark);
+-- 
+2.45.0

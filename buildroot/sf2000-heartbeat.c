@@ -13,6 +13,7 @@
 
 #define SYSIO_BASE_PHYS 0x18800000u
 #define SYSIO_SIZE 0x1000u
+#define KSEG1ADDR(x) ((volatile uint8_t *)((uintptr_t)(x) | 0xa0000000u))
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_R_OFF 0x4e0u
 #define GPIO_L_OUT_OFF 0x54u
@@ -127,17 +128,19 @@ static int map_sysio(void)
 	int fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
 
 	if (fd < 0) {
-		perror("open /dev/mem");
-		return -1;
+		log_line("sf2000-heartbeat: using direct SYSIO mapping\n");
+		sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+		return 0;
 	}
 
 	sysio = mmap(NULL, SYSIO_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
 		fd, SYSIO_BASE_PHYS);
 	close(fd);
 	if (sysio == MAP_FAILED) {
-		sysio = NULL;
 		perror("mmap sysio");
-		return -1;
+		sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+		log_line("sf2000-heartbeat: using direct SYSIO mapping\n");
+		return 0;
 	}
 
 	return 0;
@@ -184,7 +187,7 @@ int main(void)
 
 	backlight_set(1);
 	status_led_set(0);
-	if (sysio)
+	if (sysio && sysio != KSEG1ADDR(SYSIO_BASE_PHYS))
 		munmap((void *)sysio, SYSIO_SIZE);
 	log_line("sf2000-heartbeat: stopped\n");
 	return 0;

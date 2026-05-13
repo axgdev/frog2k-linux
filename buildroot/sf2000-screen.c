@@ -35,6 +35,7 @@
 
 #define SYSIO_PHYS 0x18800000u
 #define SYSIO_SIZE 0x1000u
+#define KSEG1ADDR(x) ((volatile uint8_t *)((uintptr_t)(x) | 0xa0000000u))
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_LCD_SETUP_OFF 0x094u
 #define PINMUX_L_OFF 0x4a0u
@@ -437,7 +438,7 @@ static void sleep_ms(unsigned msec)
 }
 
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
-	uint32_t size, const char *name)
+		uint32_t size, const char *name)
 {
 	void *map;
 
@@ -451,6 +452,14 @@ static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
 	}
 	*out = map;
 	return 0;
+}
+
+static void map_regions_direct(void)
+{
+	gma_ram = KSEG1ADDR(GMA_RAM_PHYS);
+	gma = KSEG1ADDR(GMA_MMIO_PHYS);
+	sysio = KSEG1ADDR(SYSIO_PHYS);
+	log_line("sf2000-screen: using direct MMIO mappings\n");
 }
 
 static void backlight_set(int on)
@@ -1146,17 +1155,17 @@ int main(void)
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
 	if (fd < 0) {
-		perror("open /dev/mem");
-		return 1;
+		map_regions_direct();
+	} else {
+		if (map_region(fd, &gma_ram, GMA_RAM_PHYS, GMA_RAM_SIZE, "gma-ram") != 0 ||
+				map_region(fd, &gma, GMA_MMIO_PHYS, GMA_MMIO_SIZE, "gma") != 0 ||
+				map_region(fd, &sysio, SYSIO_PHYS, SYSIO_SIZE, "sysio") != 0) {
+			close(fd);
+			map_regions_direct();
+		} else {
+			close(fd);
+		}
 	}
-
-	if (map_region(fd, &gma_ram, GMA_RAM_PHYS, GMA_RAM_SIZE, "gma-ram") != 0 ||
-			map_region(fd, &gma, GMA_MMIO_PHYS, GMA_MMIO_SIZE, "gma") != 0 ||
-			map_region(fd, &sysio, SYSIO_PHYS, SYSIO_SIZE, "sysio") != 0) {
-		close(fd);
-		return 1;
-	}
-	close(fd);
 
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
