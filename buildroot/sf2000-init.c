@@ -182,14 +182,35 @@ static void *sys_mmap2(void *addr, unsigned long length, unsigned long prot,
 	return (void *)ret;
 }
 
+static void diagnostic_watchdog_pet(void)
+{
+	volatile unsigned char *wdt = KSEG1ADDR(WDT_MAP_BASE_PHYS);
+
+	*(volatile unsigned int *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
+		WDT_DIAG_COUNT;
+}
+
 static void sleep_ms(unsigned int ms)
 {
 	struct timespec req;
+	volatile unsigned int spin;
+	unsigned int i;
 
 	req.tv_sec = ms / 1000u;
 	req.tv_nsec = (long)(ms % 1000u) * 1000000L;
-	while (syscall2(SYS_nanosleep, (long)&req, (long)&req) < 0)
-		;
+	diagnostic_watchdog_pet();
+	if (syscall2(SYS_nanosleep, (long)&req, (long)&req) >= 0) {
+		diagnostic_watchdog_pet();
+		return;
+	}
+
+	for (i = 0; i < ms; i++) {
+		if ((i & 63u) == 0)
+			diagnostic_watchdog_pet();
+		for (spin = 0; spin < 18000u; spin++)
+			__asm__ volatile ("" ::: "memory");
+	}
+	diagnostic_watchdog_pet();
 }
 
 static unsigned int mmio_read32(volatile unsigned char *base, unsigned long off)
@@ -425,6 +446,7 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: early watchdog disable failed\n");
 	diagnostic_watchdog_arm();
 	log_message("sf2000_buildroot: diagnostic watchdog armed\n");
+	diagnostic_watchdog_pet();
 	log_message("sf2000_buildroot: /init visible userspace stage begin\n");
 	if (visible_userspace_stage() == 0)
 		log_message("sf2000_buildroot: /init visible userspace stage done\n");
@@ -433,15 +455,19 @@ void sf2000_init_main(void)
 	log_message("sf2000_buildroot: userspace alive\n");
 
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv);
+	diagnostic_watchdog_pet();
 	sleep_ms(500);
 	spawn_service("sf2000_buildroot: starting heartbeat\n", heartbeat_argv);
+	diagnostic_watchdog_pet();
 	sleep_ms(500);
 	spawn_service("sf2000_buildroot: starting pad\n", pad_argv);
+	diagnostic_watchdog_pet();
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	for (;;) {
 		reap_children();
-		syscall1(SYS_pause, 0);
+		diagnostic_watchdog_pet();
+		sleep_ms(250);
 	}
 
 	syscall1(SYS_exit, 1);
