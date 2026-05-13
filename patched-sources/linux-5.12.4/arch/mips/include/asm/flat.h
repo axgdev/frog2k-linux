@@ -18,6 +18,7 @@ static u32 __user *flat_mips_hi16_rp;
 static u32 flat_mips_hi16_insn;
 static u32 __user *flat_mips_hi16_rps[FLAT_MIPS_HI16_SLOTS];
 static u32 flat_mips_hi16_insns[FLAT_MIPS_HI16_SLOTS];
+static u32 flat_mips_image_limit;
 
 static inline u32 flat_mips_reloc_type(u32 rel)
 {
@@ -32,6 +33,23 @@ static inline u32 flat_mips_lui_rt(u32 insn)
 static inline u32 flat_mips_lo16_rs(u32 insn)
 {
 	return (insn >> 21) & 0x1f;
+}
+
+static inline void mips_flat_reloc_set_image_limit(u32 limit)
+{
+	flat_mips_image_limit = limit;
+}
+
+static inline int flat_mips_addr_plausible(u32 addr)
+{
+	if (!flat_mips_image_limit)
+		return 0;
+	if (addr <= flat_mips_image_limit)
+		return 1;
+	if (addr >= 0x10000 && addr - 0x10000 <= flat_mips_image_limit)
+		return 1;
+
+	return 0;
 }
 
 static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
@@ -98,8 +116,15 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 		if ((insn & 0xffe00000) != 0x3c000000 ||
 		    flat_mips_lui_rt(insn) != rs)
 			continue;
-		if (!flat_mips_lookup_hi16((__force u32 __user *)scan, hi_insn))
-			continue;
+		if (!flat_mips_lookup_hi16((__force u32 __user *)scan, hi_insn)) {
+			u32 candidate = ((insn & 0xffff) << 16) +
+					(s16)(lo & 0xffff);
+
+			if (!flat_mips_addr_plausible(candidate))
+				continue;
+			*hi_insn = insn;
+			flat_mips_remember_hi16((__force u32 __user *)scan, insn);
+		}
 
 		*hi_rp = (__force u32 __user *)scan;
 		return 1;
@@ -192,6 +217,8 @@ static inline u32 mips_flat_reloc_addr_fixup(u32 relval, u32 addr, u32 limit)
 
 #define flat_reloc_addr_fixup(rel, addr, limit) \
 	mips_flat_reloc_addr_fixup(rel, addr, limit)
+#define flat_reloc_set_image_limit(limit) \
+	mips_flat_reloc_set_image_limit(limit)
 
 /*
  * elf2flt stores the MIPS relocation kind in the top two bits. Keep the
