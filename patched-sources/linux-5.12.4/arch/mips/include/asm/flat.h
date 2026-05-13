@@ -12,6 +12,7 @@
 #define FLAT_MIPS_R_MASK	0xc0000000
 #define FLAT_MIPS_R_ADDR	0x3fffffff
 #define FLAT_MIPS_HI16_SLOTS	4096
+#define FLAT_MIPS_HI16_SCAN	128
 
 static u32 __user *flat_mips_hi16_rp;
 static u32 flat_mips_hi16_insn;
@@ -84,7 +85,7 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 	u32 rs = flat_mips_lo16_rs(lo);
 	int i;
 
-	for (i = 1; i <= 32; i++) {
+	for (i = 1; i <= FLAT_MIPS_HI16_SCAN; i++) {
 		u32 *scan = p - i;
 		u32 insn = get_unaligned(scan);
 
