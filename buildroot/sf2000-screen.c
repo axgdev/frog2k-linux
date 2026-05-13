@@ -15,8 +15,6 @@ extern char **environ;
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
-#define ARGB8888_PITCH (WIDTH * 4u)
-#define FRAME_BYTES_MAX (ARGB8888_PITCH * HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 #define GMA_RAM_PHYS 0x00f00000u
@@ -30,6 +28,7 @@ extern char **environ;
 #define GMA_MMIO_SIZE 0x1000u
 #define GMA_CTL 0x300u
 #define GMA_DMBA 0x304u
+#define GMA_DMBA_ALT 0x384u
 #define GMA_K 0x308u
 #define GMA_MASK 0x350u
 #define GMA_LINEBUF 0x3b8u
@@ -40,7 +39,13 @@ extern char **environ;
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_LCD_SETUP_OFF 0x094u
 #define VOU_HD_MODE 0x000u
+#define VOU_HD_TIMING0 0x004u
+#define VOU_HD_TIMING1 0x008u
+#define VOU_HD_TIMING2 0x00cu
+#define VOU_HD_TIMING3 0x080u
 #define VOU_HD_CTRL 0x084u
+#define VOU_HD_TIMING4 0x088u
+#define VOU_HD_TIMING5 0x08cu
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_B_OFF 0x4c0u
 #define PINMUX_R_OFF 0x4e0u
@@ -395,12 +400,6 @@ static uint16_t rgb565(unsigned r, unsigned g, unsigned b)
 	return (uint16_t)(((r & 0x1f) << 11) | ((g & 0x3f) << 5) | (b & 0x1f));
 }
 
-static uint32_t argb8888(unsigned r, unsigned g, unsigned b)
-{
-	return 0xff000000u | ((r & 0xffu) << 16) |
-		((g & 0xffu) << 8) | (b & 0xffu);
-}
-
 static void log_line(const char *line)
 {
 	int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
@@ -564,11 +563,14 @@ static void runtime_watchdog_disable(void)
 
 static void panel_vou_rgb_enable(void)
 {
-	uint32_t mode;
-
-	mode = mmio_read32(gma, VOU_HD_MODE);
-	mmio_write32(gma, VOU_HD_MODE, (mode & 0xffffff00u) | 0x15u);
-	mmio_write32(gma, VOU_HD_CTRL, mmio_read32(gma, VOU_HD_CTRL) & ~0x100u);
+	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
+	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
+	mmio_write32(gma, VOU_HD_TIMING1, 0x00650000u);
+	mmio_write32(gma, VOU_HD_TIMING2, 0x01300378u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00020702u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127002u);
+	mmio_write32(gma, VOU_HD_TIMING4, 0x00108080u);
+	mmio_write32(gma, VOU_HD_TIMING5, 0x00000004u);
 }
 
 static void gpio_set_pad(unsigned pad, int high)
@@ -1176,29 +1178,10 @@ static uint16_t solid_rgb565_color(unsigned variant)
 	return rgb565(0, 0, 31);
 }
 
-static uint32_t solid_argb8888_color(unsigned variant)
-{
-	if (variant == 0u)
-		return argb8888(255, 0, 0);
-	if (variant == 1u)
-		return argb8888(0, 255, 0);
-	return argb8888(0, 0, 255);
-}
-
 static void draw_solid_rgb565_screen(unsigned variant)
 {
 	volatile uint16_t *fb = framebuffer();
 	uint16_t color = solid_rgb565_color(variant);
-	unsigned i;
-
-	for (i = 0; i < WIDTH * HEIGHT; i++)
-		fb[i] = color;
-}
-
-static void draw_solid_argb8888_screen(unsigned variant)
-{
-	volatile uint32_t *fb = (volatile uint32_t *)(gma_ram + GMA_FRAME_OFF);
-	uint32_t color = solid_argb8888_color(variant);
 	unsigned i;
 
 	for (i = 0; i < WIDTH * HEIGHT; i++)
@@ -1214,9 +1197,8 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 {
 	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
-	if (variant != 2u)
-		d0 |= 1u;
-	if (variant != 1u)
+	(void)variant;
+	if (mode == 0x06u)
 		d0 |= 1u << 8;
 	return d0;
 }
@@ -1252,7 +1234,7 @@ static void build_gma_descriptor(void)
 static void flush_present_memory(void)
 {
 	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), 64, BCACHE);
-	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES_MAX, BCACHE);
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
 }
 
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
@@ -1276,6 +1258,7 @@ static void present_frame(void)
 	mmio_write32(gma, GMA_K, 0xff);
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
+	mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
 	gma_set_bit(GMA_CTL, 1u << 19, 0);
 	gma_set_bit(GMA_CTL, 1u << 18, 1);
@@ -1409,9 +1392,8 @@ static void run_rgb_only_diag(unsigned *frame)
 
 	while (!stopping) {
 		unsigned variant = phase % 3u;
-		int argb = phase >= 3u;
-		uint32_t mode = argb ? 1u : 6u;
-		uint32_t pitch = argb ? ARGB8888_PITCH : PITCH;
+		uint32_t mode = 6u;
+		uint32_t pitch = PITCH;
 		char variant_name[24];
 		unsigned pulse;
 		unsigned hold;
@@ -1426,8 +1408,8 @@ static void run_rgb_only_diag(unsigned *frame)
 		}
 		backlight_set(1);
 
-		snprintf(variant_name, sizeof(variant_name), "%s D%u",
-			argb ? "ARGB8888" : "RGB565", variant);
+		snprintf(variant_name, sizeof(variant_name), "RGB565 SOLID %u",
+			variant);
 		if (phase != last_phase) {
 			log_gma_regs("rgb format cycle", variant, mode, pitch);
 			last_phase = phase;
@@ -1436,10 +1418,7 @@ static void run_rgb_only_diag(unsigned *frame)
 		for (hold = 0; hold < 4 && !stopping; hold++) {
 			(*frame)++;
 			build_gma_descriptor_profile(variant, mode, pitch);
-			if (argb)
-				draw_solid_argb8888_screen(variant);
-			else
-				draw_solid_rgb565_screen(variant);
+			draw_solid_rgb565_screen(variant);
 			panel_rgb_pinmux();
 			present_frame();
 			if (!ready_published) {
@@ -1450,7 +1429,7 @@ static void run_rgb_only_diag(unsigned *frame)
 			sleep_ms(900);
 			watchdog_pet();
 		}
-		phase = (phase + 1u) % 6u;
+		phase = (phase + 1u) % 3u;
 	}
 	runtime_watchdog_disable();
 }
