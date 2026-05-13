@@ -563,18 +563,6 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_HD_CTRL, mmio_read32(gma, VOU_HD_CTRL) & ~0x100u);
 }
 
-static void panel_vou_sf2000_timing(void)
-{
-	mmio_write32(gma, 0x000, 0x00000015u);
-	mmio_write32(gma, 0x004, 0x00122914u);
-	mmio_write32(gma, 0x008, 0x00650000u);
-	mmio_write32(gma, 0x00c, 0x01300378u);
-	mmio_write32(gma, 0x080, 0x00020702u);
-	mmio_write32(gma, 0x084, 0x00127002u);
-	mmio_write32(gma, 0x088, 0x00108080u);
-	mmio_write32(gma, 0x08c, 0x00000004u);
-}
-
 static void gpio_set_pad(unsigned pad, int high)
 {
 	uint32_t base = gpio_base_for_pad(pad);
@@ -670,7 +658,6 @@ static void panel_control_pinmux(void)
 static void panel_rgb_pinmux(void)
 {
 	panel_lcd_setup_enable();
-	panel_vou_sf2000_timing();
 	panel_vou_rgb_enable();
 
 	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
@@ -831,70 +818,20 @@ static uint16_t panel_read_data(void)
 	return data;
 }
 
-static void panel_read_register(uint8_t reg, uint8_t *data, unsigned count)
+static uint32_t panel_read_id(void)
 {
+	uint8_t id[4];
 	unsigned i;
 
 	panel_control_pinmux();
 	panel_config_outputs();
 	panel_bus_idle();
-	panel_cmd(reg);
+	panel_cmd(0x04);
 	panel_config_data_input();
-	for (i = 0; i < count; i++)
-		data[i] = (uint8_t)panel_read_data();
+	for (i = 0; i < sizeof(id); i++)
+		id[i] = (uint8_t)panel_read_data();
 	panel_config_data_output();
-}
-
-static uint32_t panel_read_id(void)
-{
-	uint8_t id[4] = { 0 };
-
-	panel_read_register(0x04, id, sizeof(id));
 	return ((uint32_t)id[1] << 16) | ((uint32_t)id[2] << 8) | id[3];
-}
-
-static const struct panel_variant *panel_select_variant(uint32_t *panel_id_out,
-	uint32_t *aux_id_out)
-{
-	uint8_t r04[4] = { 0 };
-	uint8_t r00[2] = { 0 };
-	uint8_t rb3[4] = { 0 };
-	uint8_t rf2[4] = { 0 };
-	uint32_t panel_id;
-	uint32_t aux_id = 0;
-	const struct panel_variant *variant = &panel_variants[0];
-
-	panel_read_register(0x04, r04, sizeof(r04));
-	panel_id = ((uint32_t)r04[1] << 16) | ((uint32_t)r04[2] << 8) | r04[3];
-	if (panel_id == 0x858552u) {
-		panel_read_register(0xb3, rb3, sizeof(rb3));
-		panel_read_register(0xf2, rf2, sizeof(rf2));
-		aux_id = ((uint32_t)rb3[1] << 24) | ((uint32_t)rb3[2] << 16) |
-			((uint32_t)rf2[1] << 8) | rf2[2];
-	} else {
-		panel_read_register(0x00, r00, sizeof(r00));
-		aux_id = ((uint32_t)r00[0] << 8) | r00[1];
-	}
-
-	if (panel_id == 0x009306u || panel_id == 0x009307u)
-		variant = &panel_variants[5];
-	else if (panel_id == 0x61bc11u)
-		variant = &panel_variants[3];
-	else if (panel_id == 0x3e81f5u)
-		variant = &panel_variants[0];
-	else if (panel_id == 0x858552u) {
-		if (rb3[1] == 0x00u && rb3[2] == 0x0fu)
-			variant = &panel_variants[2];
-	} else if (panel_id == 0x009329u)
-		variant = &panel_variants[1];
-	else if (r04[1] == 0xe3u || r04[0] == 0xe3u)
-		variant = &panel_variants[1];
-	else if (r00[0] == 0xa0u || r00[1] == 0xa0u)
-		variant = &panel_variants[4];
-
-	*panel_id_out = panel_id;
-	*aux_id_out = aux_id;
-	return variant;
 }
 
 static void panel_restart_frame(void)
@@ -916,11 +853,11 @@ static void panel_reset(void)
 {
 	panel_bus_idle();
 	gpio_set_pad(PINPAD_L01, 1);
-	sleep_ms(500);
+	sleep_ms(120);
 	gpio_set_pad(PINPAD_L01, 0);
-	sleep_ms(500);
+	sleep_ms(40);
 	gpio_set_pad(PINPAD_L01, 1);
-	sleep_ms(500);
+	sleep_ms(120);
 }
 
 static void panel_apply_init_sequence(const uint8_t *sequence)
@@ -994,7 +931,6 @@ static int panel_init_variant(const struct panel_variant *variant)
 static int panel_init_sf2000_original_order(void)
 {
 	uint32_t panel_id;
-	uint32_t aux_id;
 	char line[128];
 	const struct panel_variant *variant = &panel_variants[0];
 
@@ -1011,12 +947,12 @@ static int panel_init_sf2000_original_order(void)
 	gpio_set_pad(PINPAD_T01, 1);
 	gpio_set_pad(PINPAD_L07, 1);
 	gpio_set_pad(PINPAD_T00, 1);
-	panel_reset();
+	gpio_set_pad(PINPAD_L01, 1);
 	sleep_ms(120);
-	variant = panel_select_variant(&panel_id, &aux_id);
-	panel_apply_init_sequence(variant->init);
-	panel_restart_frame();
+	panel_apply_init_sequence(st7789_sf2000_init);
 	panel_cmd(ST7789_DISPON);
+	panel_restart_frame();
+	panel_id = panel_read_id();
 	if ((panel_id & 0xffffffu) == 0x009306u) {
 		log_line("sf2000-screen: guarded panel 009306 reinit\n");
 		panel_reset();
@@ -1030,8 +966,8 @@ static int panel_init_sf2000_original_order(void)
 		panel_restart_frame();
 	}
 	snprintf(line, sizeof(line),
-		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
-		panel_id & 0xffffffu, aux_id, variant->name);
+		"sf2000-screen: guarded panel init done id=0x%06x init=%s\n",
+		panel_id & 0xffffffu, variant->name);
 	log_line(line);
 	append_file_log(line);
 	return 0;
@@ -1283,7 +1219,6 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 static void present_frame(void)
 {
 	flush_present_memory();
-	panel_vou_sf2000_timing();
 	mmio_write32(gma, GMA_MASK, 1);
 	mmio_write32(gma, GMA_LINEBUF, 0x0a);
 	mmio_write32(gma, GMA_K, 0xff);
