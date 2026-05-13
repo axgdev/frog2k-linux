@@ -15,6 +15,8 @@ extern char **environ;
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
+#define ARGB8888_PITCH (WIDTH * 4u)
+#define FRAME_BYTES_MAX (ARGB8888_PITCH * HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 #define GMA_RAM_PHYS 0x00f00000u
@@ -391,6 +393,12 @@ static void mmio_write8(volatile uint8_t *base, uint32_t off, uint8_t value)
 static uint16_t rgb565(unsigned r, unsigned g, unsigned b)
 {
 	return (uint16_t)(((r & 0x1f) << 11) | ((g & 0x3f) << 5) | (b & 0x1f));
+}
+
+static uint32_t argb8888(unsigned r, unsigned g, unsigned b)
+{
+	return 0xff000000u | ((r & 0xffu) << 16) |
+		((g & 0xffu) << 8) | (b & 0xffu);
 }
 
 static void log_line(const char *line)
@@ -1159,14 +1167,44 @@ static void draw_diag_screen(const char *phase, const char *variant,
 	}
 }
 
+static void draw_argb8888_screen(unsigned variant, unsigned frame)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)(gma_ram + GMA_FRAME_OFF);
+	unsigned x;
+	unsigned y;
+
+	for (y = 0; y < HEIGHT; y++) {
+		for (x = 0; x < WIDTH; x++) {
+			unsigned r = (x * 255u) / (WIDTH - 1u);
+			unsigned g = (y * 255u) / (HEIGHT - 1u);
+			unsigned b = (((x / 8u) ^ (y / 8u) ^ frame) & 1u) ? 220u : 35u;
+
+			fb[y * WIDTH + x] = argb8888(r, g, b);
+		}
+	}
+
+	for (y = 0; y < 32; y++) {
+		for (x = 0; x < WIDTH; x++)
+			fb[y * WIDTH + x] = argb8888(32u + variant * 80u, 220u, 40u);
+	}
+	for (y = 208; y < HEIGHT; y++) {
+		for (x = 0; x < WIDTH; x++)
+			fb[y * WIDTH + x] = argb8888(240u, 40u + variant * 70u, 40u);
+	}
+	for (x = 0; x < 6; x++) {
+		for (y = 0; y < HEIGHT; y++)
+			fb[(y * WIDTH) + (variant * 24u + x)] = argb8888(255u, 255u, 255u);
+	}
+}
+
 static void write_desc32(unsigned idx, uint32_t value)
 {
 	((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[idx] = value;
 }
 
-static uint32_t gma_descriptor_d0(unsigned variant)
+static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 {
-	uint32_t d0 = (6u << 4) | (32u << 16) | (170u << 24);
+	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
 	if (variant != 2u)
 		d0 |= 1u;
@@ -1175,21 +1213,27 @@ static uint32_t gma_descriptor_d0(unsigned variant)
 	return d0;
 }
 
-static void build_gma_descriptor_variant(unsigned variant)
+static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
+	uint32_t pitch)
 {
 	unsigned i;
 
 	for (i = 0; i < 16; i++)
 		write_desc32(i, 0);
 
-	write_desc32(0, gma_descriptor_d0(variant));
+	write_desc32(0, gma_descriptor_d0(variant, mode));
 	write_desc32(1, 0);
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
 	write_desc32(4, (HEIGHT << 16) | WIDTH);
-	write_desc32(5, 0xffu | (PITCH << 16));
+	write_desc32(5, 0xffu | (pitch << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
+}
+
+static void build_gma_descriptor_variant(unsigned variant)
+{
+	build_gma_descriptor_profile(variant, 6u, PITCH);
 }
 
 static void build_gma_descriptor(void)
@@ -1200,7 +1244,7 @@ static void build_gma_descriptor(void)
 static void flush_present_memory(void)
 {
 	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), 64, BCACHE);
-	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES_MAX, BCACHE);
 }
 
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
@@ -1256,13 +1300,14 @@ static void log_gma_ready(void)
 	append_file_log(line);
 }
 
-static void log_gma_regs(const char *name, unsigned variant)
+static void log_gma_regs(const char *name, unsigned variant, uint32_t mode,
+	uint32_t pitch)
 {
 	char line[192];
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: %s variant=%u d0=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x line=0x%08x\n",
-		name, variant, gma_descriptor_d0(variant),
+		"sf2000-screen: %s variant=%u mode=0x%02x pitch=%u d0=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x line=0x%08x\n",
+		name, variant, mode, pitch, gma_descriptor_d0(variant, mode),
 		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
 		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA),
 		mmio_read32(gma, GMA_LINEBUF));
@@ -1343,8 +1388,8 @@ static void run_rgb_diag(unsigned *frame)
 static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
-	unsigned last_variant = 99;
-	unsigned variant = 0;
+	unsigned last_phase = 99;
+	unsigned phase = 0;
 
 	log_line("sf2000-screen: rgb-only diag begin\n");
 	append_file_log("sf2000-screen: rgb-only diag begin\n");
@@ -1355,13 +1400,17 @@ static void run_rgb_only_diag(unsigned *frame)
 	build_gma_descriptor();
 
 	while (!stopping) {
+		unsigned variant = phase % 3u;
+		int argb = phase >= 3u;
+		uint32_t mode = argb ? 1u : 6u;
+		uint32_t pitch = argb ? ARGB8888_PITCH : PITCH;
 		char variant_name[24];
 		unsigned pulse;
 		unsigned hold;
 
 		backlight_set(0);
 		sleep_ms(350);
-		for (pulse = 0; pulse <= variant; pulse++) {
+		for (pulse = 0; pulse <= phase; pulse++) {
 			backlight_set(1);
 			sleep_ms(140);
 			backlight_set(0);
@@ -1369,17 +1418,21 @@ static void run_rgb_only_diag(unsigned *frame)
 		}
 		backlight_set(1);
 
-		snprintf(variant_name, sizeof(variant_name), "GMA D%u", variant);
-		if (variant != last_variant) {
-			log_gma_regs("rgb descriptor cycle", variant);
-			last_variant = variant;
+		snprintf(variant_name, sizeof(variant_name), "%s D%u",
+			argb ? "ARGB8888" : "RGB565", variant);
+		if (phase != last_phase) {
+			log_gma_regs("rgb format cycle", variant, mode, pitch);
+			last_phase = phase;
 		}
 
 		for (hold = 0; hold < 4 && !stopping; hold++) {
 			(*frame)++;
-			build_gma_descriptor_variant(variant);
-			draw_diag_screen("RGB GMA ISOLATE", variant_name,
-				(uint8_t)(variant + 1u), *frame);
+			build_gma_descriptor_profile(variant, mode, pitch);
+			if (argb)
+				draw_argb8888_screen(variant, *frame);
+			else
+				draw_diag_screen("RGB565 GMA ISOLATE", variant_name,
+					(uint8_t)(variant + 1u), *frame);
 			panel_rgb_pinmux();
 			present_frame();
 			if (!ready_published) {
@@ -1390,7 +1443,7 @@ static void run_rgb_only_diag(unsigned *frame)
 			sleep_ms(900);
 			watchdog_pet();
 		}
-		variant = (variant + 1u) % 3u;
+		phase = (phase + 1u) % 6u;
 	}
 	runtime_watchdog_disable();
 }
