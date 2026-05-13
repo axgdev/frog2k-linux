@@ -17,8 +17,6 @@ extern char **environ;
 #define FRAME_BYTES (PITCH * HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-#define SYS_nanosleep 4166
-
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
@@ -117,31 +115,7 @@ extern char **environ;
 static volatile uint8_t *gma_ram;
 static volatile uint8_t *gma;
 static volatile uint8_t *sysio;
-struct kernel_timespec {
-	long tv_sec;
-	long tv_nsec;
-};
-
 static volatile int stopping;
-
-static long syscall2(long nr, long a0, long a1)
-{
-	register long r2 __asm__("$2") = nr;
-	register long r4 __asm__("$4") = a0;
-	register long r5 __asm__("$5") = a1;
-	register long r7 __asm__("$7");
-
-	__asm__ volatile (
-		"syscall"
-		: "+r"(r2), "=r"(r7)
-		: "r"(r4), "r"(r5)
-		: "$3", "$6", "$8", "$9", "$10", "$11", "$12",
-		  "$13", "$14", "$15", "$24", "$25", "hi", "lo",
-		  "memory");
-	if (r7)
-		return -r2;
-	return r2;
-}
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
@@ -454,12 +428,13 @@ static void append_file_log(const char *line)
 
 static void sleep_ms(unsigned msec)
 {
-	struct kernel_timespec ts;
+	volatile unsigned spin;
+	unsigned i;
 
-	ts.tv_sec = msec / 1000u;
-	ts.tv_nsec = (long)(msec % 1000u) * 1000000L;
-	while (syscall2(SYS_nanosleep, (long)&ts, (long)&ts) < 0 && !stopping)
-		;
+	for (i = 0; i < msec && !stopping; i++) {
+		for (spin = 0; spin < 18000u; spin++)
+			__asm__ volatile ("" ::: "memory");
+	}
 }
 
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
@@ -615,17 +590,17 @@ static void startup_backlight_diagnostic(void)
 	log_line("sf2000-screen: startup backlight off/on diagnostic begin\n");
 	append_file_log("sf2000-screen: startup backlight off/on diagnostic begin\n");
 
+	log_line("sf2000-screen: diag step 1 backlight off\n");
 	backlight_set(0);
-	status_led_set(0);
-	sleep_ms(650);
+	sleep_ms(220);
+	log_line("sf2000-screen: diag step 2 backlight on\n");
 	backlight_set(1);
-	status_led_set(1);
-	sleep_ms(650);
+	sleep_ms(220);
+	log_line("sf2000-screen: diag step 3 backlight off\n");
 	backlight_set(0);
-	status_led_set(0);
-	sleep_ms(650);
+	sleep_ms(220);
+	log_line("sf2000-screen: diag step 4 backlight on\n");
 	backlight_set(1);
-	status_led_set(0);
 
 	log_line("sf2000-screen: startup backlight off/on diagnostic end\n");
 	append_file_log("sf2000-screen: startup backlight off/on diagnostic end\n");

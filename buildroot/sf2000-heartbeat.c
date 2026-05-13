@@ -24,6 +24,10 @@
 #define PIN_R05 5u
 #define STATUS_L25 (1u << PIN_L25)
 #define BACKLIGHT_R05 (1u << PIN_R05)
+#define WDT_BASE_PHYS 0x18818000u
+#define WDT_REG_OFF 0x500u
+#define WDT_COUNT_OFF 0x00u
+#define WDT_PET_COUNT 0xffc61075u
 
 static volatile uint8_t *sysio;
 static volatile sig_atomic_t stopping;
@@ -65,6 +69,13 @@ static void mmio_write32(uint32_t off, uint32_t value)
 static void mmio_write8(uint32_t off, uint8_t value)
 {
 	*(volatile uint8_t *)(sysio + off) = value;
+}
+
+static void watchdog_pet(void)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) = WDT_PET_COUNT;
 }
 
 static void backlight_set(int on)
@@ -161,9 +172,11 @@ int main(void)
 	signal(SIGTERM, handle_signal);
 
 	log_line("sf2000-heartbeat: backlight heartbeat ready\n");
+	watchdog_pet();
 	pulse_backlight(3, 180, 260);
 
 	while (!stopping) {
+		watchdog_pet();
 		if (access("/run/sf2000-screen-own-backlight", F_OK) == 0) {
 			status_led_set(0);
 			sleep_ms(500);
