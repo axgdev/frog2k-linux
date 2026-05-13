@@ -60,14 +60,16 @@ static inline int flat_mips_addr_plausible(u32 addr)
 	return 0;
 }
 
-static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
+static inline void flat_mips_store_hi16(u32 __user *rp, u32 insn, int latest)
 {
 	unsigned long slot = ((unsigned long)rp >> 2) &
 			     (FLAT_MIPS_HI16_SLOTS - 1);
 	int i;
 
-	flat_mips_hi16_rp = rp;
-	flat_mips_hi16_insn = insn;
+	if (latest) {
+		flat_mips_hi16_rp = rp;
+		flat_mips_hi16_insn = insn;
+	}
 
 	for (i = 0; i < 8; i++) {
 		unsigned long idx = (slot + i) & (FLAT_MIPS_HI16_SLOTS - 1);
@@ -81,6 +83,11 @@ static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
 
 	flat_mips_hi16_rps[slot] = rp;
 	flat_mips_hi16_insns[slot] = insn;
+}
+
+static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
+{
+	flat_mips_store_hi16(rp, insn, 1);
 }
 
 static inline int flat_mips_lookup_hi16(u32 __user *rp, u32 *insn)
@@ -112,9 +119,15 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 	int i;
 
 	if (flat_mips_hi16_rp && flat_mips_lui_rt(flat_mips_hi16_insn) == rs) {
-		*hi_rp = flat_mips_hi16_rp;
-		*hi_insn = flat_mips_hi16_insn;
-		return 1;
+		u32 candidate = ((flat_mips_hi16_insn & 0xffff) << 16) +
+				(s16)(lo & 0xffff);
+
+		if ((__force u32 *)flat_mips_hi16_rp < p &&
+		    flat_mips_addr_plausible(candidate)) {
+			*hi_rp = flat_mips_hi16_rp;
+			*hi_insn = flat_mips_hi16_insn;
+			return 1;
+		}
 	}
 
 	for (i = 1; i <= FLAT_MIPS_HI16_SCAN; i++) {
@@ -182,7 +195,7 @@ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
 static inline void mips_flat_reloc_prescan(u32 relval, u32 __user *rp)
 {
 	if (flat_mips_reloc_type(relval) == FLAT_MIPS_R_HI16)
-		flat_mips_remember_hi16(rp, get_unaligned((__force u32 *)rp));
+		flat_mips_store_hi16(rp, get_unaligned((__force u32 *)rp), 0);
 }
 
 static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
@@ -198,8 +211,7 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
 		put_unaligned(insn, p);
 		return 0;
 	case FLAT_MIPS_R_HI16:
-		if (!flat_mips_lookup_hi16(rp, &insn))
-			flat_mips_remember_hi16(rp, get_unaligned(p));
+		flat_mips_remember_hi16(rp, get_unaligned(p));
 		return 0;
 	case FLAT_MIPS_R_LO16:
 		lo = get_unaligned(p);

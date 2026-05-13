@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000 linux port <sf2000@local>
+Date: Wed, 13 May 2026 08:10:00 +0000
+Subject: [PATCH] mips: sf2000: keep prescan off latest HI16
+
+The 0098 hardware log failed on a simple adjacent pair:
+
+    lui   v0,0x1
+    addiu v0,v0,0xd004
+
+The relocation table also has adjacent HI16/LO16 entries for those
+instructions. The problem was the pre-scan seeding the fast "latest HI16"
+pointer with the final HI16 in the whole file. A later LO16 using the same
+register could then take that unrelated latest entry before the backward scan
+found the nearby real pair.
+
+Separate cache insertion from latest-HI16 tracking. The pre-scan now fills the
+lookup table without changing latest state, and the apply pass refreshes latest
+when it reaches an actual HI16 relocation in stream order. Also validate the
+latest candidate before accepting it.
+---
+ arch/mips/include/asm/flat.h | 30 +++++++++++++++++++++---------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/arch/mips/include/asm/flat.h b/arch/mips/include/asm/flat.h
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -60,14 +60,16 @@ static inline int flat_mips_addr_plausible(u32 addr)
+ 	return 0;
+ }
+ 
+-static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
++static inline void flat_mips_store_hi16(u32 __user *rp, u32 insn, int latest)
+ {
+ 	unsigned long slot = ((unsigned long)rp >> 2) &
+ 			     (FLAT_MIPS_HI16_SLOTS - 1);
+ 	int i;
+ 
+-	flat_mips_hi16_rp = rp;
+-	flat_mips_hi16_insn = insn;
++	if (latest) {
++		flat_mips_hi16_rp = rp;
++		flat_mips_hi16_insn = insn;
++	}
+ 
+ 	for (i = 0; i < 8; i++) {
+ 		unsigned long idx = (slot + i) & (FLAT_MIPS_HI16_SLOTS - 1);
+@@ -83,6 +85,11 @@ static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
+ 	flat_mips_hi16_insns[slot] = insn;
+ }
+ 
++static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
++{
++	flat_mips_store_hi16(rp, insn, 1);
++}
++
+ static inline int flat_mips_lookup_hi16(u32 __user *rp, u32 *insn)
+ {
+ 	unsigned long slot = ((unsigned long)rp >> 2) &
+@@ -112,9 +119,15 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
+ 	int i;
+ 
+ 	if (flat_mips_hi16_rp && flat_mips_lui_rt(flat_mips_hi16_insn) == rs) {
+-		*hi_rp = flat_mips_hi16_rp;
+-		*hi_insn = flat_mips_hi16_insn;
+-		return 1;
++		u32 candidate = ((flat_mips_hi16_insn & 0xffff) << 16) +
++				(s16)(lo & 0xffff);
++
++		if ((__force u32 *)flat_mips_hi16_rp < p &&
++		    flat_mips_addr_plausible(candidate)) {
++			*hi_rp = flat_mips_hi16_rp;
++			*hi_insn = flat_mips_hi16_insn;
++			return 1;
++		}
+ 	}
+ 
+ 	for (i = 1; i <= FLAT_MIPS_HI16_SCAN; i++) {
+@@ -182,7 +195,7 @@ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
+ static inline void mips_flat_reloc_prescan(u32 relval, u32 __user *rp)
+ {
+ 	if (flat_mips_reloc_type(relval) == FLAT_MIPS_R_HI16)
+-		flat_mips_remember_hi16(rp, get_unaligned((__force u32 *)rp));
++		flat_mips_store_hi16(rp, get_unaligned((__force u32 *)rp), 0);
+ }
+ 
+ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+@@ -198,8 +211,7 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+ 		put_unaligned(insn, p);
+ 		return 0;
+ 	case FLAT_MIPS_R_HI16:
+-		if (!flat_mips_lookup_hi16(rp, &insn))
+-			flat_mips_remember_hi16(rp, get_unaligned(p));
++		flat_mips_remember_hi16(rp, get_unaligned(p));
+ 		return 0;
+ 	case FLAT_MIPS_R_LO16:
+ 		lo = get_unaligned(p);
+-- 
+2.49.0
