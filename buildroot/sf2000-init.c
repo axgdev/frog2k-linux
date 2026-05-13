@@ -5,7 +5,7 @@ typedef unsigned int size_t;
 #define SYS_open 4005
 #define SYS_close 4006
 #define SYS_execve 4011
-#define SYS_fork 4002
+#define SYS_clone 4120
 #define SYS_pause 4029
 #define SYS_dup2 4063
 #define SYS_wait4 4114
@@ -19,6 +19,9 @@ typedef unsigned int size_t;
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define MAP_SHARED 1
+#define SIGCHLD 18
+#define CLONE_VM 0x00000100UL
+#define CLONE_VFORK 0x00004000UL
 
 #define SYSIO_BASE_PHYS 0x18800000UL
 #define SYSIO_SIZE 0x1000UL
@@ -386,9 +389,11 @@ static void spawn_service(const char *name, char *const argv[])
 	long pid;
 
 	log_message(name);
-	pid = syscall1(SYS_fork, 0);
+	pid = syscall6(SYS_clone, CLONE_VM | CLONE_VFORK | SIGCHLD,
+		0, 0, 0, 0, 0);
 	if (pid < 0) {
-		log_message("sf2000_buildroot: fork failed\n");
+		log_message("sf2000_buildroot: vfork clone failed ");
+		log_hex_word((unsigned int)pid);
 		return;
 	}
 	if (pid == 0) {
