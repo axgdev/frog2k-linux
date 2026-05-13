@@ -11,9 +11,13 @@
 #define FLAT_MIPS_R_LO16	0xc0000000
 #define FLAT_MIPS_R_MASK	0xc0000000
 #define FLAT_MIPS_R_ADDR	0x3fffffff
+#define FLAT_MIPS_HI16_SLOTS	32
 
 static u32 __user *flat_mips_hi16_rp;
 static u32 flat_mips_hi16_insn;
+static u32 __user *flat_mips_hi16_rps[FLAT_MIPS_HI16_SLOTS];
+static u32 flat_mips_hi16_insns[FLAT_MIPS_HI16_SLOTS];
+static u32 flat_mips_hi16_next;
 
 static inline u32 flat_mips_reloc_type(u32 rel)
 {
@@ -28,6 +32,30 @@ static inline u32 flat_mips_lui_rt(u32 insn)
 static inline u32 flat_mips_lo16_rs(u32 insn)
 {
 	return (insn >> 21) & 0x1f;
+}
+
+static inline void flat_mips_remember_hi16(u32 __user *rp, u32 insn)
+{
+	flat_mips_hi16_rp = rp;
+	flat_mips_hi16_insn = insn;
+	flat_mips_hi16_rps[flat_mips_hi16_next] = rp;
+	flat_mips_hi16_insns[flat_mips_hi16_next] = insn;
+	flat_mips_hi16_next = (flat_mips_hi16_next + 1) &
+			      (FLAT_MIPS_HI16_SLOTS - 1);
+}
+
+static inline int flat_mips_lookup_hi16(u32 __user *rp, u32 *insn)
+{
+	int i;
+
+	for (i = 0; i < FLAT_MIPS_HI16_SLOTS; i++) {
+		if (flat_mips_hi16_rps[i] == rp) {
+			*insn = flat_mips_hi16_insns[i];
+			return 1;
+		}
+	}
+
+	return 0;
 }
 
 static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
@@ -47,9 +75,7 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 			continue;
 
 		*hi_rp = (__force u32 __user *)scan;
-		if (*hi_rp == flat_mips_hi16_rp)
-			*hi_insn = flat_mips_hi16_insn;
-		else
+		if (!flat_mips_lookup_hi16(*hi_rp, hi_insn))
 			*hi_insn = insn;
 		return 1;
 	}
@@ -114,8 +140,7 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
 		put_unaligned(insn, p);
 		return 0;
 	case FLAT_MIPS_R_HI16:
-		flat_mips_hi16_rp = rp;
-		flat_mips_hi16_insn = get_unaligned(p);
+		flat_mips_remember_hi16(rp, get_unaligned(p));
 		return 0;
 	case FLAT_MIPS_R_LO16:
 		lo = get_unaligned(p);
