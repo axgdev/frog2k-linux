@@ -2220,44 +2220,55 @@ static int do_execveat_common(int fd, struct filename *filename,
 	current->flags &= ~PF_NPROC_EXCEEDED;
 
 	bprm = alloc_bprm(fd, filename);
+	sf2000_exec_value("uexec-after-alloc-bprm", IS_ERR(bprm) ?
+		(unsigned int)PTR_ERR(bprm) : (unsigned int)bprm);
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
 		goto out_ret;
 	}
 
 	retval = count(argv, MAX_ARG_STRINGS);
+	sf2000_exec_value("uexec-after-argc", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 	bprm->argc = retval;
 
 	retval = count(envp, MAX_ARG_STRINGS);
+	sf2000_exec_value("uexec-after-envc", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 	bprm->envc = retval;
 
 	retval = bprm_stack_limits(bprm);
+	sf2000_exec_value("uexec-after-stack-limits", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_string_kernel(bprm->filename, bprm);
+	sf2000_exec_value("uexec-after-copy-file", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 	bprm->exec = bprm->p;
 
 	retval = copy_strings(bprm->envc, envp, bprm);
+	sf2000_exec_value("uexec-after-copy-env", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_strings(bprm->argc, argv, bprm);
+	sf2000_exec_value("uexec-after-copy-argv", (unsigned int)retval);
 	if (retval < 0)
 		goto out_free;
 
+	sf2000_exec_value("uexec-before-bprm-exec", 0);
 	retval = bprm_execve(bprm, fd, filename, flags);
+	sf2000_exec_value("uexec-after-bprm-exec", (unsigned int)retval);
 out_free:
 	free_bprm(bprm);
 
 out_ret:
 	putname(filename);
+	sf2000_exec_value("uexec-return", (unsigned int)retval);
 	return retval;
 }
 

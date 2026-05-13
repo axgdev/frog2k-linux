@@ -89,6 +89,32 @@ static inline bool sf2000_nommu_kseg0_user_addr(const void *addr)
 }
 #endif
 
+#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU) && defined(CONFIG_32BIT)
+#define sf2000_nommu_get_kseg0_user_common(val, size, ptr, err)		\
+do {									\
+	unsigned long long __sf2000_tmp = 0;				\
+									\
+	switch (size) {							\
+	case 1:								\
+	case 2:								\
+	case 4:								\
+	case 8:								\
+		memcpy(&__sf2000_tmp, (const void *)(ptr), (size));	\
+		(val) = (__typeof__(*(ptr)))__sf2000_tmp;		\
+		(err) = 0;						\
+		break;							\
+	default:							\
+		__get_user_unknown();					\
+		break;							\
+	}								\
+} while (0)
+#else
+#define sf2000_nommu_get_kseg0_user_common(val, size, ptr, err)		\
+do {									\
+	__get_user_unknown();						\
+} while (0)
+#endif
+
 /*
  * eva_kernel_access() - determine whether kernel memory access on an EVA system
  *
@@ -319,7 +345,10 @@ do {									\
 	const __typeof__(*(ptr)) __user * __gu_ptr = (ptr);		\
 									\
 	might_fault();							\
-	if (likely(access_ok( __gu_ptr, size))) {		\
+	if (sf2000_nommu_kseg0_user_addr(__gu_ptr)) {			\
+		sf2000_nommu_get_kseg0_user_common((x), size,		\
+						   __gu_ptr, __gu_err);	\
+	} else if (likely(access_ok( __gu_ptr, size))) {		\
 		if (eva_kernel_access())				\
 			__get_kernel_common((x), size, __gu_ptr);	\
 		else							\
@@ -806,6 +835,17 @@ extern long __strnlen_user_asm(const char __user *s, long n);
 static inline long strnlen_user(const char __user *s, long n)
 {
 	long res;
+
+	if (sf2000_nommu_kseg0_user_addr(s)) {
+		long i;
+
+		for (i = 0; i < n; i++) {
+			if (!((const char *)s)[i])
+				return i + 1;
+		}
+
+		return n;
+	}
 
 	might_fault();
 	if (eva_kernel_access()) {
