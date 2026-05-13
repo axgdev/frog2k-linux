@@ -37,9 +37,16 @@ extern char **environ;
 
 #define SYSIO_PHYS 0x18800000u
 #define SYSIO_SIZE 0x1000u
+#define LVDS_RGB_PHYS 0x18860000u
 #define KSEG1ADDR(x) ((volatile uint8_t *)((uintptr_t)(x) | 0xa0000000u))
+#define SYS_CLOCK_GATE0_OFF 0x060u
+#define SYS_CLOCK_GATE1_OFF 0x064u
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_LCD_SETUP_OFF 0x094u
+#define SYS_LVDS_PHY_OFF 0x440u
+#define SYS_VIDEO_SRC0_OFF 0x444u
+#define SYS_VIDEO_SRC1_OFF 0x448u
+#define SYS_VIDEO_SRC2_OFF 0x44cu
 #define VOU_HD_MODE 0x000u
 #define VOU_HD_TIMING0 0x004u
 #define VOU_HD_TIMING1 0x008u
@@ -126,6 +133,8 @@ extern char **environ;
 #define ST7789_TEON 0x35u
 #define ST7789_MADCTL 0x36u
 #define ST7789_COLMOD 0x3au
+#define ST7789_RAMCTRL 0xb0u
+#define ST7789_RGBCTRL 0xb1u
 
 static volatile uint8_t *gma_ram;
 static volatile uint8_t *gma;
@@ -136,6 +145,7 @@ static int led_enabled = 1;
 static int slow_panel_bus = 1;
 
 static uint16_t *framebuffer(void);
+static void panel_restart_frame(void);
 
 struct glyph {
 	char ch;
@@ -361,6 +371,14 @@ struct gma_scanout_profile {
 	int sdk_enhance;
 };
 
+struct panel_rgb_mode_profile {
+	const char *name;
+	uint8_t use_b0;
+	uint8_t b0[2];
+	uint8_t b1[3];
+	uint8_t colmod;
+};
+
 static const struct panel_variant panel_variants[] = {
 	{ "SF2000", st7789_sf2000_init, { 0x70, 0x00, 0x80, 0xc0 } },
 	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
@@ -377,6 +395,13 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB0A PRIMARY SDK", 0x0au, GMA_DOORBELL_PRIMARY, 1 },
 	{ "LB12 ALT SDK", 0x12u, GMA_DOORBELL_ALT, 1 },
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
+};
+
+static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
+	{ "SF2000-RTOS-565", 0, { 0x00, 0x00 }, { 0x40, 0x04, 0x14 }, 0x55 },
+	{ "HCLINUX-RAMCTRL-666", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x66 },
+	{ "RAMCTRL-SF2000-565", 1, { 0x11, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
+	{ "RAMCTRL-HCLINUX-565", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x55 },
 };
 
 struct pinmux_setting {
@@ -563,6 +588,61 @@ static void panel_lcd_setup_enable(void)
 		mmio_read32(sysio, SYS_LCD_SETUP_OFF) | (1u << 16));
 }
 
+static void panel_rgb_clock_enable(void)
+{
+	uint32_t gate1;
+
+	gate1 = mmio_read32(sysio, SYS_CLOCK_GATE1_OFF);
+	gate1 &= ~(1u << 0);  /* VOU_HD_CLK */
+	gate1 &= ~(1u << 2);  /* DE_CLK */
+	gate1 &= ~(1u << 18); /* VOU_HD_EXT_CLK */
+	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate1);
+}
+
+static void panel_rgb_output_mux_enable(void)
+{
+	volatile uint8_t *lvds = KSEG1ADDR(LVDS_RGB_PHYS);
+	uint32_t strap;
+	uint32_t value;
+	unsigned ch;
+
+	panel_rgb_clock_enable();
+
+	strap = mmio_read32(sysio, SYS_LCD_SETUP_OFF);
+	strap &= 0x0fffffffu;
+	strap |= 2u << 28; /* LVDS_IO_TTL_SEL_RGB565 */
+	strap |= 1u << 16;
+	mmio_write32(sysio, SYS_LCD_SETUP_OFF, strap);
+
+	value = mmio_read32(sysio, SYS_LVDS_PHY_OFF);
+	value |= 0x3u;  /* enable RGB/LVDS channels 0 and 1 */
+	value &= ~(1u << 2); /* power on */
+	mmio_write32(sysio, SYS_LVDS_PHY_OFF, value);
+
+	value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
+	value &= 0xffffffcfu; /* RGB source: FXDE */
+	mmio_write32(sysio, SYS_VIDEO_SRC0_OFF, value);
+
+	value = mmio_read32(sysio, SYS_VIDEO_SRC1_OFF);
+	value &= 0xfff3ffffu; /* RGB source mirror: FXDE */
+	mmio_write32(sysio, SYS_VIDEO_SRC1_OFF, value);
+
+	value = mmio_read32(sysio, SYS_VIDEO_SRC2_OFF);
+	value &= 0xf000f888u; /* RGB565 lanes from FXDE, rgb order */
+	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
+
+	for (ch = 0; ch < 2; ch++) {
+		uint32_t base = 0x100u + ch * 0x40u;
+
+		mmio_write8(lvds, base + 0x00u, 0x7fu);
+		mmio_write8(lvds, base + 0x01u, 0x00u);
+		mmio_write8(lvds, base + 0x02u, 0x00u);
+		mmio_write8(lvds, base + 0x04u, 0x3fu);
+		mmio_write8(lvds, base + 0x05u, 0x3fu);
+	}
+	mmio_write32(lvds, 0x04u, 1u);
+}
+
 static void runtime_watchdog_arm(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
@@ -686,6 +766,7 @@ static void panel_control_pinmux(void)
 static void panel_rgb_pinmux(void)
 {
 	panel_lcd_setup_enable();
+	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
 
 	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
@@ -816,6 +897,29 @@ static void panel_cmd(uint8_t cmd)
 static void panel_data(uint16_t data)
 {
 	panel_write16(1, data);
+}
+
+static void panel_apply_rgb_mode_profile(
+	const struct panel_rgb_mode_profile *profile)
+{
+	if (!panel_enabled)
+		return;
+
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	if (profile->use_b0) {
+		panel_cmd(ST7789_RAMCTRL);
+		panel_data(profile->b0[0]);
+		panel_data(profile->b0[1]);
+	}
+	panel_cmd(ST7789_RGBCTRL);
+	panel_data(profile->b1[0]);
+	panel_data(profile->b1[1]);
+	panel_data(profile->b1[2]);
+	panel_cmd(ST7789_COLMOD);
+	panel_data(profile->colmod);
+	panel_restart_frame();
 }
 
 static uint16_t panel_read_data(void)
@@ -1339,19 +1443,22 @@ static void log_gma_ready(void)
 }
 
 static void log_gma_regs(const char *name, unsigned variant, uint32_t mode,
-	uint32_t pitch, const struct gma_scanout_profile *profile)
+	uint32_t pitch, const struct gma_scanout_profile *profile,
+	const struct panel_rgb_mode_profile *panel_profile)
 {
-	char line[240];
+	char line[300];
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: %s profile=%s variant=%u mode=0x%02x pitch=%u d0=0x%08x door=0x%x enhance=%d vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x alt=0x%08x line=0x%08x\n",
-		name, profile->name, variant, mode, pitch,
+		"sf2000-screen: %s profile=%s panel=%s variant=%u mode=0x%02x pitch=%u d0=0x%08x door=0x%x enhance=%d vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x alt=0x%08x line=0x%08x src0=0x%08x src2=0x%08x\n",
+		name, profile->name, panel_profile->name, variant, mode, pitch,
 		gma_descriptor_d0(variant, mode),
 		profile->doorbells, profile->sdk_enhance,
 		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
 		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA),
 		mmio_read32(gma, GMA_DMBA_ALT),
-		mmio_read32(gma, GMA_LINEBUF));
+		mmio_read32(gma, GMA_LINEBUF),
+		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF),
+		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
 	log_line(line);
 	append_file_log(line);
 }
@@ -1461,6 +1568,8 @@ static void run_rgb_only_diag(unsigned *frame)
 		unsigned variant = phase % 3u;
 		const struct gma_scanout_profile *profile =
 			&gma_scanout_profiles[phase % ARRAY_SIZE(gma_scanout_profiles)];
+		const struct panel_rgb_mode_profile *panel_profile =
+			&panel_rgb_mode_profiles[phase % ARRAY_SIZE(panel_rgb_mode_profiles)];
 		uint32_t mode = 6u;
 		uint32_t pitch = PITCH;
 		char variant_name[24];
@@ -1481,7 +1590,7 @@ static void run_rgb_only_diag(unsigned *frame)
 			variant);
 		if (phase != last_phase) {
 			log_gma_regs("rgb format cycle", variant, mode, pitch,
-				profile);
+				profile, panel_profile);
 			last_phase = phase;
 		}
 
@@ -1489,6 +1598,7 @@ static void run_rgb_only_diag(unsigned *frame)
 			(*frame)++;
 			build_gma_descriptor_profile(variant, mode, pitch);
 			draw_solid_rgb565_screen(variant);
+			panel_apply_rgb_mode_profile(panel_profile);
 			panel_rgb_pinmux();
 			present_frame_profile(profile);
 			if (!ready_published) {
