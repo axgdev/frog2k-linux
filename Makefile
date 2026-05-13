@@ -425,6 +425,10 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--disable MEMCG_SWAP \
 		--disable MEMCG_KMEM \
 		--disable BLK_CGROUP \
+		--enable BLOCK \
+		--enable BLK_DEV \
+		--enable PARTITION_ADVANCED \
+		--enable MSDOS_PARTITION \
 		--disable CGROUP_SCHED \
 		--disable FAIR_GROUP_SCHED \
 		--disable CGROUP_PIDS \
@@ -442,8 +446,23 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--enable INPUT_MISC \
 		--enable INPUT_UINPUT \
 		--disable HID \
-		--disable USB_SUPPORT \
-		--disable USB \
+		--enable USB_SUPPORT \
+		--enable USB_COMMON \
+		--enable USB \
+		--enable USB_ANNOUNCE_NEW_DEVICES \
+		--enable USB_DEFAULT_PERSIST \
+		--enable USB_EHCI_HCD \
+		--enable USB_EHCI_HCD_PLATFORM \
+		--enable USB_OHCI_HCD \
+		--enable USB_OHCI_HCD_PLATFORM \
+		--enable USB_MUSB_HDRC \
+		--enable USB_MUSB_HOST \
+		--enable MUSB_PIO_ONLY \
+		--enable USB_STORAGE \
+		--enable HID \
+		--enable HID_GENERIC \
+		--enable USB_HID \
+		--enable HIDRAW \
 		--disable VIRTIO \
 		--disable VIRTIO_MENU \
 		--disable VIRTIO_BLK \
@@ -457,8 +476,12 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--disable GPIO_SYSFS \
 		--disable GPIO_CDEV \
 		--disable POWER_SUPPLY \
-		--disable MMC \
-		--disable MMC_BLOCK \
+		--enable MMC \
+		--enable MMC_BLOCK \
+		--set-val MMC_BLOCK_MINORS 8 \
+		--enable MMC_DW \
+		--enable MMC_DW_HICHIP \
+		--enable HICHIP_SYS_INTC \
 		--disable MMC_SDHCI \
 		--disable MMC_CQHCI \
 		--disable MMC_SPI \
@@ -476,6 +499,14 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--disable MTD_BLOCK \
 		--disable MTD_UBI \
 		--disable VT \
+		--enable SCSI \
+		--enable BLK_DEV_SD \
+		--enable FAT_FS \
+		--enable MSDOS_FS \
+		--enable VFAT_FS \
+		--enable NLS \
+		--enable NLS_CODEPAGE_437 \
+		--enable NLS_ISO8859_1 \
 		--disable EXT4_FS \
 		--disable EXPORTFS \
 		--disable FUSE_FS \

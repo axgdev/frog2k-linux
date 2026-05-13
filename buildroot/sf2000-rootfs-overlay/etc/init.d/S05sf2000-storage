@@ -1,0 +1,53 @@
+#!/bin/sh
+
+log()
+{
+	printf 'sf2000_storage: %s\n' "$*" > /dev/kmsg
+}
+
+dump_file()
+{
+	local name="$1"
+	local path="$2"
+
+	log "$name begin"
+	if [ -r "$path" ]; then
+		while IFS= read -r line; do
+			log "$name $line"
+		done < "$path"
+	else
+		log "$name missing"
+	fi
+	log "$name end"
+}
+
+case "$1" in
+	start)
+		log "probe begin"
+		dump_file proc-partitions /proc/partitions
+		log "sys-block $(ls /sys/block 2>/dev/null | tr '\n' ' ')"
+		log "dev-mmc $(ls /dev/mmc* 2>/dev/null | tr '\n' ' ')"
+		mkdir -p /mnt/sd
+		for dev in /dev/mmcblk0p1 /dev/mmcblk0; do
+			[ -b "$dev" ] || continue
+			log "mount try $dev"
+			if mount -t vfat -o rw,sync "$dev" /mnt/sd 2>/tmp/sf2000-mount.err; then
+				log "mount ok $dev"
+				ls /mnt/sd 2>/dev/null | sed 's/^/ls /' | while IFS= read -r line; do
+					log "$line"
+				done
+				printf 'sf2000 linux sd write test\n' > /mnt/sd/sf2000-linux-rw.txt &&
+					log "write ok /sf2000-linux-rw.txt" ||
+					log "write failed /sf2000-linux-rw.txt"
+				sync
+				umount /mnt/sd && log "umount ok" || log "umount failed"
+				break
+			else
+				log "mount failed $dev $(cat /tmp/sf2000-mount.err 2>/dev/null)"
+			fi
+		done
+		log "usb-devices $(ls /sys/bus/usb/devices 2>/dev/null | tr '\n' ' ')"
+		log "input-devices $(ls /dev/input 2>/dev/null | tr '\n' ' ')"
+		log "probe end"
+		;;
+esac
