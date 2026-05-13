@@ -1172,11 +1172,6 @@ struct gma_profile {
 
 static const struct gma_profile gma_profiles[] = {
 	{ "BASE D0 LB0A", 0xaa200161u, 0x0au },
-	{ "NO-CBC LB0A", 0xaa200061u, 0x0au },
-	{ "NO-LAST LB0A", 0xaa200160u, 0x0au },
-	{ "D0-CSC LB0A", 0xaa201161u, 0x0au },
-	{ "BASE D0 LB02", 0xaa200161u, 0x02u },
-	{ "BASE D0 LB12", 0xaa200161u, 0x12u },
 };
 
 static uint32_t gma_descriptor_d0(const struct gma_profile *profile)
@@ -1380,10 +1375,10 @@ static void run_rgb_only_diag(unsigned *frame)
 		const struct gma_profile *profile;
 
 		(*frame)++;
-		profile_idx = (*frame / 2u) % ARRAY_SIZE(gma_profiles);
+		profile_idx = 0;
 		profile = &gma_profiles[profile_idx];
 		build_gma_descriptor_profile(profile);
-		draw_diag_screen("RGB GMA PROFILE", profile->name,
+		draw_diag_screen("RGB GMA BASELINE", profile->name,
 			(uint8_t)(profile_idx + 1u), *frame);
 		panel_rgb_pinmux();
 		present_frame_profile(profile);
