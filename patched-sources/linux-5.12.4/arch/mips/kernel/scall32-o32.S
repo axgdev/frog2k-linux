@@ -43,6 +43,22 @@ NESTED(handle_sys, PT_SIZE, sp)
 	addiu	t1, 4			# skip to next instruction
 	sw	t1, PT_EPC(sp)
 
+#ifdef CONFIG_MIPS_SF2000
+	lw	t2, PT_STATUS(sp)
+	andi	t2, ST0_ERL
+	beqz	t2, 1f
+	 nop
+	mtc0	t1, CP0_ERROREPC
+	li	k0, 0xa1400000
+	li	k1, 0x51510032
+	sw	k1, 20(k0)
+	sw	t1, 24(k0)
+	mfc0	k1, CP0_ERROREPC
+	sw	k1, 28(k0)
+	sync
+1:
+#endif
+
 	sw	a3, PT_R26(sp)		# save a3 for syscall restarting
 
 	/*
