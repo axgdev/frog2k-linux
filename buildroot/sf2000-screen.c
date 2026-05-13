@@ -52,6 +52,10 @@ extern char **environ;
 #define GPIO_DIR_OFF 0x14u
 #define PIN_R05 5u
 #define BACKLIGHT_R05 (1u << PIN_R05)
+#define WDT_BASE_PHYS 0x18818000u
+#define WDT_REG_OFF 0x500u
+#define WDT_COUNT_OFF 0x00u
+#define WDT_PET_COUNT 0xffc61075u
 
 #define PINPAD_L01 1u
 #define PINPAD_L02 2u
@@ -426,15 +430,26 @@ static void append_file_log(const char *line)
 	close(fd);
 }
 
+static void watchdog_pet(void)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
+		WDT_PET_COUNT;
+}
+
 static void sleep_ms(unsigned msec)
 {
 	volatile unsigned spin;
 	unsigned i;
 
 	for (i = 0; i < msec && !stopping; i++) {
+		if ((i & 31u) == 0)
+			watchdog_pet();
 		for (spin = 0; spin < 18000u; spin++)
 			__asm__ volatile ("" ::: "memory");
 	}
+	watchdog_pet();
 }
 
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
@@ -683,6 +698,7 @@ static void panel_bus_delay(void)
 
 static void panel_write16(int rs, uint16_t value)
 {
+	watchdog_pet();
 	gpio_set_pad(PINPAD_T01, rs);
 	gpio_set_pad(PINPAD_L10, 0);
 	panel_write_bus(value);
@@ -780,6 +796,7 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 	const uint8_t *p = sequence;
 	unsigned clock_skewed = *p++;
 
+	watchdog_pet();
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF,
 		mmio_read32(sysio, SYS_LCD_SETUP_OFF) | (1u << 16));
 	if (clock_skewed)
@@ -793,6 +810,7 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 		unsigned count = *p++;
 		unsigned delay_ms;
 
+		watchdog_pet();
 		panel_cmd(*p++);
 		while (--count)
 			panel_data(*p++);
@@ -800,6 +818,7 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 		if (delay_ms)
 			sleep_ms(delay_ms);
 	}
+	watchdog_pet();
 }
 
 static void panel_set_madctl(uint8_t madctl)
@@ -853,11 +872,15 @@ static void panel_push_frame(int switch_to_rgb)
 	panel_config_outputs();
 	panel_bus_idle();
 	panel_restart_frame();
-	for (i = 0; i < WIDTH * HEIGHT; i++)
+	for (i = 0; i < WIDTH * HEIGHT; i++) {
+		if ((i & 0xffu) == 0)
+			watchdog_pet();
 		panel_data(fb[i]);
+	}
 	panel_bus_idle();
 	if (switch_to_rgb)
 		panel_rgb_pinmux();
+	watchdog_pet();
 }
 
 static void panel_push_probe_pixels(void)
@@ -866,6 +889,7 @@ static void panel_push_probe_pixels(void)
 
 	if (!panel_enabled)
 		return;
+	watchdog_pet();
 	panel_control_pinmux();
 	panel_config_outputs();
 	panel_bus_idle();
@@ -873,17 +897,20 @@ static void panel_push_probe_pixels(void)
 	for (i = 0; i < 16; i++)
 		panel_data(rgb565(31, 63, 31));
 	panel_bus_idle();
+	watchdog_pet();
 }
 
 static void panel_prepare_rgb_frame(void)
 {
 	if (!panel_enabled)
 		return;
+	watchdog_pet();
 	panel_control_pinmux();
 	panel_config_outputs();
 	panel_bus_idle();
 	panel_restart_frame();
 	panel_rgb_pinmux();
+	watchdog_pet();
 }
 
 static const uint8_t *glyph_for(char ch)
