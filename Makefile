@@ -61,6 +61,7 @@ BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
+BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra
 BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
@@ -99,7 +100,7 @@ BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF20
 QEMU_BOOT_TIMEOUT ?= 90s
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
-	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
+	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
 .PHONY: all status qemu rootfs buildroot buildroot-reconfigure linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
@@ -160,7 +161,7 @@ $(INIT_RAW): init/sf2000-flat-init.S Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
-		-fno-pic -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
+		-fno-pic -mno-gpopt -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
 		-Wl,--gc-sections -Wl,-z,noexecstack -o '$@.elf' '$<'
 	'$(OBJCOPY_MIPS)' -O binary -j .text '$@.elf' '$@'
 
@@ -236,17 +237,17 @@ $(BUILDROOT_INIT): $(INIT_BIN) Makefile
 
 $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)

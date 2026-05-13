@@ -88,7 +88,7 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 		u32 *scan = p - i;
 		u32 insn = get_unaligned(scan);
 
-		if ((insn & 0xffff0000) != 0x3c000000 ||
+		if ((insn & 0xffe00000) != 0x3c000000 ||
 		    flat_mips_lui_rt(insn) != rs)
 			continue;
 

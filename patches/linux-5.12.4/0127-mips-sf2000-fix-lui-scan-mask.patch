@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Wed, 13 May 2026 05:35:00 +0000
+Subject: [PATCH] mips: sf2000: recognize LUI with nonzero RT
+
+diff --git a/arch/mips/include/asm/flat.h b/arch/mips/include/asm/flat.h
+index 021e150..483f6b0 100644
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -88,7 +88,7 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
+ 		u32 *scan = p - i;
+ 		u32 insn = get_unaligned(scan);
+ 
+-		if ((insn & 0xffff0000) != 0x3c000000 ||
++		if ((insn & 0xffe00000) != 0x3c000000 ||
+ 		    flat_mips_lui_rt(insn) != rs)
+ 			continue;
+ 
