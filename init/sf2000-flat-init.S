@@ -221,9 +221,9 @@ path_proc_type:
 path_meminfo:
 	.asciz	"/proc/meminfo"
 path_busybox:
-	.asciz	"/bin/busybox"
+	.asciz	"/sbin/init"
 arg_init:
-	.asciz	"init"
+	.asciz	"/sbin/init"
 env_home:
 	.asciz	"HOME=/"
 env_path:
