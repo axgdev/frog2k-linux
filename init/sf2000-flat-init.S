@@ -148,9 +148,20 @@ _start:
 	sw	$0, 288($8)
 
 9:
+	addiu	$29, $29, -64
+	addiu	$8, $16, arg_init - 1b
+	sw	$8, 0($29)
+	sw	$0, 4($29)
+	addiu	$8, $16, env_home - 1b
+	sw	$8, 16($29)
+	addiu	$8, $16, env_path - 1b
+	sw	$8, 20($29)
+	addiu	$8, $16, env_term - 1b
+	sw	$8, 24($29)
+	sw	$0, 28($29)
 	addiu	$4, $16, path_busybox - 1b
-	move	$5, $0
-	move	$6, $0
+	move	$5, $29
+	addiu	$6, $29, 16
 	li	$2, 4011
 	li	$8, 0xa1400000
 	li	$9, 0x5151042a
@@ -211,6 +222,14 @@ path_meminfo:
 	.asciz	"/proc/meminfo"
 path_busybox:
 	.asciz	"/bin/busybox"
+arg_init:
+	.asciz	"init"
+env_home:
+	.asciz	"HOME=/"
+env_path:
+	.asciz	"PATH=/bin:/sbin:/usr/bin:/usr/sbin"
+env_term:
+	.asciz	"TERM=linux"
 msg_alive:
 	.ascii	"<6>sf2000_linux: flat init alive\n"
 msg_alive_end:
