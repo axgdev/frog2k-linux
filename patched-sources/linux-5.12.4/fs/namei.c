@@ -65,6 +65,16 @@ static void sf2000_namei_progress_mark(const char *name, unsigned int value)
 		sf2000_progress_mark(name, 13, value);
 }
 
+static void sf2000_namei_word(const char *name, const char *s, unsigned int off)
+{
+	unsigned int word = 0;
+	unsigned int i;
+
+	for (i = 0; i < 4; i++)
+		word |= ((unsigned int)(unsigned char)s[off + i]) << (i * 8);
+	sf2000_namei_progress_mark(name, word);
+}
+
 static int sf2000_getname_identity(char *dst, const char __user *filename,
 		int max)
 {
@@ -223,6 +233,12 @@ getname_flags(const char __user *filename, int flags, int *empty)
 		sf2000_namei_raw_mark(0x51510204, (unsigned int)len);
 		sf2000_namei_progress_mark("getname-after-usercopy",
 				(unsigned int)len);
+		if (len > 0) {
+			sf2000_namei_word("getname-w0", kname, 0);
+			sf2000_namei_word("getname-w1", kname, 4);
+			sf2000_namei_word("getname-w2", kname, 8);
+			sf2000_namei_word("getname-w3", kname, 12);
+		}
 #endif
 	}
 	if (unlikely(len < 0)) {

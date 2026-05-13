@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000144 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: trace init file syscalls
+
+BusyBox init now reaches real userspace. Add compact device-side breadcrumbs for the next blocker: decoded getname words, read returns, ioctl arguments and close returns. This distinguishes a hang inside close from the next userspace syscall without needing visible pulse counting.
+---
+--- a/fs/namei.c	2026-05-13 07:27:50.862299013 +0000
++++ b/fs/namei.c	2026-05-13 07:40:36.370530008 +0000
+@@ -65,6 +65,16 @@
+ 		sf2000_progress_mark(name, 13, value);
+ }
+ 
++static void sf2000_namei_word(const char *name, const char *s, unsigned int off)
++{
++	unsigned int word = 0;
++	unsigned int i;
++
++	for (i = 0; i < 4; i++)
++		word |= ((unsigned int)(unsigned char)s[off + i]) << (i * 8);
++	sf2000_namei_progress_mark(name, word);
++}
++
+ static int sf2000_getname_identity(char *dst, const char __user *filename,
+ 		int max)
+ {
+@@ -223,6 +233,12 @@
+ 		sf2000_namei_raw_mark(0x51510204, (unsigned int)len);
+ 		sf2000_namei_progress_mark("getname-after-usercopy",
+ 				(unsigned int)len);
++		if (len > 0) {
++			sf2000_namei_word("getname-w0", kname, 0);
++			sf2000_namei_word("getname-w1", kname, 4);
++			sf2000_namei_word("getname-w2", kname, 8);
++			sf2000_namei_word("getname-w3", kname, 12);
++		}
+ #endif
+ 	}
+ 	if (unlikely(len < 0)) {
+--- a/fs/open.c	2026-05-13 07:27:50.862156304 +0000
++++ b/fs/open.c	2026-05-13 07:40:36.374530008 +0000
+@@ -1339,7 +1339,11 @@
+  */
+ SYSCALL_DEFINE1(close, unsigned int, fd)
+ {
+-	int retval = close_fd(fd);
++	int retval;
++
++	sf2000_open_mark("close-entry", fd);
++	retval = close_fd(fd);
++	sf2000_open_mark("close-after-close-fd", (unsigned int)retval);
+ 
+ 	/* can't restart close syscall because file table entry was cleared */
+ 	if (unlikely(retval == -ERESTARTSYS ||
+@@ -1348,6 +1352,7 @@
+ 		     retval == -ERESTART_RESTARTBLOCK))
+ 		retval = -EINTR;
+ 
++	sf2000_open_mark("close-return", (unsigned int)retval);
+ 	return retval;
+ }
+ 
+--- a/fs/read_write.c	2026-05-13 07:27:50.891342013 +0000
++++ b/fs/read_write.c	2026-05-13 07:40:36.378530008 +0000
+@@ -718,7 +718,14 @@
+ 
+ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+ {
+-	return ksys_read(fd, buf, count);
++	ssize_t ret;
++
++	sf2000_rw_value("read-fd", fd);
++	sf2000_rw_value("read-buf", (unsigned int)buf);
++	sf2000_rw_value("read-count", (unsigned int)count);
++	ret = ksys_read(fd, buf, count);
++	sf2000_rw_value("read-ret", (unsigned int)ret);
++	return ret;
+ }
+ 
+ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
+--- a/fs/ioctl.c	2021-05-14 08:53:07.000000000 +0000
++++ b/fs/ioctl.c	2026-05-13 07:40:36.378530008 +0000
+@@ -24,6 +24,18 @@
+ 
+ #include <asm/ioctls.h>
+ 
++#ifdef CONFIG_MIPS_SF2000
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
++static void sf2000_ioctl_mark(const char *name, unsigned int value)
++{
++	sf2000_progress_mark(name, 19, value);
++}
++#else
++static inline void sf2000_ioctl_mark(const char *name, unsigned int value) { }
++#endif
++
+ /* So that the fiemap access checks can't overflow on 32 bit machines. */
+ #define FIEMAP_MAX_EXTENTS	(UINT_MAX / sizeof(struct fiemap_extent))
+ 
+@@ -741,8 +753,13 @@
+ 	struct fd f = fdget(fd);
+ 	int error;
+ 
+-	if (!f.file)
++	sf2000_ioctl_mark("ioctl-fd", fd);
++	sf2000_ioctl_mark("ioctl-cmd", cmd);
++	sf2000_ioctl_mark("ioctl-arg", (unsigned int)arg);
++	if (!f.file) {
++		sf2000_ioctl_mark("ioctl-ret", (unsigned int)-EBADF);
+ 		return -EBADF;
++	}
+ 
+ 	error = security_file_ioctl(f.file, cmd, arg);
+ 	if (error)
+@@ -754,6 +771,7 @@
+ 
+ out:
+ 	fdput(f);
++	sf2000_ioctl_mark("ioctl-ret", (unsigned int)error);
+ 	return error;
+ }
+ 

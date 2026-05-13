@@ -718,7 +718,14 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
-	return ksys_read(fd, buf, count);
+	ssize_t ret;
+
+	sf2000_rw_value("read-fd", fd);
+	sf2000_rw_value("read-buf", (unsigned int)buf);
+	sf2000_rw_value("read-count", (unsigned int)count);
+	ret = ksys_read(fd, buf, count);
+	sf2000_rw_value("read-ret", (unsigned int)ret);
+	return ret;
 }
 
 ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)

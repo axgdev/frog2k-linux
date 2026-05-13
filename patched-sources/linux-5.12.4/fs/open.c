@@ -1339,7 +1339,11 @@ EXPORT_SYMBOL(filp_close);
  */
 SYSCALL_DEFINE1(close, unsigned int, fd)
 {
-	int retval = close_fd(fd);
+	int retval;
+
+	sf2000_open_mark("close-entry", fd);
+	retval = close_fd(fd);
+	sf2000_open_mark("close-after-close-fd", (unsigned int)retval);
 
 	/* can't restart close syscall because file table entry was cleared */
 	if (unlikely(retval == -ERESTARTSYS ||
@@ -1348,6 +1352,7 @@ SYSCALL_DEFINE1(close, unsigned int, fd)
 		     retval == -ERESTART_RESTARTBLOCK))
 		retval = -EINTR;
 
+	sf2000_open_mark("close-return", (unsigned int)retval);
 	return retval;
 }
 
