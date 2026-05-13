@@ -98,12 +98,10 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 		if ((insn & 0xffe00000) != 0x3c000000 ||
 		    flat_mips_lui_rt(insn) != rs)
 			continue;
+		if (!flat_mips_lookup_hi16((__force u32 __user *)scan, hi_insn))
+			continue;
 
 		*hi_rp = (__force u32 __user *)scan;
-		if (!flat_mips_lookup_hi16(*hi_rp, hi_insn)) {
-			*hi_insn = insn;
-			flat_mips_remember_hi16(*hi_rp, insn);
-		}
 		return 1;
 	}
 
