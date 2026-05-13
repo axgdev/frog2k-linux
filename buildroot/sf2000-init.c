@@ -43,7 +43,6 @@ typedef unsigned int size_t;
 #define WDT_COUNT_OFF 0x00UL
 #define WDT_CONF_OFF 0x04UL
 #define WDT_DIAG_COUNT 0xffc61075UL
-#define WDT_DIAG_CONF 0x26UL
 
 struct timespec {
 	long tv_sec;
@@ -252,26 +251,9 @@ static int early_watchdog_disable(void)
 	return 0;
 }
 
-static int diagnostic_watchdog_arm(void)
+static int diagnostic_watchdog_disable(void)
 {
-	volatile unsigned char *wdt;
-	long fd;
-
-	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
-	if (fd < 0) {
-		wdt = KSEG1ADDR(WDT_MAP_BASE_PHYS);
-	} else {
-		wdt = sys_mmap2(0, WDT_MAP_SIZE, PROT_READ | PROT_WRITE,
-			MAP_SHARED, fd, WDT_MAP_BASE_PHYS);
-		syscall1(SYS_close, fd);
-		if ((long)wdt < 0)
-			wdt = KSEG1ADDR(WDT_MAP_BASE_PHYS);
-	}
-
-	mmio_write8(wdt, WDT_REG_OFF + WDT_CONF_OFF, 0);
-	mmio_write32(wdt, WDT_REG_OFF + WDT_COUNT_OFF, WDT_DIAG_COUNT);
-	mmio_write8(wdt, WDT_REG_OFF + WDT_CONF_OFF, WDT_DIAG_CONF);
-	return 0;
+	return early_watchdog_disable();
 }
 
 static void userspace_backlight_set(volatile unsigned char *sysio, int on)
@@ -327,17 +309,17 @@ static int visible_userspace_stage(void)
 
 	userspace_backlight_set(sysio, 1);
 	userspace_status_led_set(sysio, 0);
-	sleep_ms(1200);
-	for (i = 0; i < 10; i++) {
+	sleep_ms(200);
+	for (i = 0; i < 4; i++) {
 		userspace_backlight_set(sysio, 0);
 		userspace_status_led_set(sysio, 1);
-		sleep_ms(220);
+		sleep_ms(80);
 		userspace_backlight_set(sysio, 1);
 		userspace_status_led_set(sysio, 0);
-		sleep_ms(120);
+		sleep_ms(80);
 	}
 	userspace_status_led_set(sysio, 0);
-	sleep_ms(1200);
+	sleep_ms(200);
 	return 0;
 }
 
@@ -458,9 +440,10 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: early watchdog disabled\n");
 	else
 		log_message("sf2000_buildroot: early watchdog disable failed\n");
-	diagnostic_watchdog_arm();
-	log_message("sf2000_buildroot: diagnostic watchdog armed\n");
-	diagnostic_watchdog_pet();
+	if (diagnostic_watchdog_disable() == 0)
+		log_message("sf2000_buildroot: runtime watchdog disabled\n");
+	else
+		log_message("sf2000_buildroot: runtime watchdog disable failed\n");
 	log_message("sf2000_buildroot: /init visible userspace stage begin\n");
 	if (visible_userspace_stage() == 0)
 		log_message("sf2000_buildroot: /init visible userspace stage done\n");

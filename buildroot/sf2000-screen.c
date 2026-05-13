@@ -607,13 +607,13 @@ static void startup_backlight_diagnostic(void)
 
 	log_line("sf2000-screen: diag step 1 backlight off\n");
 	backlight_set(0);
-	sleep_ms(220);
+	sleep_ms(80);
 	log_line("sf2000-screen: diag step 2 backlight on\n");
 	backlight_set(1);
-	sleep_ms(220);
+	sleep_ms(80);
 	log_line("sf2000-screen: diag step 3 backlight off\n");
 	backlight_set(0);
-	sleep_ms(220);
+	sleep_ms(80);
 	log_line("sf2000-screen: diag step 4 backlight on\n");
 	backlight_set(1);
 
@@ -784,11 +784,11 @@ static void panel_reset(void)
 {
 	panel_bus_idle();
 	gpio_set_pad(PINPAD_L01, 1);
-	sleep_ms(500);
+	sleep_ms(120);
 	gpio_set_pad(PINPAD_L01, 0);
-	sleep_ms(500);
+	sleep_ms(40);
 	gpio_set_pad(PINPAD_L01, 1);
-	sleep_ms(500);
+	sleep_ms(120);
 }
 
 static void panel_apply_init_sequence(const uint8_t *sequence)
@@ -1146,11 +1146,11 @@ static void run_direct_diag(unsigned *frame)
 		unsigned madctl_count = i == 0 ? ARRAY_SIZE(variant->madctl) : 1;
 		unsigned m;
 
-		diagnostic_pulse((i % 3u) + 1u, 450, 450);
+		diagnostic_pulse((i % 3u) + 1u, 120, 120);
 		panel_init_variant(variant);
 		for (m = 0; m < madctl_count && !stopping; m++)
 			show_direct_frame("DIRECT PANEL BUS", variant,
-				variant->madctl[m], frame, 1400);
+				variant->madctl[m], frame, 350);
 	}
 }
 
@@ -1162,14 +1162,14 @@ static void run_rgb_diag(unsigned *frame)
 	if (stopping)
 		return;
 
-	diagnostic_pulse(4, 450, 450);
+	diagnostic_pulse(4, 120, 120);
 	panel_init_variant(variant);
 	panel_set_madctl(variant->madctl[0]);
 	(*frame)++;
 	draw_diag_screen("GMA RGB SCANOUT", variant->name,
 		variant->madctl[0], *frame);
 	panel_push_frame(0);
-	sleep_ms(900);
+	sleep_ms(350);
 
 	for (i = 0; i < 8 && !stopping; i++) {
 		(*frame)++;
@@ -1177,7 +1177,7 @@ static void run_rgb_diag(unsigned *frame)
 			variant->madctl[0], *frame);
 		panel_prepare_rgb_frame();
 		present_frame();
-		sleep_ms(900);
+		sleep_ms(350);
 	}
 }
 
@@ -1230,7 +1230,7 @@ int main(int argc, char **argv, char **envp)
 	draw_diag_screen("FIRST DIRECT BUS", first_variant->name,
 		first_variant->madctl[0], frame);
 	panel_push_frame(0);
-	sleep_ms(1800);
+	sleep_ms(500);
 
 	while (!stopping) {
 		run_direct_diag(&frame);
