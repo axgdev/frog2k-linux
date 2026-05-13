@@ -85,6 +85,12 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 	u32 rs = flat_mips_lo16_rs(lo);
 	int i;
 
+	if (flat_mips_hi16_rp && flat_mips_lui_rt(flat_mips_hi16_insn) == rs) {
+		*hi_rp = flat_mips_hi16_rp;
+		*hi_insn = flat_mips_hi16_insn;
+		return 1;
+	}
+
 	for (i = 1; i <= FLAT_MIPS_HI16_SCAN; i++) {
 		u32 *scan = p - i;
 		u32 insn = get_unaligned(scan);
@@ -98,12 +104,6 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 			*hi_insn = insn;
 			flat_mips_remember_hi16(*hi_rp, insn);
 		}
-		return 1;
-	}
-
-	if (flat_mips_hi16_rp && flat_mips_lui_rt(flat_mips_hi16_insn) == rs) {
-		*hi_rp = flat_mips_hi16_rp;
-		*hi_insn = flat_mips_hi16_insn;
 		return 1;
 	}
 
