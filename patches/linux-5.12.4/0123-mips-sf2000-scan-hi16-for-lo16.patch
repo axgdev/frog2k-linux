@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Wed, 13 May 2026 04:10:00 +0000
+Subject: [PATCH] mips: sf2000: scan nearby HI16 for LO16 relocs
+
+diff --git a/arch/mips/include/asm/flat.h b/arch/mips/include/asm/flat.h
+index a497653..cf7e5f2 100644
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -20,11 +20,57 @@ static inline u32 flat_mips_reloc_type(u32 rel)
+ 	return rel & FLAT_MIPS_R_MASK;
+ }
+ 
++static inline u32 flat_mips_lui_rt(u32 insn)
++{
++	return (insn >> 16) & 0x1f;
++}
++
++static inline u32 flat_mips_lo16_rs(u32 insn)
++{
++	return (insn >> 21) & 0x1f;
++}
++
++static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
++					       u32 __user **hi_rp,
++					       u32 *hi_insn)
++{
++	u32 *p = (__force u32 *)rp;
++	u32 rs = flat_mips_lo16_rs(lo);
++	int i;
++
++	for (i = 1; i <= 32; i++) {
++		u32 *scan = p - i;
++		u32 insn = get_unaligned(scan);
++
++		if ((insn & 0xffff0000) != 0x3c000000 ||
++		    flat_mips_lui_rt(insn) != rs)
++			continue;
++
++		*hi_rp = (__force u32 __user *)scan;
++		if (*hi_rp == flat_mips_hi16_rp)
++			*hi_insn = flat_mips_hi16_insn;
++		else
++			*hi_insn = insn;
++		return 1;
++	}
++
++	if (flat_mips_hi16_rp && flat_mips_lui_rt(flat_mips_hi16_insn) == rs) {
++		*hi_rp = flat_mips_hi16_rp;
++		*hi_insn = flat_mips_hi16_insn;
++		return 1;
++	}
++
++	*hi_rp = NULL;
++	*hi_insn = 0;
++	return 0;
++}
++
+ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
+ 					u32 *addr)
+ {
+ 	u32 *p = (__force u32 *)rp;
+ 	u32 insn, hi, lo;
++	u32 __user *hi_rp;
+ 
+ 	switch (flat_mips_reloc_type(relval)) {
+ 	case FLAT_MIPS_R_26:
+@@ -42,8 +88,7 @@ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
+ 		return 0;
+ 	case FLAT_MIPS_R_LO16:
+ 		lo = get_unaligned(p);
+-		if (flat_mips_hi16_rp) {
+-			hi = flat_mips_hi16_insn;
++		if (flat_mips_find_hi16_for_lo16(rp, lo, &hi_rp, &hi)) {
+ 			*addr = htonl(((hi & 0xffff) << 16) +
+ 				      (s16)(lo & 0xffff));
+ 		} else {
+@@ -60,6 +105,7 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+ {
+ 	u32 *p = (__force u32 *)rp;
+ 	u32 insn, hi, lo;
++	u32 __user *hi_rp;
+ 
+ 	switch (flat_mips_reloc_type(relval)) {
+ 	case FLAT_MIPS_R_26:
+@@ -73,8 +119,8 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+ 		return 0;
+ 	case FLAT_MIPS_R_LO16:
+ 		lo = get_unaligned(p);
+-		if (flat_mips_hi16_rp) {
+-			u32 *hi_p = (__force u32 *)flat_mips_hi16_rp;
++		if (flat_mips_find_hi16_for_lo16(rp, lo, &hi_rp, &hi)) {
++			u32 *hi_p = (__force u32 *)hi_rp;
+ 
+ 			hi = get_unaligned(hi_p);
+ 			hi = (hi & 0xffff0000) |
