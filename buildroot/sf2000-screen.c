@@ -1168,17 +1168,15 @@ struct gma_profile {
 	const char *name;
 	uint32_t d0;
 	uint32_t linebuf;
-	int csc_bypass;
-	int sharpness;
 };
 
 static const struct gma_profile gma_profiles[] = {
-	{ "BYPASS LB0A", 0xaa200161u, 0x0au, 1, 0 },
-	{ "SDKCTL LB0A", 0xaa201161u, 0x0au, 0, 1 },
-	{ "BYPASS CSC", 0xaa201161u, 0x0au, 1, 0 },
-	{ "BYPASS LB02", 0xaa200161u, 0x02u, 1, 0 },
-	{ "BYPASS LB12", 0xaa200161u, 0x12u, 1, 0 },
-	{ "NO-CBC LB0A", 0xaa200061u, 0x0au, 1, 0 },
+	{ "BASE D0 LB0A", 0xaa200161u, 0x0au },
+	{ "NO-CBC LB0A", 0xaa200061u, 0x0au },
+	{ "NO-LAST LB0A", 0xaa200160u, 0x0au },
+	{ "D0-CSC LB0A", 0xaa201161u, 0x0au },
+	{ "BASE D0 LB02", 0xaa200161u, 0x02u },
+	{ "BASE D0 LB12", 0xaa200161u, 0x12u },
 };
 
 static uint32_t gma_descriptor_d0(const struct gma_profile *profile)
@@ -1236,8 +1234,8 @@ static void present_frame(void)
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
-	gma_set_bit(GMA_CTL, 1u << 19, 1);
-	gma_set_bit(GMA_CTL, 1u << 18, 0);
+	gma_set_bit(GMA_CTL, 1u << 19, 0);
+	gma_set_bit(GMA_CTL, 1u << 18, 1);
 }
 
 static void present_frame_profile(const struct gma_profile *profile)
@@ -1249,8 +1247,8 @@ static void present_frame_profile(const struct gma_profile *profile)
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
-	gma_set_bit(GMA_CTL, 1u << 19, profile->csc_bypass);
-	gma_set_bit(GMA_CTL, 1u << 18, profile->sharpness);
+	gma_set_bit(GMA_CTL, 1u << 19, 0);
+	gma_set_bit(GMA_CTL, 1u << 18, 1);
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
@@ -1286,10 +1284,9 @@ static void log_gma_regs(const char *name, unsigned profile_idx,
 	char line[192];
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: %s profile=%u %s d0=0x%08x line=0x%08x bypass=%d sharp=%d vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x\n",
+		"sf2000-screen: %s profile=%u %s d0=0x%08x line=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x\n",
 		name, profile_idx, profile->name, gma_descriptor_d0(profile),
-		profile->linebuf, profile->csc_bypass, profile->sharpness,
-		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
+		profile->linebuf, mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
 		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA));
 	log_line(line);
 	append_file_log(line);
