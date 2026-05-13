@@ -23,6 +23,7 @@
 #include <linux/sched/task_stack.h>
 
 #include <asm/abi.h>
+#include <asm/addrspace.h>
 #include <asm/asm.h>
 #include <asm/dsemul.h>
 #include <asm/dsp.h>
@@ -63,6 +64,9 @@ static bool sf2000_identity_handoff_used;
 static bool sf2000_identity_userspace_enabled(void)
 {
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || !sf2000_rom_handoff_present())
+		return false;
+
+	if (!IS_ENABLED(CONFIG_MMU))
 		return false;
 
 	return (read_c0_ebase() & 0x1ffff000) == 0x01002000;
@@ -121,6 +125,35 @@ void sf2000_ret_before_restore(struct pt_regs *regs)
 		read_c0_errorepc());
 }
 
+static bool sf2000_nommu_flat_kseg0_handoff(unsigned long *pc,
+		unsigned long *sp, unsigned long *status)
+{
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || IS_ENABLED(CONFIG_MMU))
+		return false;
+
+	if (!sf2000_rom_handoff_present())
+		return false;
+
+	if (sf2000_identity_handoff_used)
+		return false;
+
+	if (*pc >= KSEG0)
+		return false;
+
+	sf2000_identity_handoff_used = true;
+	sf2000_identity_init_pc = CKSEG0ADDR(*pc);
+	sf2000_identity_init_sp = CKSEG0ADDR(*sp);
+	*pc = sf2000_identity_init_pc;
+	*sp = sf2000_identity_init_sp;
+	*status |= ST0_ERL;
+	*status &= ~(ST0_EXL | KU_MASK | ST0_IE);
+	sf2000_progress_mark("mips-start-thread-kseg0-pc", 9, *pc);
+	sf2000_progress_mark("mips-start-thread-kseg0-sp", 9, *sp);
+	sf2000_progress_mark("mips-start-thread-kseg0-status", 9, *status);
+	write_c0_errorepc(*pc);
+	return true;
+}
+
 void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 {
 	unsigned long status;
@@ -158,6 +191,14 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 		sf2000_progress_mark("mips-start-thread-erl-status", 9,
 			status);
 		sf2000_progress_mark("mips-start-thread-erl-sp", 9, sp);
+	} else if (sf2000_nommu_flat_kseg0_handoff(&pc, &sp, &status)) {
+		sf2000_progress_mark("mips-start-thread-errorepc-before", 9,
+			read_c0_errorepc());
+		write_c0_errorepc(pc);
+		sf2000_progress_mark("mips-start-thread-errorepc-after", 9,
+			read_c0_errorepc());
+		sf2000_progress_mark("mips-start-thread-nommu-erl-pc", 9, pc);
+		sf2000_progress_mark("mips-start-thread-nommu-erl-sp", 9, sp);
 	}
 normal_user_status:
 	regs->cp0_status = status;

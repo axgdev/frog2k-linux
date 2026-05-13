@@ -6,6 +6,15 @@
 	.global _start
 	.ent _start
 _start:
+	li	$8, 0xa1400000
+	li	$9, 0x51510410
+	sw	$9, 0($8)
+	sw	$29, 4($8)
+	sw	$31, 8($8)
+	mfc0	$9, $12
+	sw	$9, 12($8)
+	sync
+
 	bal	1f
 	 nop
 1:
@@ -74,4 +83,3 @@ msg_nommu:
 	.ascii	"<6>sf2000_linux: nommu userspace reached\n"
 msg_nommu_end:
 	.end _start
-
