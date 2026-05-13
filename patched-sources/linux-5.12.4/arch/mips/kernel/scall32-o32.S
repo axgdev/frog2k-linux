@@ -86,9 +86,9 @@ sf2000_after_syscall_irq_state:
 	lw	t0, PT_R29(sp)		# get old user stack pointer
 
 #ifdef CONFIG_MIPS_SF2000
-	li	t5, 0xe0000000
+	li	t5, 0xc0000000
 	and	t4, t0, t5
-	li	t5, 0xa0000000
+	li	t5, 0x80000000
 	beq	t4, t5, sf2000_kseg_stack_args
 	nop
 #endif
@@ -256,6 +256,13 @@ syscall_trace_entry:
 	 * failed. We probably should handle this case a bit more drastic.
 	 */
 bad_stack:
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa1400000
+	li	k1, 0x51510537
+	sw	k1, 160(k0)
+	lw	k1, PT_R29(sp)
+	sw	k1, 164(k0)
+#endif
 	li	v0, EFAULT
 	sw	v0, PT_R2(sp)
 	li	t0, 1				# set error flag

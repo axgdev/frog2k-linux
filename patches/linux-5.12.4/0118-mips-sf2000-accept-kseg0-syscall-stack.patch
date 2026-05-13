@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000118 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: accept KSEG0 syscall stack
+
+The 0077 hardware log still had all bFLT syscalls returning EFAULT, and the
+new syscall-table dispatch markers were never written.  That means the error is
+before syscall_common.  The raw init stack is KSEG0, but the SF2000 special
+case only skipped extra stack argument loads for KSEG1 stacks.  The normal user
+stack limit check then rejects the KSEG0 stack and branches to bad_stack.
+
+Accept both KSEG0 and KSEG1 stack aliases for this temporary SF2000 NOMMU
+bring-up path.  Also record the bad_stack stack pointer in the high raw diag
+area so future logs can prove whether this path is still involved.
+---
+ arch/mips/kernel/scall32-o32.S | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/arch/mips/kernel/scall32-o32.S b/arch/mips/kernel/scall32-o32.S
+index 1111111..2222222 100644
+--- a/arch/mips/kernel/scall32-o32.S
++++ b/arch/mips/kernel/scall32-o32.S
+@@ -84,9 +84,9 @@ sf2000_after_syscall_irq_state:
+ 	lw	t0, PT_R29(sp)		# get old user stack pointer
+ 
+ #ifdef CONFIG_MIPS_SF2000
+-	li	t5, 0xe0000000
++	li	t5, 0xc0000000
+ 	and	t4, t0, t5
+-	li	t5, 0xa0000000
++	li	t5, 0x80000000
+ 	beq	t4, t5, sf2000_kseg_stack_args
+ 	nop
+ #endif
+@@ -254,8 +254,15 @@ syscall_trace_entry:
+ 	 * failed. We probably should handle this case a bit more drastic.
+ 	 */
+ bad_stack:
++#ifdef CONFIG_MIPS_SF2000
++	li	k0, 0xa1400000
++	li	k1, 0x51510537
++	sw	k1, 160(k0)
++	lw	k1, PT_R29(sp)
++	sw	k1, 164(k0)
++#endif
+ 	li	v0, EFAULT
+ 	sw	v0, PT_R2(sp)
+ 	li	t0, 1				# set error flag
+ 	sw	t0, PT_R7(sp)
+ 	j	o32_syscall_exit
+-- 
+2.45.0
