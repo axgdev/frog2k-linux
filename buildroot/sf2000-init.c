@@ -21,7 +21,8 @@ typedef unsigned int size_t;
 #define MAP_SHARED 1
 #define SIGCHLD 18
 #define CLONE_VM 0x00000100UL
-#define CLONE_VFORK 0x00004000UL
+#define SERVICE_STACK_BYTES 4096u
+#define SERVICE_STACK_WORDS (SERVICE_STACK_BYTES / sizeof(unsigned long))
 
 #define SYSIO_BASE_PHYS 0x18800000UL
 #define SYSIO_SIZE 0x1000UL
@@ -59,6 +60,10 @@ static char *const init_envp[] = {
 	"SF2000_PAD_PROFILE=sf2000",
 	0
 };
+static unsigned long screen_stack[SERVICE_STACK_WORDS];
+static unsigned long heartbeat_stack[SERVICE_STACK_WORDS];
+static unsigned long pad_stack[SERVICE_STACK_WORDS];
+static char *const *service_exec_argv;
 
 static void log_message(const char *message);
 
@@ -405,30 +410,45 @@ static void log_hex_word(unsigned int value)
 	write_all(1, buf);
 }
 
-static void spawn_service(const char *name, char *const argv[])
+static unsigned long service_stack_top(unsigned long *stack)
+{
+	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
+}
+
+static void service_child_exec(void)
+{
+	char *const *argv = service_exec_argv;
+	long ret;
+
+	ret = syscall3(SYS_execve, (long)argv[0], (long)argv,
+		(long)init_envp);
+	log_message("sf2000_buildroot: service exec failed\n");
+	log_message("sf2000_buildroot: service path ");
+	log_message(argv[0]);
+	log_message("\n");
+	log_message("sf2000_buildroot: service exec ret ");
+	log_hex_word((unsigned int)ret);
+	syscall1(SYS_exit, 127);
+}
+
+static void spawn_service(const char *name, char *const argv[],
+		unsigned long *stack)
 {
 	long pid;
+	unsigned long child_stack = service_stack_top(stack);
 
 	log_message(name);
-	pid = syscall6(SYS_clone, CLONE_VM | CLONE_VFORK | SIGCHLD,
-		0, 0, 0, 0, 0);
+	service_exec_argv = argv;
+	diagnostic_watchdog_pet();
+	pid = syscall6(SYS_clone, CLONE_VM | SIGCHLD, child_stack, 0, 0, 0, 0);
 	if (pid < 0) {
-		log_message("sf2000_buildroot: vfork clone failed ");
+		log_message("sf2000_buildroot: service clone failed ");
 		log_hex_word((unsigned int)pid);
 		return;
 	}
-	if (pid == 0) {
-		long ret = syscall3(SYS_execve, (long)argv[0], (long)argv,
-			(long)init_envp);
-
-		log_message("sf2000_buildroot: service exec failed\n");
-		log_message("sf2000_buildroot: service path ");
-		log_message(argv[0]);
-		log_message("\n");
-		log_message("sf2000_buildroot: service exec ret ");
-		log_hex_word((unsigned int)ret);
-		syscall1(SYS_exit, 127);
-	}
+	if (pid == 0)
+		service_child_exec();
+	diagnostic_watchdog_pet();
 }
 
 static void reap_children(void)
@@ -454,13 +474,15 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
-	spawn_service("sf2000_buildroot: starting screen\n", screen_argv);
+	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
+		screen_stack);
 	diagnostic_watchdog_pet();
 	sleep_ms(500);
-	spawn_service("sf2000_buildroot: starting heartbeat\n", heartbeat_argv);
+	spawn_service("sf2000_buildroot: starting heartbeat\n", heartbeat_argv,
+		heartbeat_stack);
 	diagnostic_watchdog_pet();
 	sleep_ms(500);
-	spawn_service("sf2000_buildroot: starting pad\n", pad_argv);
+	spawn_service("sf2000_buildroot: starting pad\n", pad_argv, pad_stack);
 	diagnostic_watchdog_pet();
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
