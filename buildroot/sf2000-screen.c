@@ -32,6 +32,8 @@ extern char **environ;
 #define GMA_K 0x308u
 #define GMA_MASK 0x350u
 #define GMA_LINEBUF 0x3b8u
+#define GMA_DOORBELL_PRIMARY 0x01u
+#define GMA_DOORBELL_ALT 0x02u
 
 #define SYSIO_PHYS 0x18800000u
 #define SYSIO_SIZE 0x1000u
@@ -352,6 +354,13 @@ struct panel_variant {
 	uint8_t madctl[4];
 };
 
+struct gma_scanout_profile {
+	const char *name;
+	uint32_t linebuf;
+	unsigned doorbells;
+	int sdk_enhance;
+};
+
 static const struct panel_variant panel_variants[] = {
 	{ "SF2000", st7789_sf2000_init, { 0x70, 0x00, 0x80, 0xc0 } },
 	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
@@ -359,6 +368,15 @@ static const struct panel_variant panel_variants[] = {
 	{ "Q19", st7789_q19_init, { 0x28, 0x68, 0xa8, 0xe8 } },
 	{ "DY12", st7789_dy12_init, { 0x68, 0x28, 0xa8, 0xe8 } },
 	{ "009306", st7789_009306_init, { 0x28, 0x68, 0xa8, 0xe8 } },
+};
+
+static const struct gma_scanout_profile gma_scanout_profiles[] = {
+	{ "LB0A PRIMARY BYPASS", 0x0au, GMA_DOORBELL_PRIMARY, 0 },
+	{ "LB12 ALT BYPASS", 0x12u, GMA_DOORBELL_ALT, 0 },
+	{ "LB02 BOTH BYPASS", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 0 },
+	{ "LB0A PRIMARY SDK", 0x0au, GMA_DOORBELL_PRIMARY, 1 },
+	{ "LB12 ALT SDK", 0x12u, GMA_DOORBELL_ALT, 1 },
+	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
 };
 
 struct pinmux_setting {
@@ -1023,6 +1041,27 @@ static void panel_push_probe_pixels(void)
 	watchdog_pet();
 }
 
+static void panel_fill_solid_direct(uint16_t color)
+{
+	unsigned i;
+
+	if (!panel_enabled)
+		return;
+
+	watchdog_pet();
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_restart_frame();
+	for (i = 0; i < WIDTH * HEIGHT; i++) {
+		if ((i & 0xffu) == 0)
+			watchdog_pet();
+		panel_data(color);
+	}
+	panel_bus_idle();
+	watchdog_pet();
+}
+
 static void panel_prepare_rgb_frame(void)
 {
 	if (!panel_enabled)
@@ -1251,18 +1290,25 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 	mmio_write32(gma, GMA_MASK, 0);
 }
 
-static void present_frame(void)
+static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
 	flush_present_memory();
 	mmio_write32(gma, GMA_MASK, 1);
-	mmio_write32(gma, GMA_LINEBUF, 0x0a);
+	mmio_write32(gma, GMA_LINEBUF, profile->linebuf);
 	mmio_write32(gma, GMA_K, 0xff);
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
-	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
-	mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
+	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
+		mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
+	if (profile->doorbells & GMA_DOORBELL_ALT)
+		mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
-	gma_set_bit(GMA_CTL, 1u << 19, 1);
-	gma_set_bit(GMA_CTL, 1u << 18, 0);
+	gma_set_bit(GMA_CTL, 1u << 19, !profile->sdk_enhance);
+	gma_set_bit(GMA_CTL, 1u << 18, profile->sdk_enhance);
+}
+
+static void present_frame(void)
+{
+	present_frame_profile(&gma_scanout_profiles[0]);
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
@@ -1293,15 +1339,18 @@ static void log_gma_ready(void)
 }
 
 static void log_gma_regs(const char *name, unsigned variant, uint32_t mode,
-	uint32_t pitch)
+	uint32_t pitch, const struct gma_scanout_profile *profile)
 {
-	char line[192];
+	char line[240];
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: %s variant=%u mode=0x%02x pitch=%u d0=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x line=0x%08x\n",
-		name, variant, mode, pitch, gma_descriptor_d0(variant, mode),
+		"sf2000-screen: %s profile=%s variant=%u mode=0x%02x pitch=%u d0=0x%08x door=0x%x enhance=%d vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x alt=0x%08x line=0x%08x\n",
+		name, profile->name, variant, mode, pitch,
+		gma_descriptor_d0(variant, mode),
+		profile->doorbells, profile->sdk_enhance,
 		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
 		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA),
+		mmio_read32(gma, GMA_DMBA_ALT),
 		mmio_read32(gma, GMA_LINEBUF));
 	log_line(line);
 	append_file_log(line);
@@ -1381,6 +1430,7 @@ static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
 	unsigned last_phase = 99;
+	unsigned direct;
 	unsigned phase = 0;
 
 	log_line("sf2000-screen: rgb-only diag begin\n");
@@ -1388,11 +1438,29 @@ static void run_rgb_only_diag(unsigned *frame)
 	panel_lcd_setup_enable();
 	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
 		panel_init_sf2000_original_order();
+
+	for (direct = 0; direct < 3u && !stopping; direct++) {
+		char line[128];
+		uint16_t color = solid_rgb565_color(direct);
+
+		snprintf(line, sizeof(line),
+			"sf2000-screen: direct solid fill variant=%u color=0x%04x\n",
+			direct, color);
+		log_line(line);
+		append_file_log(line);
+		diagnostic_pulse(direct + 1u, 70, 70);
+		panel_fill_solid_direct(color);
+		backlight_set(1);
+		sleep_ms(1200);
+	}
+
 	panel_rgb_pinmux();
 	build_gma_descriptor();
 
 	while (!stopping) {
 		unsigned variant = phase % 3u;
+		const struct gma_scanout_profile *profile =
+			&gma_scanout_profiles[phase % ARRAY_SIZE(gma_scanout_profiles)];
 		uint32_t mode = 6u;
 		uint32_t pitch = PITCH;
 		char variant_name[24];
@@ -1400,37 +1468,38 @@ static void run_rgb_only_diag(unsigned *frame)
 		unsigned hold;
 
 		backlight_set(0);
-		sleep_ms(350);
+		sleep_ms(160);
 		for (pulse = 0; pulse <= phase; pulse++) {
 			backlight_set(1);
-			sleep_ms(140);
+			sleep_ms(70);
 			backlight_set(0);
-			sleep_ms(140);
+			sleep_ms(70);
 		}
 		backlight_set(1);
 
 		snprintf(variant_name, sizeof(variant_name), "RGB565 SOLID %u",
 			variant);
 		if (phase != last_phase) {
-			log_gma_regs("rgb format cycle", variant, mode, pitch);
+			log_gma_regs("rgb format cycle", variant, mode, pitch,
+				profile);
 			last_phase = phase;
 		}
 
-		for (hold = 0; hold < 4 && !stopping; hold++) {
+		for (hold = 0; hold < 3 && !stopping; hold++) {
 			(*frame)++;
 			build_gma_descriptor_profile(variant, mode, pitch);
 			draw_solid_rgb565_screen(variant);
 			panel_rgb_pinmux();
-			present_frame();
+			present_frame_profile(profile);
 			if (!ready_published) {
 				publish_marker("/run/sf2000-screen-ready", "ready\n");
 				log_gma_ready();
 				ready_published = 1;
 			}
-			sleep_ms(900);
+			sleep_ms(500);
 			watchdog_pet();
 		}
-		phase = (phase + 1u) % 3u;
+		phase = (phase + 1u) % ARRAY_SIZE(gma_scanout_profiles);
 	}
 	runtime_watchdog_disable();
 }
