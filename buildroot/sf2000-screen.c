@@ -364,6 +364,12 @@ static const unsigned panel_control_pads[] = {
 	PINPAD_T06
 };
 
+static const char *const panel_control_names[] = {
+	"L10", "T01", "L07", "T00", "L01", "L02", "L03", "L04", "L05",
+	"L06", "T09", "T10", "T11", "T12", "T13", "T14", "T02", "T03",
+	"T04", "T05", "T06"
+};
+
 static const struct pinmux_setting panel_rgb_pads[] = {
 	{ PINPAD_T06, PINMUX_PRGB_R7 },
 	{ PINPAD_T05, PINMUX_PRGB_R6 },
@@ -538,6 +544,12 @@ static void pinmux_set_pad(unsigned pad, unsigned mux)
 	mmio_write8(sysio, pinmux_off_for_pad(pad), (uint8_t)mux);
 }
 
+static void panel_lcd_setup_enable(void)
+{
+	mmio_write32(sysio, SYS_LCD_SETUP_OFF,
+		mmio_read32(sysio, SYS_LCD_SETUP_OFF) | (1u << 16));
+}
+
 static void gpio_set_pad(unsigned pad, int high)
 {
 	uint32_t base = gpio_base_for_pad(pad);
@@ -625,7 +637,8 @@ static void panel_control_pinmux(void)
 {
 	unsigned i;
 
-	for (i = 0; i < sizeof(panel_control_pads) / sizeof(panel_control_pads[0]); i++)
+	panel_lcd_setup_enable();
+	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++)
 		pinmux_set_pad(panel_control_pads[i], PINMUX_GPIO);
 }
 
@@ -633,7 +646,8 @@ static void panel_rgb_pinmux(void)
 {
 	unsigned i;
 
-	for (i = 0; i < sizeof(panel_rgb_pads) / sizeof(panel_rgb_pads[0]); i++)
+	panel_lcd_setup_enable();
+	for (i = 0; i < ARRAY_SIZE(panel_rgb_pads); i++)
 		pinmux_set_pad(panel_rgb_pads[i].pad, panel_rgb_pads[i].mux);
 }
 
@@ -641,8 +655,26 @@ static void panel_config_outputs(void)
 {
 	unsigned i;
 
-	for (i = 0; i < sizeof(panel_control_pads) / sizeof(panel_control_pads[0]); i++)
+	panel_lcd_setup_enable();
+	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++) {
+		char line[96];
+		unsigned pad = panel_control_pads[i];
+		uint32_t base = gpio_base_for_pad(pad);
+
+		snprintf(line, sizeof(line),
+			"sf2000-screen: panel gpio out %u %s base=0x%03x dir=0x%08x\n",
+			i, panel_control_names[i], base,
+			mmio_read32(sysio, base + GPIO_DIR_OFF));
+		log_line(line);
 		gpio_config_output(panel_control_pads[i]);
+		snprintf(line, sizeof(line),
+			"sf2000-screen: panel gpio out done %u %s dir=0x%08x\n",
+			i, panel_control_names[i],
+			mmio_read32(sysio, base + GPIO_DIR_OFF));
+		log_line(line);
+	}
+	gpio_config_input(PINPAD_L08);
+	log_line("sf2000-screen: panel gpio vsync L08 input done\n");
 }
 
 static void panel_config_data_input(void)
@@ -797,8 +829,7 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 	unsigned clock_skewed = *p++;
 
 	watchdog_pet();
-	mmio_write32(sysio, SYS_LCD_SETUP_OFF,
-		mmio_read32(sysio, SYS_LCD_SETUP_OFF) | (1u << 16));
+	panel_lcd_setup_enable();
 	if (clock_skewed)
 		mmio_write32(sysio, SYS_CLK_CTR_OFF,
 			mmio_read32(sysio, SYS_CLK_CTR_OFF) | (1u << 15));
