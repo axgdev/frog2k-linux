@@ -189,6 +189,9 @@ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
 	u32 __user *hi_rp;
 
 	switch (flat_mips_reloc_type(relval)) {
+	case FLAT_MIPS_R_32:
+		*addr = htonl(get_unaligned(p));
+		return 0;
 	case FLAT_MIPS_R_26:
 		insn = get_unaligned(p);
 		*addr = htonl((insn & 0x03ffffff) << 2);
