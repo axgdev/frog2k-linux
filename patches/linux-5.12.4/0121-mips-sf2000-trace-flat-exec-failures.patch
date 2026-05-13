@@ -1,0 +1,310 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Wed, 13 May 2026 03:25:00 +0000
+Subject: [PATCH] mips: sf2000: trace flat exec failures
+
+Add path, post-prepare magic, and binfmt_flat failure markers so device logs identify the next userspace blocker without counting pulses.
+
+--- a/fs/exec.c	2026-05-13 03:23:31.012817219 +0000
++++ b/fs/exec.c	2026-05-13 03:21:57.793299012 +0000
+@@ -91,9 +91,77 @@
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		sf2000_progress_mark(name, 7, value);
+ }
++
++static void sf2000_exec_string(const char *prefix, const char *s)
++{
++	unsigned int word = 0;
++	unsigned int i;
++	unsigned int len = 0;
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || !s)
++		return;
++
++	for (i = 0; i < 28 && s[i]; i++) {
++		word |= (unsigned int)(unsigned char)s[i] << ((i & 3) * 8);
++		if ((i & 3) == 3) {
++			switch (i >> 2) {
++			case 0:
++				sf2000_progress_mark("exec-path-w0", 7, word);
++				break;
++			case 1:
++				sf2000_progress_mark("exec-path-w1", 7, word);
++				break;
++			case 2:
++				sf2000_progress_mark("exec-path-w2", 7, word);
++				break;
++			case 3:
++				sf2000_progress_mark("exec-path-w3", 7, word);
++				break;
++			case 4:
++				sf2000_progress_mark("exec-path-w4", 7, word);
++				break;
++			case 5:
++				sf2000_progress_mark("exec-path-w5", 7, word);
++				break;
++			case 6:
++				sf2000_progress_mark("exec-path-w6", 7, word);
++				break;
++			}
++			word = 0;
++		}
++		len++;
++	}
++	if (i & 3) {
++		switch (i >> 2) {
++		case 0:
++			sf2000_progress_mark("exec-path-w0", 7, word);
++			break;
++		case 1:
++			sf2000_progress_mark("exec-path-w1", 7, word);
++			break;
++		case 2:
++			sf2000_progress_mark("exec-path-w2", 7, word);
++			break;
++		case 3:
++			sf2000_progress_mark("exec-path-w3", 7, word);
++			break;
++		case 4:
++			sf2000_progress_mark("exec-path-w4", 7, word);
++			break;
++		case 5:
++			sf2000_progress_mark("exec-path-w5", 7, word);
++			break;
++		case 6:
++			sf2000_progress_mark("exec-path-w6", 7, word);
++			break;
++		}
++	}
++	sf2000_progress_mark(prefix, 7, len);
++}
+ #else
+ static inline void sf2000_exec_mark(const char *name) { }
+ static inline void sf2000_exec_value(const char *name, unsigned int value) { }
++static inline void sf2000_exec_string(const char *prefix, const char *s) { }
+ #endif
+ 
+ static int bprm_creds_from_file(struct linux_binprm *bprm);
+@@ -1948,6 +2016,11 @@
+ 		(unsigned int)bprm->buf[3]);
+ 	retval = prepare_binprm(bprm);
+ 	sf2000_exec_value("exec-after-prepare", (unsigned int)retval);
++	sf2000_exec_value("exec-after-prepare-magic",
++		((unsigned int)bprm->buf[0] << 24) |
++		((unsigned int)bprm->buf[1] << 16) |
++		((unsigned int)bprm->buf[2] << 8) |
++		(unsigned int)bprm->buf[3]);
+ 	if (retval < 0)
+ 		return retval;
+ 
+@@ -2049,6 +2122,7 @@
+ 	int retval;
+ 
+ 	sf2000_exec_mark("bprm-exec-entry");
++	sf2000_exec_string("bprm-exec-path-len", filename->name);
+ 	retval = prepare_bprm_creds(bprm);
+ 	sf2000_exec_value("bprm-after-creds", (unsigned int)retval);
+ 	if (retval)
+--- a/fs/binfmt_flat.c	2026-05-13 03:23:31.061504886 +0000
++++ b/fs/binfmt_flat.c	2026-05-13 03:22:41.120815002 +0000
+@@ -47,6 +47,19 @@
+ #include <asm/addrspace.h>
+ #endif
+ 
++#ifdef CONFIG_MIPS
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++		unsigned int value);
++
++static void sf2000_flat_value(const char *name, unsigned int value)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark(name, 16, value);
++}
++#else
++static inline void sf2000_flat_value(const char *name, unsigned int value) { }
++#endif
++
+ #ifndef flat_get_relocate_addr
+ #define flat_get_relocate_addr(rel)	(rel)
+ #endif
+@@ -459,6 +472,18 @@
+ 	flags     = ntohl(hdr->flags);
+ 	rev       = ntohl(hdr->rev);
+ 	full_data = data_len + relocs * sizeof(unsigned long);
++	sf2000_flat_value("flat-header-magic",
++		((unsigned int)hdr->magic[0] << 24) |
++		((unsigned int)hdr->magic[1] << 16) |
++		((unsigned int)hdr->magic[2] << 8) |
++		(unsigned int)hdr->magic[3]);
++	sf2000_flat_value("flat-header-rev", rev);
++	sf2000_flat_value("flat-header-flags", flags);
++	sf2000_flat_value("flat-header-text", text_len);
++	sf2000_flat_value("flat-header-data", data_len);
++	sf2000_flat_value("flat-header-bss", bss_len);
++	sf2000_flat_value("flat-header-stack", stack_len);
++	sf2000_flat_value("flat-header-relocs", relocs);
+ 
+ 	if (strncmp(hdr->magic, "bFLT", 4)) {
+ 		/*
+@@ -468,6 +493,7 @@
+ 		 * error message is confusing.
+ 		 * because a lot of people do not manage to produce good
+ 		 */
++		sf2000_flat_value("flat-bad-magic", 0);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -479,6 +505,7 @@
+ 	if (rev != FLAT_VERSION && rev != OLD_FLAT_VERSION) {
+ 		pr_err("bad flat file version 0x%x (supported 0x%lx and 0x%lx)\n",
+ 		       rev, FLAT_VERSION, OLD_FLAT_VERSION);
++		sf2000_flat_value("flat-bad-version", rev);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -487,6 +514,7 @@
+ 	if (rev == OLD_FLAT_VERSION && id != 0) {
+ 		pr_err("shared libraries are not available before rev 0x%lx\n",
+ 		       FLAT_VERSION);
++		sf2000_flat_value("flat-old-shlib", id);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -503,6 +531,7 @@
+ 	if (rev != FLAT_VERSION) {
+ 		pr_err("bad flat file version 0x%x (supported 0x%lx)\n",
+ 		       rev, FLAT_VERSION);
++		sf2000_flat_value("flat-bad-version", rev);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -515,6 +544,7 @@
+ 	*/
+ 	if ((text_len | data_len | bss_len | stack_len | full_data) >> 28) {
+ 		pr_err("bad header\n");
++		sf2000_flat_value("flat-bad-header-size", full_data);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -522,6 +552,7 @@
+ #ifndef CONFIG_BINFMT_ZFLAT
+ 	if (flags & (FLAT_FLAG_GZIP|FLAT_FLAG_GZDATA)) {
+ 		pr_err("Support for ZFLAT executables is not enabled.\n");
++		sf2000_flat_value("flat-zflat-disabled", flags);
+ 		ret = -ENOEXEC;
+ 		goto err;
+ 	}
+@@ -536,6 +567,7 @@
+ 	if (rlim >= RLIM_INFINITY)
+ 		rlim = ~0;
+ 	if (data_len + bss_len > rlim) {
++		sf2000_flat_value("flat-data-rlimit", data_len + bss_len);
+ 		ret = -ENOMEM;
+ 		goto err;
+ 	}
+@@ -543,8 +575,10 @@
+ 	/* Flush all traces of the currently running executable */
+ 	if (id == 0) {
+ 		ret = begin_new_exec(bprm);
+-		if (ret)
++		if (ret) {
++			sf2000_flat_value("flat-begin-new-exec", ret);
+ 			goto err;
++		}
+ 
+ 		/* OK, This is the point of no return */
+ 		set_personality(PER_LINUX_32BIT);
+@@ -575,6 +609,7 @@
+ 			ret = textpos;
+ 			if (!textpos)
+ 				ret = -ENOMEM;
++			sf2000_flat_value("flat-mmap-text-fail", ret);
+ 			pr_err("Unable to mmap process text, errno %d\n", ret);
+ 			goto err;
+ 		}
+@@ -588,6 +623,7 @@
+ 			ret = realdatastart;
+ 			if (!realdatastart)
+ 				ret = -ENOMEM;
++			sf2000_flat_value("flat-mmap-data-fail", ret);
+ 			pr_err("Unable to allocate RAM for process data, "
+ 			       "errno %d\n", ret);
+ 			vm_munmap(textpos, text_len);
+@@ -613,6 +649,7 @@
+ 		}
+ 		if (IS_ERR_VALUE(result)) {
+ 			ret = result;
++			sf2000_flat_value("flat-read-data-fail", ret);
+ 			pr_err("Unable to read data+bss, errno %d\n", ret);
+ 			vm_munmap(textpos, text_len);
+ 			vm_munmap(realdatastart, len);
+@@ -634,6 +671,7 @@
+ 			ret = textpos;
+ 			if (!textpos)
+ 				ret = -ENOMEM;
++			sf2000_flat_value("flat-mmap-all-fail", ret);
+ 			pr_err("Unable to allocate RAM for process text/data, "
+ 			       "errno %d\n", ret);
+ 			goto err;
+@@ -715,6 +753,7 @@
+ 		}
+ 		if (IS_ERR_VALUE(result)) {
+ 			ret = result;
++			sf2000_flat_value("flat-read-all-fail", ret);
+ 			pr_err("Unable to read code+data+bss, errno %d\n", ret);
+ 			vm_munmap(textpos, text_len + data_len + extra +
+ 				MAX_SHARED_LIBS * sizeof(u32));
+@@ -786,6 +825,7 @@
+ 			if (rp_val) {
+ 				addr = calc_reloc(rp_val, libinfo, id, 0);
+ 				if (addr == RELOC_FAILED) {
++					sf2000_flat_value("flat-got-reloc-fail", (unsigned int)rp_val);
+ 					ret = -ENOEXEC;
+ 					goto err;
+ 				}
+@@ -822,14 +862,17 @@
+ 			addr = flat_get_relocate_addr(relval);
+ 			rp = (u32 __user *)calc_reloc(addr, libinfo, id, 1);
+ 			if (rp == (u32 __user *)RELOC_FAILED) {
++				sf2000_flat_value("flat-reloc-rp-fail", relval);
+ 				ret = -ENOEXEC;
+ 				goto err;
+ 			}
+ 
+ 			/* Get the pointer's value.  */
+ 			ret = flat_get_addr_from_rp(rp, relval, flags, &addr);
+-			if (unlikely(ret))
++			if (unlikely(ret)) {
++				sf2000_flat_value("flat-reloc-get-fail", relval);
+ 				goto err;
++			}
+ 
+ 			if (addr != 0) {
+ 				/*
+@@ -845,14 +888,17 @@
+ 				}
+ 				addr = calc_reloc(addr, libinfo, id, 0);
+ 				if (addr == RELOC_FAILED) {
++					sf2000_flat_value("flat-reloc-addr-fail", relval);
+ 					ret = -ENOEXEC;
+ 					goto err;
+ 				}
+ 
+ 				/* Write back the relocated pointer.  */
+ 				ret = flat_put_addr_at_rp(rp, addr, relval);
+-				if (unlikely(ret))
++				if (unlikely(ret)) {
++					sf2000_flat_value("flat-reloc-put-fail", relval);
+ 					goto err;
++				}
+ 			}
+ 		}
+ #ifdef CONFIG_BINFMT_FLAT_OLD
+@@ -957,6 +1003,7 @@
+ 	stack_len = ALIGN(stack_len, FLAT_STACK_ALIGN);
+ 
+ 	res = load_flat_file(bprm, &libinfo, 0, &stack_len);
++	sf2000_flat_value("flat-load-file-ret", (unsigned int)res);
+ 	if (res < 0)
+ 		return res;
+ 

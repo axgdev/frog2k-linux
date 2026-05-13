@@ -91,9 +91,77 @@ static void sf2000_exec_value(const char *name, unsigned int value)
 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
 		sf2000_progress_mark(name, 7, value);
 }
+
+static void sf2000_exec_string(const char *prefix, const char *s)
+{
+	unsigned int word = 0;
+	unsigned int i;
+	unsigned int len = 0;
+
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || !s)
+		return;
+
+	for (i = 0; i < 28 && s[i]; i++) {
+		word |= (unsigned int)(unsigned char)s[i] << ((i & 3) * 8);
+		if ((i & 3) == 3) {
+			switch (i >> 2) {
+			case 0:
+				sf2000_progress_mark("exec-path-w0", 7, word);
+				break;
+			case 1:
+				sf2000_progress_mark("exec-path-w1", 7, word);
+				break;
+			case 2:
+				sf2000_progress_mark("exec-path-w2", 7, word);
+				break;
+			case 3:
+				sf2000_progress_mark("exec-path-w3", 7, word);
+				break;
+			case 4:
+				sf2000_progress_mark("exec-path-w4", 7, word);
+				break;
+			case 5:
+				sf2000_progress_mark("exec-path-w5", 7, word);
+				break;
+			case 6:
+				sf2000_progress_mark("exec-path-w6", 7, word);
+				break;
+			}
+			word = 0;
+		}
+		len++;
+	}
+	if (i & 3) {
+		switch (i >> 2) {
+		case 0:
+			sf2000_progress_mark("exec-path-w0", 7, word);
+			break;
+		case 1:
+			sf2000_progress_mark("exec-path-w1", 7, word);
+			break;
+		case 2:
+			sf2000_progress_mark("exec-path-w2", 7, word);
+			break;
+		case 3:
+			sf2000_progress_mark("exec-path-w3", 7, word);
+			break;
+		case 4:
+			sf2000_progress_mark("exec-path-w4", 7, word);
+			break;
+		case 5:
+			sf2000_progress_mark("exec-path-w5", 7, word);
+			break;
+		case 6:
+			sf2000_progress_mark("exec-path-w6", 7, word);
+			break;
+		}
+	}
+	sf2000_progress_mark(prefix, 7, len);
+}
 #else
 static inline void sf2000_exec_mark(const char *name) { }
 static inline void sf2000_exec_value(const char *name, unsigned int value) { }
+static inline void sf2000_exec_string(const char *prefix, const char *s) { }
 #endif
 
 static int bprm_creds_from_file(struct linux_binprm *bprm);
@@ -1948,6 +2016,11 @@ static int search_binary_handler(struct linux_binprm *bprm)
 		(unsigned int)bprm->buf[3]);
 	retval = prepare_binprm(bprm);
 	sf2000_exec_value("exec-after-prepare", (unsigned int)retval);
+	sf2000_exec_value("exec-after-prepare-magic",
+		((unsigned int)bprm->buf[0] << 24) |
+		((unsigned int)bprm->buf[1] << 16) |
+		((unsigned int)bprm->buf[2] << 8) |
+		(unsigned int)bprm->buf[3]);
 	if (retval < 0)
 		return retval;
 
@@ -2049,6 +2122,7 @@ static int bprm_execve(struct linux_binprm *bprm,
 	int retval;
 
 	sf2000_exec_mark("bprm-exec-entry");
+	sf2000_exec_string("bprm-exec-path-len", filename->name);
 	retval = prepare_bprm_creds(bprm);
 	sf2000_exec_value("bprm-after-creds", (unsigned int)retval);
 	if (retval)
