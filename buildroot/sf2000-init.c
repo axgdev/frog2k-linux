@@ -51,8 +51,6 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
-static char *const heartbeat_argv[] = { "/usr/sbin/sf2000-heartbeat", 0 };
-static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
@@ -61,8 +59,6 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
-static unsigned long heartbeat_stack[SERVICE_STACK_WORDS];
-static unsigned long pad_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -475,13 +471,7 @@ void sf2000_init_main(void)
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
-	sleep_ms(500);
-	spawn_service("sf2000_buildroot: starting heartbeat\n", heartbeat_argv,
-		heartbeat_stack);
-	diagnostic_watchdog_pet();
-	sleep_ms(500);
-	spawn_service("sf2000_buildroot: starting pad\n", pad_argv, pad_stack);
-	diagnostic_watchdog_pet();
+	log_message("sf2000_buildroot: libc helpers deferred\n");
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	for (;;) {
