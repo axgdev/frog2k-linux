@@ -1164,25 +1164,36 @@ static void write_desc32(unsigned idx, uint32_t value)
 	((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[idx] = value;
 }
 
-static uint32_t gma_descriptor_d0(unsigned variant)
-{
-	uint32_t d0 = (6u << 4) | (32u << 16) | (170u << 24);
+struct gma_profile {
+	const char *name;
+	uint32_t d0;
+	uint32_t linebuf;
+	int csc_bypass;
+	int sharpness;
+};
 
-	if (variant != 2u)
-		d0 |= 1u;
-	if (variant != 1u)
-		d0 |= 1u << 8;
-	return d0;
+static const struct gma_profile gma_profiles[] = {
+	{ "BYPASS LB0A", 0xaa200161u, 0x0au, 1, 0 },
+	{ "SDKCTL LB0A", 0xaa201161u, 0x0au, 0, 1 },
+	{ "BYPASS CSC", 0xaa201161u, 0x0au, 1, 0 },
+	{ "BYPASS LB02", 0xaa200161u, 0x02u, 1, 0 },
+	{ "BYPASS LB12", 0xaa200161u, 0x12u, 1, 0 },
+	{ "NO-CBC LB0A", 0xaa200061u, 0x0au, 1, 0 },
+};
+
+static uint32_t gma_descriptor_d0(const struct gma_profile *profile)
+{
+	return profile->d0;
 }
 
-static void build_gma_descriptor_variant(unsigned variant)
+static void build_gma_descriptor_profile(const struct gma_profile *profile)
 {
 	unsigned i;
 
 	for (i = 0; i < 16; i++)
 		write_desc32(i, 0);
 
-	write_desc32(0, gma_descriptor_d0(variant));
+	write_desc32(0, gma_descriptor_d0(profile));
 	write_desc32(1, 0);
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
@@ -1194,7 +1205,7 @@ static void build_gma_descriptor_variant(unsigned variant)
 
 static void build_gma_descriptor(void)
 {
-	build_gma_descriptor_variant(0);
+	build_gma_descriptor_profile(&gma_profiles[0]);
 }
 
 static void flush_present_memory(void)
@@ -1220,13 +1231,26 @@ static void present_frame(void)
 {
 	flush_present_memory();
 	mmio_write32(gma, GMA_MASK, 1);
-	mmio_write32(gma, GMA_LINEBUF, 0x0a);
+	mmio_write32(gma, GMA_LINEBUF, gma_profiles[0].linebuf);
 	mmio_write32(gma, GMA_K, 0xff);
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
-	gma_set_bit(GMA_CTL, 1u << 19, 0);
-	gma_set_bit(GMA_CTL, 1u << 18, 1);
+	gma_set_bit(GMA_CTL, 1u << 19, 1);
+	gma_set_bit(GMA_CTL, 1u << 18, 0);
+}
+
+static void present_frame_profile(const struct gma_profile *profile)
+{
+	flush_present_memory();
+	mmio_write32(gma, GMA_MASK, 1);
+	mmio_write32(gma, GMA_LINEBUF, profile->linebuf);
+	mmio_write32(gma, GMA_K, 0xff);
+	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
+	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
+	mmio_write32(gma, GMA_MASK, 0);
+	gma_set_bit(GMA_CTL, 1u << 19, profile->csc_bypass);
+	gma_set_bit(GMA_CTL, 1u << 18, profile->sharpness);
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
@@ -1256,16 +1280,17 @@ static void log_gma_ready(void)
 	append_file_log(line);
 }
 
-static void log_gma_regs(const char *name, unsigned variant)
+static void log_gma_regs(const char *name, unsigned profile_idx,
+	const struct gma_profile *profile)
 {
 	char line[192];
 
 	snprintf(line, sizeof(line),
-		"sf2000-screen: %s variant=%u d0=0x%08x vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x line=0x%08x\n",
-		name, variant, gma_descriptor_d0(variant),
+		"sf2000-screen: %s profile=%u %s d0=0x%08x line=0x%08x bypass=%d sharp=%d vou=0x%08x ctrl=0x%08x gctl=0x%08x dmba=0x%08x\n",
+		name, profile_idx, profile->name, gma_descriptor_d0(profile),
+		profile->linebuf, profile->csc_bypass, profile->sharpness,
 		mmio_read32(gma, VOU_HD_MODE), mmio_read32(gma, VOU_HD_CTRL),
-		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA),
-		mmio_read32(gma, GMA_LINEBUF));
+		mmio_read32(gma, GMA_CTL), mmio_read32(gma, GMA_DMBA));
 	log_line(line);
 	append_file_log(line);
 }
@@ -1343,7 +1368,7 @@ static void run_rgb_diag(unsigned *frame)
 static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
-	unsigned last_variant = 99;
+	unsigned last_profile = 99;
 
 	log_line("sf2000-screen: rgb-only diag begin\n");
 	append_file_log("sf2000-screen: rgb-only diag begin\n");
@@ -1354,20 +1379,20 @@ static void run_rgb_only_diag(unsigned *frame)
 	build_gma_descriptor();
 
 	while (!stopping) {
-		unsigned variant = (*frame / 2u) % 3u;
-		char variant_name[24];
+		unsigned profile_idx;
+		const struct gma_profile *profile;
 
 		(*frame)++;
-		variant = (*frame / 2u) % 3u;
-		snprintf(variant_name, sizeof(variant_name), "GMA D%u", variant);
-		build_gma_descriptor_variant(variant);
-		draw_diag_screen("RGB ONLY NO PANEL BUS", variant_name,
-			(uint8_t)(variant + 1u), *frame);
+		profile_idx = (*frame / 2u) % ARRAY_SIZE(gma_profiles);
+		profile = &gma_profiles[profile_idx];
+		build_gma_descriptor_profile(profile);
+		draw_diag_screen("RGB GMA PROFILE", profile->name,
+			(uint8_t)(profile_idx + 1u), *frame);
 		panel_rgb_pinmux();
-		present_frame();
-		if (variant != last_variant) {
-			log_gma_regs("rgb descriptor cycle", variant);
-			last_variant = variant;
+		present_frame_profile(profile);
+		if (profile_idx != last_profile) {
+			log_gma_regs("rgb profile cycle", profile_idx, profile);
+			last_profile = profile_idx;
 		}
 		if (!ready_published) {
 			publish_marker("/run/sf2000-screen-ready", "ready\n");
@@ -1375,11 +1400,11 @@ static void run_rgb_only_diag(unsigned *frame)
 			ready_published = 1;
 		}
 		backlight_set(1);
-		sleep_ms(900);
+		sleep_ms(700);
 		backlight_set(0);
-		sleep_ms(70);
+		sleep_ms(50);
 		backlight_set(1);
-		sleep_ms(900);
+		sleep_ms(700);
 		watchdog_pet();
 	}
 	runtime_watchdog_disable();
