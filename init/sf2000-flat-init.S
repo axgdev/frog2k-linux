@@ -242,9 +242,9 @@ path_proc_type:
 path_meminfo:
 	.asciz	"/proc/meminfo"
 path_busybox:
-	.asciz	"/sbin/init"
+	.asciz	"/usr/sbin/sf2000-init"
 arg_init:
-	.asciz	"/sbin/init"
+	.asciz	"/usr/sbin/sf2000-init"
 env_home:
 	.asciz	"HOME=/"
 env_path:
