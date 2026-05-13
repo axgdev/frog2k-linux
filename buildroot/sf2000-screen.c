@@ -1344,6 +1344,7 @@ static void run_rgb_only_diag(unsigned *frame)
 {
 	int ready_published = 0;
 	unsigned last_variant = 99;
+	unsigned variant = 0;
 
 	log_line("sf2000-screen: rgb-only diag begin\n");
 	append_file_log("sf2000-screen: rgb-only diag begin\n");
@@ -1354,33 +1355,42 @@ static void run_rgb_only_diag(unsigned *frame)
 	build_gma_descriptor();
 
 	while (!stopping) {
-		unsigned variant;
 		char variant_name[24];
+		unsigned pulse;
+		unsigned hold;
 
-		(*frame)++;
-		variant = (*frame / 2u) % 3u;
+		backlight_set(0);
+		sleep_ms(350);
+		for (pulse = 0; pulse <= variant; pulse++) {
+			backlight_set(1);
+			sleep_ms(140);
+			backlight_set(0);
+			sleep_ms(140);
+		}
+		backlight_set(1);
+
 		snprintf(variant_name, sizeof(variant_name), "GMA D%u", variant);
-		build_gma_descriptor_variant(variant);
-		draw_diag_screen("RGB ONLY NO PANEL BUS", variant_name,
-			(uint8_t)(variant + 1u), *frame);
-		panel_rgb_pinmux();
-		present_frame();
 		if (variant != last_variant) {
 			log_gma_regs("rgb descriptor cycle", variant);
 			last_variant = variant;
 		}
-		if (!ready_published) {
-			publish_marker("/run/sf2000-screen-ready", "ready\n");
-			log_gma_ready();
-			ready_published = 1;
+
+		for (hold = 0; hold < 4 && !stopping; hold++) {
+			(*frame)++;
+			build_gma_descriptor_variant(variant);
+			draw_diag_screen("RGB GMA ISOLATE", variant_name,
+				(uint8_t)(variant + 1u), *frame);
+			panel_rgb_pinmux();
+			present_frame();
+			if (!ready_published) {
+				publish_marker("/run/sf2000-screen-ready", "ready\n");
+				log_gma_ready();
+				ready_published = 1;
+			}
+			sleep_ms(900);
+			watchdog_pet();
 		}
-		backlight_set(1);
-		sleep_ms(900);
-		backlight_set(0);
-		sleep_ms(70);
-		backlight_set(1);
-		sleep_ms(900);
-		watchdog_pet();
+		variant = (variant + 1u) % 3u;
 	}
 	runtime_watchdog_disable();
 }
