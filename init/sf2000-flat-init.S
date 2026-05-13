@@ -79,6 +79,93 @@ _start:
 	syscall
 	 nop
 
+	addiu	$29, $29, -192
+
+	addiu	$4, $16, path_proc_src - 1b
+	addiu	$5, $16, path_proc - 1b
+	addiu	$6, $16, path_proc_type - 1b
+	move	$7, $0
+	sw	$0, 16($29)
+	li	$2, 4021
+	li	$8, 0xa1400000
+	li	$9, 0x51510427
+	sw	$9, 144($8)
+	syscall
+	 nop
+	li	$8, 0xa1400000
+	sw	$2, 148($8)
+	sw	$7, 152($8)
+
+	addiu	$4, $16, path_meminfo - 1b
+	move	$5, $0
+	move	$6, $0
+	li	$2, 4005
+	li	$8, 0xa1400000
+	li	$9, 0x51510428
+	sw	$9, 156($8)
+	syscall
+	 nop
+	li	$8, 0xa1400000
+	sw	$2, 160($8)
+	sw	$7, 164($8)
+	bnez	$7, 8f
+	 nop
+	move	$18, $2
+	move	$4, $18
+	addiu	$5, $29, 32
+	li	$6, 96
+	li	$2, 4003
+	li	$8, 0xa1400000
+	li	$9, 0x51510429
+	sw	$9, 168($8)
+	syscall
+	 nop
+	li	$8, 0xa1400000
+	sw	$2, 172($8)
+	sw	$7, 176($8)
+	bnez	$7, 7f
+	 nop
+	blez	$2, 7f
+	 nop
+	move	$4, $17
+	addiu	$5, $29, 32
+	move	$6, $2
+	li	$2, 4004
+	syscall
+	 nop
+7:
+	move	$4, $18
+	li	$2, 4006
+	syscall
+	 nop
+	b	9f
+	 nop
+8:
+	li	$8, 0xa1400000
+	li	$9, 0x51510429
+	sw	$9, 168($8)
+	sw	$0, 172($8)
+	sw	$0, 176($8)
+
+9:
+	addiu	$10, $16, arg_busybox - 1b
+	addiu	$11, $16, arg_sh - 1b
+	sw	$10, 0($29)
+	sw	$11, 4($29)
+	sw	$0, 8($29)
+	addiu	$4, $16, path_busybox - 1b
+	move	$5, $29
+	move	$6, $0
+	li	$2, 4011
+	li	$8, 0xa1400000
+	li	$9, 0x5151042a
+	sw	$9, 180($8)
+	syscall
+	 nop
+	li	$8, 0xa1400000
+	sw	$2, 184($8)
+	sw	$7, 188($8)
+
 4:
 	li	$4, 0xfee1dead
 	li	$5, 672274793
@@ -119,6 +206,20 @@ _start:
 
 path_kmsg:
 	.asciz	"/dev/kmsg"
+path_proc_src:
+	.asciz	"proc"
+path_proc:
+	.asciz	"/proc"
+path_proc_type:
+	.asciz	"proc"
+path_meminfo:
+	.asciz	"/proc/meminfo"
+path_busybox:
+	.asciz	"/bin/busybox"
+arg_busybox:
+	.asciz	"busybox"
+arg_sh:
+	.asciz	"sh"
 msg_alive:
 	.ascii	"<6>sf2000_linux: flat init alive\n"
 msg_alive_end:
