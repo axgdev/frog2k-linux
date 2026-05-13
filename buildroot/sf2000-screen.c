@@ -1167,34 +1167,42 @@ static void draw_diag_screen(const char *phase, const char *variant,
 	}
 }
 
-static void draw_argb8888_screen(unsigned variant, unsigned frame)
+static uint16_t solid_rgb565_color(unsigned variant)
+{
+	if (variant == 0u)
+		return rgb565(31, 0, 0);
+	if (variant == 1u)
+		return rgb565(0, 63, 0);
+	return rgb565(0, 0, 31);
+}
+
+static uint32_t solid_argb8888_color(unsigned variant)
+{
+	if (variant == 0u)
+		return argb8888(255, 0, 0);
+	if (variant == 1u)
+		return argb8888(0, 255, 0);
+	return argb8888(0, 0, 255);
+}
+
+static void draw_solid_rgb565_screen(unsigned variant)
+{
+	volatile uint16_t *fb = framebuffer();
+	uint16_t color = solid_rgb565_color(variant);
+	unsigned i;
+
+	for (i = 0; i < WIDTH * HEIGHT; i++)
+		fb[i] = color;
+}
+
+static void draw_solid_argb8888_screen(unsigned variant)
 {
 	volatile uint32_t *fb = (volatile uint32_t *)(gma_ram + GMA_FRAME_OFF);
-	unsigned x;
-	unsigned y;
+	uint32_t color = solid_argb8888_color(variant);
+	unsigned i;
 
-	for (y = 0; y < HEIGHT; y++) {
-		for (x = 0; x < WIDTH; x++) {
-			unsigned r = (x * 255u) / (WIDTH - 1u);
-			unsigned g = (y * 255u) / (HEIGHT - 1u);
-			unsigned b = (((x / 8u) ^ (y / 8u) ^ frame) & 1u) ? 220u : 35u;
-
-			fb[y * WIDTH + x] = argb8888(r, g, b);
-		}
-	}
-
-	for (y = 0; y < 32; y++) {
-		for (x = 0; x < WIDTH; x++)
-			fb[y * WIDTH + x] = argb8888(32u + variant * 80u, 220u, 40u);
-	}
-	for (y = 208; y < HEIGHT; y++) {
-		for (x = 0; x < WIDTH; x++)
-			fb[y * WIDTH + x] = argb8888(240u, 40u + variant * 70u, 40u);
-	}
-	for (x = 0; x < 6; x++) {
-		for (y = 0; y < HEIGHT; y++)
-			fb[(y * WIDTH) + (variant * 24u + x)] = argb8888(255u, 255u, 255u);
-	}
+	for (i = 0; i < WIDTH * HEIGHT; i++)
+		fb[i] = color;
 }
 
 static void write_desc32(unsigned idx, uint32_t value)
@@ -1429,10 +1437,9 @@ static void run_rgb_only_diag(unsigned *frame)
 			(*frame)++;
 			build_gma_descriptor_profile(variant, mode, pitch);
 			if (argb)
-				draw_argb8888_screen(variant, *frame);
+				draw_solid_argb8888_screen(variant);
 			else
-				draw_diag_screen("RGB565 GMA ISOLATE", variant_name,
-					(uint8_t)(variant + 1u), *frame);
+				draw_solid_rgb565_screen(variant);
 			panel_rgb_pinmux();
 			present_frame();
 			if (!ready_published) {
