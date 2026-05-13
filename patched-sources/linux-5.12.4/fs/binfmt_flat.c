@@ -64,6 +64,10 @@ static inline void sf2000_flat_value(const char *name, unsigned int value) { }
 #define flat_get_relocate_addr(rel)	(rel)
 #endif
 
+#ifndef flat_reloc_addr_fixup
+#define flat_reloc_addr_fixup(rel, addr, limit)	(addr)
+#endif
+
 /****************************************************************************/
 
 /*
@@ -887,6 +891,13 @@ static int load_flat_file(struct linux_binprm *bprm,
 					addr = ntohl((__force __be32)addr);
 				}
 				raw_addr = addr;
+				addr = flat_reloc_addr_fixup(relval, addr,
+					text_len + data_len + bss_len);
+				if (addr != raw_addr) {
+					sf2000_flat_value("flat-reloc-addr-fixup", raw_addr);
+					sf2000_flat_value("flat-reloc-addr-fixed", addr);
+					raw_addr = addr;
+				}
 				addr = calc_reloc(addr, libinfo, id, 0);
 				if (addr == RELOC_FAILED) {
 					sf2000_flat_value("flat-reloc-addr-fail", relval);

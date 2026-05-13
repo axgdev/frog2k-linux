@@ -33,7 +33,7 @@ typedef unsigned long uintptr;
 #define MAPPING_REG 0xb8800220u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
-#define WDT_BOOT_USEC 30000000u
+#define WDT_BOOT_USEC 8000000u
 #define WDT_BOOT_TICKS ((WDT_BOOT_USEC * 27u) / 128u)
 #define WDT_BOOT_COUNT (0u - WDT_BOOT_TICKS)
 #define WDT_BOOT_CONF 0x26u
@@ -60,7 +60,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0093-prefer-reloc-hi16"
+#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0094-flat-lo16-bounds"
 
 typedef unsigned long long u64;
 

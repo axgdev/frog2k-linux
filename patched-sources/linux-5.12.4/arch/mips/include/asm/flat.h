@@ -183,6 +183,15 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
 	}
 }
 
+static inline u32 flat_reloc_addr_fixup(u32 relval, u32 addr, u32 limit)
+{
+	if (flat_mips_reloc_type(relval) == FLAT_MIPS_R_LO16 &&
+	    addr > limit && addr >= 0x10000 && addr - 0x10000 <= limit)
+		return addr - 0x10000;
+
+	return addr;
+}
+
 /*
  * elf2flt stores the MIPS relocation kind in the top two bits. Keep the
  * remaining 30 bits for the relocation target offset.
