@@ -848,7 +848,7 @@ static int load_flat_file(struct linux_binprm *bprm,
 	 */
 	if (rev > OLD_FLAT_VERSION) {
 		for (i = 0; i < relocs; i++) {
-			u32 addr, relval;
+			u32 addr, raw_addr, relval;
 			__be32 tmp;
 
 			/*
@@ -886,9 +886,11 @@ static int load_flat_file(struct linux_binprm *bprm,
 					 */
 					addr = ntohl((__force __be32)addr);
 				}
+				raw_addr = addr;
 				addr = calc_reloc(addr, libinfo, id, 0);
 				if (addr == RELOC_FAILED) {
 					sf2000_flat_value("flat-reloc-addr-fail", relval);
+					sf2000_flat_value("flat-reloc-bad-addr", raw_addr);
 					ret = -ENOEXEC;
 					goto err;
 				}

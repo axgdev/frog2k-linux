@@ -60,7 +60,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0087-mips-hi16-cache"
+#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0088-mips-hi16-hash"
 
 typedef unsigned long long u64;
 
