@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] arch: allow little-endian MIPS without MMU for SF2000
+
+SF2000/HC15xx is a little-endian MIPS32-class target that is being brought
+up as a no-MMU Linux system.  Buildroot's generic MIPS entries always select
+BR2_USE_MMU, which forces ELF output and prevents a FLAT/uClinux userspace.
+
+Keep the existing MIPS CPU/ABI selections, but stop forcing MMU for mipsel so
+the board defconfig can select BR2_BINFMT_FLAT and build a uClinux toolchain.
+---
+ arch/Config.in | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arch/Config.in b/arch/Config.in
+index 490f3d27fc..9e69b13b38 100644
+--- a/arch/Config.in
++++ b/arch/Config.in
+@@ -113,7 +113,6 @@ config BR2_mips
+ 
+ config BR2_mipsel
+ 	bool "MIPS (little endian)"
+-	select BR2_USE_MMU
+ 	help
+ 	  MIPS is a RISC microprocessor from MIPS Technologies. Little
+ 	  endian.
+-- 
+2.45.0

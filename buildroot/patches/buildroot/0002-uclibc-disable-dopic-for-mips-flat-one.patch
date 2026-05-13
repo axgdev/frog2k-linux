@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] uclibc: disable DOPIC for MIPS FLAT-one
+
+MIPS static FLAT is fixed-address non-PIC code.  Keeping DOPIC enabled makes
+uClibc build PIC/abicalls startup objects, which are incompatible with the
+non-PIC MIPS uClinux compiler defaults and overflow the 16-bit GOT relocations
+when linked into BusyBox-sized bFLT programs.
+
+Buildroot already disables DOPIC for ARM FLAT and m68k FLAT-one.  Apply the
+same policy to MIPS FLAT-one.
+---
+ package/uclibc/uclibc.mk | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/package/uclibc/uclibc.mk b/package/uclibc/uclibc.mk
+index 1c1c0d3..b53e7da 100644
+--- a/package/uclibc/uclibc.mk
++++ b/package/uclibc/uclibc.mk
+@@ -164,6 +164,13 @@
+ 	$(SED) '/CONFIG_MIPS_NAN_.*/d' $(@D)/.config
+ 	$(call KCONFIG_ENABLE_OPT,$(UCLIBC_MIPS_NAN))
+ endef
++
++ifeq ($(BR2_BINFMT_FLAT_ONE),y)
++define UCLIBC_MIPS_BINFMT_FLAT
++	$(call KCONFIG_DISABLE_OPT,DOPIC)
++endef
++endif
++
+ endif # mips
+ 
+ #
+@@ -408,6 +414,7 @@
+ 	$(UCLIBC_ARM_NO_CONTEXT_FUNCS)
+ 	$(UCLIBC_M68K_BINFMT_FLAT)
+ 	$(UCLIBC_MIPS_ABI_CONFIG)
++	$(UCLIBC_MIPS_BINFMT_FLAT)
+ 	$(UCLIBC_MIPS_NAN_CONFIG)
+ 	$(UCLIBC_SH_TYPE_CONFIG)
+ 	$(UCLIBC_SPARC_TYPE_CONFIG)
+-- 
+2.45.0

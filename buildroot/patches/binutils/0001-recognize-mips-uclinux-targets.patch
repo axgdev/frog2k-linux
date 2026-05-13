@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] recognize mips uclinux targets
+
+Buildroot uses a mipsel-buildroot-uclinux-uclibc tuple for NOMMU FLAT
+MIPS builds.  Binutils already has the required MIPS ELF emulations for
+Linux, but does not route uClinux MIPS tuples to them.
+
+Treat mips*-*-uclinux* like mips*-*-linux* for BFD, GAS, and LD so the
+toolchain can build and elf2flt can consume the linked ELF output.
+---
+ bfd/config.bfd    | 4 ++--
+ gas/configure.tgt | 2 +-
+ ld/configure.tgt  | 4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index 8b4490321f9..85d62a9fc79 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -951,11 +951,11 @@ case "${targ}" in
+     targ_defvec=mips_elf32_ntrad_be_vec
+     targ_selvecs="mips_elf32_ntrad_le_vec mips_elf32_trad_be_vec mips_elf32_trad_le_vec mips_elf64_trad_be_vec mips_elf64_trad_le_vec"
+     ;;
+-  mips*el-*-linux*)
++  mips*el-*-linux* | mips*el-*-uclinux*)
+     targ_defvec=mips_elf32_trad_le_vec
+     targ_selvecs="mips_elf32_trad_be_vec mips_ecoff_le_vec mips_ecoff_be_vec mips_elf32_ntrad_le_vec mips_elf64_trad_le_vec mips_elf32_ntrad_be_vec mips_elf64_trad_be_vec"
+     ;;
+-  mips*-*-linux*)
++  mips*-*-linux* | mips*-*-uclinux*)
+     targ_defvec=mips_elf32_trad_be_vec
+     targ_selvecs="mips_elf32_trad_le_vec mips_ecoff_be_vec mips_ecoff_le_vec mips_elf32_ntrad_be_vec mips_elf64_trad_be_vec mips_elf32_ntrad_le_vec mips_elf64_trad_le_vec"
+     ;;
+diff --git a/gas/configure.tgt b/gas/configure.tgt
+index 2bb83ce6359..1cd2510411d 100644
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -312,7 +312,7 @@ case ${generic_target} in
+ 
+   mips-*-irix6*)			fmt=elf em=irix ;;
+   mips-*-irix5*)			fmt=elf em=irix ;;
+-  mips*-*-linux*)			fmt=elf em=tmips ;;
++  mips*-*-linux* | mips*-*-uclinux*)	fmt=elf em=tmips ;;
+   mips*-*-freebsd* | mips*-*-kfreebsd*-gnu)
+ 					fmt=elf em=freebsd ;;
+   mips-*-sysv4* | mips-*-gnu*)		fmt=elf em=tmips ;;
+diff --git a/ld/configure.tgt b/ld/configure.tgt
+index ba43bdc64ce..555b858e161 100644
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -593,11 +593,11 @@ mips64*el-*-linux-*)	targ_emul=elf32ltsmipn32
+ mips64*-*-linux-*)	targ_emul=elf32btsmipn32
+ 			targ_extra_emuls="elf32ltsmipn32 elf32btsmip elf32ltsmip elf64btsmip elf64ltsmip"
+ 			targ_extra_libpath=$targ_extra_emuls
+ 			;;
+-mips*el-*-linux-*)	targ_emul=elf32ltsmip
++mips*el-*-linux-* | mips*el-*-uclinux*) targ_emul=elf32ltsmip
+ 			targ_extra_emuls="elf32btsmip elf32ltsmipn32 elf64ltsmip elf32btsmipn32 elf64btsmip"
+ 			targ_extra_libpath=$targ_extra_emuls
+ 			;;
+-mips*-*-linux-*)	targ_emul=elf32btsmip
++mips*-*-linux-* | mips*-*-uclinux*) targ_emul=elf32btsmip
+ 			targ_extra_emuls="elf32ltsmip elf32btsmipn32 elf64btsmip elf32ltsmipn32 elf64ltsmip"
+ 			targ_extra_libpath=$targ_extra_emuls
+ 			;;
+-- 
+2.50.0
+

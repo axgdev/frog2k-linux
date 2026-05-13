@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] define map uninitialized fallback
+
+uClibc's NOMMU malloc paths use MAP_UNINITIALIZED, but not every
+architecture header set exposes that Linux flag through bits/mman.h.
+Treat the flag as optional: when the header does not provide it, compile
+with a zero fallback and keep the normal anonymous mapping behavior.
+---
+ libc/stdlib/malloc-simple/alloc.c | 4 ++++
+ libc/stdlib/malloc/malloc.c       | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/libc/stdlib/malloc-simple/alloc.c b/libc/stdlib/malloc-simple/alloc.c
+index 6b31836c1..a8d519d8d 100644
+--- a/libc/stdlib/malloc-simple/alloc.c
++++ b/libc/stdlib/malloc-simple/alloc.c
+@@ -18,6 +18,10 @@
+ #include <sys/mman.h>
+ #include <malloc.h>
+ 
++#ifndef MAP_UNINITIALIZED
++# define MAP_UNINITIALIZED 0
++#endif
++
+ extern int weak_function __libc_free_aligned(void *ptr) attribute_hidden;
+ 
+ #ifdef L_malloc
+diff --git a/libc/stdlib/malloc/malloc.c b/libc/stdlib/malloc/malloc.c
+index 43da8f64f..608f83845 100644
+--- a/libc/stdlib/malloc/malloc.c
++++ b/libc/stdlib/malloc/malloc.c
+@@ -17,6 +17,10 @@
+ #include <errno.h>
+ #include <sys/mman.h>
+ 
++#ifndef MAP_UNINITIALIZED
++# define MAP_UNINITIALIZED 0
++#endif
++
+ 
+ #include "malloc.h"
+ #include "heap.h"
+-- 
+2.50.0

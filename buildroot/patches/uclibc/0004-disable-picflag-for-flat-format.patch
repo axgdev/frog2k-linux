@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] disable PICFLAG for flat format
+
+MIPS FLAT binaries cannot use the normal abicalls PIC model.  uClibc
+already lets DOPIC be disabled, but its constructor start files still
+append PICFLAG unconditionally.  Leave PICFLAG empty for FLAT builds so
+startup objects are assembled with the same non-abicalls ABI as the rest
+of the MIPS uClinux toolchain.
+---
+ Rules.mak | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Rules.mak b/Rules.mak
+index 5ce0abce5..85e7da55b 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -328,6 +328,9 @@ CPU_LDFLAGS-$(ARCH_BIG_ENDIAN)    += -Wl,-EB
+ PICFLAG-y := -fPIC
+ PICFLAG-$(UCLIBC_FORMAT_FDPIC_ELF) := -mfdpic
+ PICFLAG-$(UCLIBC_FORMAT_DSBT_ELF)  := -mdsbt -fpic
+ PICFLAG := $(PICFLAG-y)
++ifeq ($(UCLIBC_FORMAT_FLAT),y)
++PICFLAG :=
++endif
+ PIEFLAG_NAME:=-fPIE
+ 
+ $(eval $(call check-gcc-var,-fdata-sections))
+-- 
+2.50.0

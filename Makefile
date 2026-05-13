@@ -36,6 +36,7 @@ BUILDROOT_SRC := $(BUILD_DIR)/buildroot-$(BUILDROOT_VERSION)
 BUILDROOT_WORK ?= /tmp/sf2000_linux-buildroot
 BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
 BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
+BUILDROOT_BUSYBOX_CONFIG := buildroot/sf2000_busybox.config
 BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
 BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
@@ -52,13 +53,15 @@ BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
 BUILDROOT_PATCH_FILES := $(shell find '$(BUILDROOT_PATCHES)' -type f 2>/dev/null)
+BUILDROOT_CORE_PATCHES := $(wildcard buildroot/patches/buildroot/*.patch)
 BUILDROOT_CPIO := $(BUILD_DIR)/rootfs-buildroot.cpio
 BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
 BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
 BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
-BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-gcc
-BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-linux-musl-strip
+BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
+BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
+BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))'
@@ -193,11 +196,29 @@ $(BUILDROOT_GENERATED_OVERLAY_STAMP):
 	mkdir -p '$(dir $@)' '$(BUILDROOT_GENERATED_OVERLAY)'
 	touch '$@'
 
-$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_DEFCONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
+$(BUILDROOT_SRC)/.patched: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_CORE_PATCHES)
+	@for patch in $(BUILDROOT_CORE_PATCHES); do \
+		if test -e '$@' && ! test "$$patch" -nt '$@'; then \
+			continue; \
+		fi; \
+		if patch -d '$(BUILDROOT_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
+			printf 'applying %s\n' "$$patch"; \
+			patch -d '$(BUILDROOT_SRC)' -p1 < "$$patch"; \
+		elif patch -d '$(BUILDROOT_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
+			printf 'already applied %s\n' "$$patch"; \
+		else \
+			printf 'cannot apply %s; remove %s for a clean Buildroot tree\n' "$$patch" '$(BUILDROOT_SRC)' >&2; \
+			exit 1; \
+		fi; \
+	done
+	touch '$@'
+
+$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	mkdir -p '$(BUILDROOT_OUT)'
 	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
 	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
 		--set-str GLOBAL_PATCH_DIR '$(abspath $(BUILDROOT_PATCHES))' \
+		--set-str PACKAGE_BUSYBOX_CONFIG '$(abspath $(BUILDROOT_BUSYBOX_CONFIG))' \
 		--set-str ROOTFS_OVERLAY '$(abspath $(BUILDROOT_OVERLAY)) $(abspath $(BUILDROOT_GENERATED_OVERLAY))' \
 		--set-str ROOTFS_DEVICE_TABLE 'system/device_table.txt $(abspath $(BUILDROOT_DEVICE_TABLE))'
 	$(BUILDROOT_MAKE) olddefconfig
@@ -215,18 +236,18 @@ $(BUILDROOT_INIT): $(INIT_BIN) Makefile
 
 $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
-	'$(BUILDROOT_STRIP)' '$@'
+	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	rm -f '$@.gdb'
 
 $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
-	'$(BUILDROOT_STRIP)' '$@'
+	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	rm -f '$@.gdb'
 
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -static -Wall -Wextra -o '$@' '$<'
-	'$(BUILDROOT_STRIP)' '$@'
+	'$(BUILDROOT_CC)' -Os $(BUILDROOT_FLAT_LDFLAGS) -Wall -Wextra -o '$@' '$<'
+	rm -f '$@.gdb'
 
 $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
