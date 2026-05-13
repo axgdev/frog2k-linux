@@ -60,7 +60,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0110-disable-wdt-before-init"
+#define LOADER_BUILD_TAG "2026-05-13 nommu-flat-0111-live-log-sector"
 
 typedef unsigned long long u64;
 
