@@ -56,8 +56,35 @@ static void sf2000_flat_value(const char *name, unsigned int value)
 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
 		sf2000_progress_mark(name, 16, value);
 }
+
+static void sf2000_flat_entry_words(unsigned long entry)
+{
+	u32 __user *p = (u32 __user *)entry;
+	static const char * const names[] = {
+		"flat-entry-w00", "flat-entry-w01", "flat-entry-w02",
+		"flat-entry-w03", "flat-entry-w04", "flat-entry-w05",
+		"flat-entry-w06", "flat-entry-w07", "flat-entry-w08",
+		"flat-entry-w09", "flat-entry-w10", "flat-entry-w11",
+		"flat-entry-w12", "flat-entry-w13", "flat-entry-w14",
+		"flat-entry-w15",
+	};
+	unsigned int i;
+
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+		return;
+
+	sf2000_flat_value("flat-entry-pc", (unsigned int)entry);
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		u32 word;
+
+		if (get_user(word, p + i))
+			break;
+		sf2000_flat_value(names[i], word);
+	}
+}
 #else
 static inline void sf2000_flat_value(const char *name, unsigned int value) { }
+static inline void sf2000_flat_entry_words(unsigned long entry) { }
 #endif
 
 #ifndef flat_get_relocate_addr
@@ -948,6 +975,7 @@ static int load_flat_file(struct linux_binprm *bprm,
 	}
 
 	flush_icache_user_range(start_code, end_code);
+	sf2000_flat_entry_words(libinfo->lib_list[id].entry);
 
 	/* zero the BSS,  BRK and stack areas */
 	if (clear_user((void __user *)(datapos + data_len), bss_len +
