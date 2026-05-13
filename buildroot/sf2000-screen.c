@@ -1198,6 +1198,7 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
 	(void)variant;
+	d0 |= 1u;
 	if (mode == 0x06u)
 		d0 |= 1u << 8;
 	return d0;
@@ -1260,8 +1261,8 @@ static void present_frame(void)
 	mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
 	mmio_write32(gma, GMA_MASK, 0);
-	gma_set_bit(GMA_CTL, 1u << 19, 0);
-	gma_set_bit(GMA_CTL, 1u << 18, 1);
+	gma_set_bit(GMA_CTL, 1u << 19, 1);
+	gma_set_bit(GMA_CTL, 1u << 18, 0);
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
