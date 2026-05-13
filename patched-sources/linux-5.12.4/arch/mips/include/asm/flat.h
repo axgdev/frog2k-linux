@@ -93,8 +93,10 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
 			continue;
 
 		*hi_rp = (__force u32 __user *)scan;
-		if (!flat_mips_lookup_hi16(*hi_rp, hi_insn))
+		if (!flat_mips_lookup_hi16(*hi_rp, hi_insn)) {
 			*hi_insn = insn;
+			flat_mips_remember_hi16(*hi_rp, insn);
+		}
 		return 1;
 	}
 
