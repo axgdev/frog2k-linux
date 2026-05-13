@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000108 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: quiet nommu vdso unused helpers
+
+When NOMMU skips arch_setup_additional_pages(), the VDSO mapping helpers are
+intentionally unused. Mark them as such to keep the MIPS -Werror build moving.
+---
+ arch/mips/kernel/vdso.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/mips/kernel/vdso.c b/arch/mips/kernel/vdso.c
+index a6ad368..9d0e340 100644
+--- a/arch/mips/kernel/vdso.c
++++ b/arch/mips/kernel/vdso.c
+@@ -33,7 +33,7 @@ struct vdso_data *vdso_data = mips_vdso_data.data;
+  * runtime.
+  */
+ static struct page *no_pages[] = { NULL };
+-static struct vm_special_mapping vdso_vvar_mapping = {
++static struct vm_special_mapping vdso_vvar_mapping __maybe_unused = {
+ 	.name = "[vvar]",
+ 	.pages = no_pages,
+ };
+@@ -69,7 +69,7 @@ static int __init init_vdso(void)
+ }
+ subsys_initcall(init_vdso);
+ 
+-static unsigned long vdso_base(void)
++static unsigned long __maybe_unused vdso_base(void)
+ {
+ 	unsigned long base = STACK_TOP;
+ 
+-- 
+2.45.0
+

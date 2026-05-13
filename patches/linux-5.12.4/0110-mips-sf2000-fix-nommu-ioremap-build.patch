@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000110 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: fix nommu ioremap build
+
+Keep MMU-only ioremap locals out of NOMMU compilation and close the
+preprocessor guard inside ioremap_prot rather than after the function body.
+---
+ arch/mips/mm/ioremap.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/arch/mips/mm/ioremap.c b/arch/mips/mm/ioremap.c
+index e3b6e22..bf46adc 100644
+--- a/arch/mips/mm/ioremap.c
++++ b/arch/mips/mm/ioremap.c
+@@ -22,7 +22,7 @@
+ #define IS_LOW512(addr) (!((phys_addr_t)(addr) & (phys_addr_t) ~0x1fffffffULL))
+ #define IS_KSEG1(addr) (((unsigned long)(addr) & ~0x1fffffffUL) == CKSEG1)
+ 
+-static int __ioremap_check_ram(unsigned long start_pfn, unsigned long nr_pages,
++static int __maybe_unused __ioremap_check_ram(unsigned long start_pfn, unsigned long nr_pages,
+ 			       void *arg)
+ {
+ 	unsigned long i;
+@@ -47,11 +47,13 @@ void __iomem *ioremap_prot(phys_addr_t phys_addr, unsigned long size,
+ 		unsigned long prot_val)
+ {
+ 	unsigned long flags = prot_val & _CACHE_MASK;
+-	unsigned long offset, pfn, last_pfn;
+-	struct vm_struct *area;
+ 	phys_addr_t last_addr;
+-	unsigned long vaddr;
+ 	void __iomem *cpu_addr;
++#ifdef CONFIG_MMU
++	unsigned long offset, pfn, last_pfn;
++	struct vm_struct *area;
++	unsigned long vaddr;
++#endif
+ 
+ 	cpu_addr = plat_ioremap(phys_addr, size, flags);
+ 	if (cpu_addr)
+@@ -110,8 +112,8 @@ void __iomem *ioremap_prot(phys_addr_t phys_addr, unsigned long size,
+ 	}
+ 
+ 	return (void __iomem *)(vaddr + offset);
+-}
+ #endif
++}
+ EXPORT_SYMBOL(ioremap_prot);
+ 
+ void iounmap(const volatile void __iomem *addr)
+-- 
+2.45.0
+

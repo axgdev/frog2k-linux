@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000107 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: keep nommu mmap support symbols
+
+MIPS cache code still uses shm_align_mask and virt_addr_valid in NOMMU
+builds, while the MMU address allocator conflicts with generic nommu.c. Keep
+the common symbols and build only the arch address allocator under CONFIG_MMU.
+Also skip VDSO userspace mappings without an MMU.
+---
+ arch/mips/kernel/vdso.c | 5 +++++
+ arch/mips/mm/Makefile   | 2 +-
+ arch/mips/mm/mmap.c     | 2 ++
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/kernel/vdso.c b/arch/mips/kernel/vdso.c
+index 86a7ff0..a6ad368 100644
+--- a/arch/mips/kernel/vdso.c
++++ b/arch/mips/kernel/vdso.c
+@@ -79,6 +79,10 @@ static unsigned long vdso_base(void)
+ 
+ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
+ {
++#ifndef CONFIG_MMU
++	current->mm->context.vdso = NULL;
++	return 0;
++#else
+ 	struct mips_vdso_image *image = current->thread.abi->vdso;
+ 	struct mm_struct *mm = current->mm;
+ 	unsigned long gic_size, vvar_size, size, base, data_addr, vdso_addr, gic_pfn;
+@@ -207,6 +211,7 @@ out:
+ 	mmap_write_unlock(mm);
+ 
+ 	return ret;
++#endif
+ }
+ 
+ static __always_inline
+diff --git a/arch/mips/mm/Makefile b/arch/mips/mm/Makefile
+index fa1f2e9..50e1b36 100644
+--- a/arch/mips/mm/Makefile
++++ b/arch/mips/mm/Makefile
+@@ -8,7 +8,7 @@ obj-y				+= context.o
+ obj-y				+= extable.o
+ obj-y				+= fault.o
+ obj-y				+= init.o
+-obj-$(CONFIG_MMU)		+= mmap.o
++obj-y				+= mmap.o
+ obj-y				+= page.o
+ obj-y				+= page-funcs.o
+ obj-y				+= pgtable.o
+diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
+index 40b9f7b..b16b34c 100644
+--- a/arch/mips/mm/mmap.c
++++ b/arch/mips/mm/mmap.c
+@@ -24,6 +24,7 @@ EXPORT_SYMBOL(shm_align_mask);
+ 	((((addr) + shm_align_mask) & ~shm_align_mask) +	\
+ 	 (((pgoff) << PAGE_SHIFT) & shm_align_mask))
+ 
++#ifdef CONFIG_MMU
+ enum mmap_allocation_direction {UP, DOWN};
+ 
+ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -117,6 +118,7 @@ unsigned long arch_get_unmapped_area_topdown(struct file *filp,
+ 	return arch_get_unmapped_area_common(filp,
+ 			addr0, len, pgoff, flags, DOWN);
+ }
++#endif
+ 
+ bool __virt_addr_valid(const volatile void *kaddr)
+ {
+-- 
+2.45.0
+

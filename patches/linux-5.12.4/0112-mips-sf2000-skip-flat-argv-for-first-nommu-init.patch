@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000112 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: skip FLAT argv setup for first NOMMU init
+
+The SF2000 NOMMU bring-up uses a tiny hand-written bFLT /init whose only
+job is proving that userspace was entered and then asking the kernel to
+reboot.  The generic NOMMU FLAT loader reaches the argument table builder,
+but the MIPS NOMMU argument string path is not reliable yet and rejects the
+otherwise loaded image with -EINVAL before start_thread().
+
+Keep this scoped to MIPS_SF2000 && !MMU and suppress argv/env while proving
+the first userspace handoff.  Real process argv handling can be restored
+after userspace execution itself is confirmed on hardware.
+---
+ fs/binfmt_flat.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/fs/binfmt_flat.c b/fs/binfmt_flat.c
+index 111111111111..222222222222 100644
+--- a/fs/binfmt_flat.c
++++ b/fs/binfmt_flat.c
+@@ -985,6 +985,21 @@ static int load_flat_binary(struct linux_binprm *bprm)
+ 
+ 	/* copy the arg pages onto the stack */
+ 	res = transfer_args_to_stack(bprm, &current->mm->start_stack);
++#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
++	/*
++	 * Early SF2000 NOMMU bring-up only needs the raw bFLT /init to run.
++	 * Avoid the generic argument string scanner until the MIPS NOMMU user
++	 * string path is validated on this CPU.
++	 */
++	if (!res) {
++		bprm->argc = 0;
++		bprm->envc = 0;
++		current->mm->arg_start = current->mm->start_stack;
++		current->mm->arg_end = current->mm->start_stack;
++		current->mm->env_start = current->mm->start_stack;
++		current->mm->env_end = current->mm->start_stack;
++	}
++#endif
+ 	if (!res)
+ 		res = create_flat_tables(bprm, current->mm->start_stack);
+ #endif
+-- 
+2.45.0

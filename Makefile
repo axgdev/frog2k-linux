@@ -6,8 +6,10 @@ BUILD_DIR := build
 INITRAMFS := $(BUILD_DIR)/initramfs.cpio
 INITRAMFS_LIST := $(BUILD_DIR)/initramfs.list
 INIT_BIN := $(BUILD_DIR)/initramfs-init
+INIT_RAW := $(BUILD_DIR)/initramfs-init.raw
 GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
+BFLTPACK := $(BUILD_DIR)/bfltpack
 QEMU_BIN := $(QEMU_DIR)/.cache/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
 QEMU_CPU ?= 4Kc
@@ -91,7 +93,7 @@ SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 QEMU_BOOT_TIMEOUT ?= 90s
-SMOKE_INIT_PATTERN ?= sf2000_linux: initramfs alive
+SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -G 0 \
 	-Wall -Wextra
@@ -146,11 +148,20 @@ buildroot-reconfigure:
 	rm -f '$(BUILDROOT_OUT)/.config'
 	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
 
-$(INIT_BIN): init/sf2000-init.c Makefile
+$(BFLTPACK): tools/bfltpack.c Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' -Os -static -nostdlib -ffreestanding \
-		-march=mips32 -mabi=32 -msoft-float -G 0 \
-		-Wl,-e,_start -Wl,--gc-sections -Wl,-z,noexecstack -o '$@' '$<'
+	'$(HOSTCC)' -O2 -Wall -Wextra -o '$@' '$<'
+
+$(INIT_RAW): init/sf2000-flat-init.S Makefile
+	mkdir -p '$(dir $@)'
+	'$(CC_MIPS)' -Os -nostdlib -ffreestanding \
+		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
+		-fno-pic -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
+		-Wl,--gc-sections -Wl,-z,noexecstack -o '$@.elf' '$<'
+	'$(OBJCOPY_MIPS)' -O binary -j .text '$@.elf' '$@'
+
+$(INIT_BIN): $(INIT_RAW) $(BFLTPACK)
+	'$(BFLTPACK)' '$(INIT_RAW)' '$@'
 
 $(GEN_INIT_CPIO): $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -297,6 +308,14 @@ $(LINUX_OUT)/.config: $(LINUX_SRC)/Makefile | $(LINUX_SRC)/.patched
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
 		--enable CMDLINE_BOOL \
 		--set-str CMDLINE '$(LINUX_CMDLINE)' \
+		--disable MMU \
+		--disable BINFMT_ELF \
+		--disable COMPAT_BINFMT_ELF \
+		--enable BINFMT_FLAT \
+		--enable BINFMT_SCRIPT \
+		--disable COREDUMP \
+		--disable DEVMEM \
+		--disable DEVKMEM \
 		--disable MIPS_GENERIC_KERNEL \
 		--enable MIPS_SF2000 \
 		--disable MIPS_CMDLINE_FROM_DTB \
@@ -576,7 +595,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  7 pulses: time_init completed\n'; \
 		printf '  8 pulses: kernel is about to enable IRQs; RAM log records CP0 IRQ state\n'; \
 		printf '  9 pulses: kernel is about to exec /init\n'; \
-		printf '  10 pulses: initramfs /init reached userspace\n'; \
+		printf '  10 pulses: bFLT /init reached userspace\n'; \
 	} > '$@'
 
 $(SDCARD_LOG_TXT): Makefile

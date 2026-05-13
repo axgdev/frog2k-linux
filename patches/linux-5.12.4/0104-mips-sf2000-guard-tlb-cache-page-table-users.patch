@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000104 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: guard page table cache and tlb helpers
+
+R4K cache and TLB maintenance still compiles page table walkers in NOMMU
+builds. Provide no-page-table variants for the two helpers that currently
+reference pgd/pmd/pte APIs even though the SF2000 path does not need them.
+---
+ arch/mips/mm/c-r4k.c   | 8 ++++++++
+ arch/mips/mm/tlb-r4k.c | 9 +++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/arch/mips/mm/c-r4k.c b/arch/mips/mm/c-r4k.c
+index 4c41fb0..544d150 100644
+--- a/arch/mips/mm/c-r4k.c
++++ b/arch/mips/mm/c-r4k.c
+@@ -646,6 +646,13 @@ struct flush_cache_page_args {
+ 	unsigned long pfn;
+ };
+ 
++#ifndef CONFIG_MMU
++static inline void local_r4k_flush_cache_page(void *args)
++{
++	r4k_blast_dcache();
++	r4k_blast_icache();
++}
++#else
+ static inline void local_r4k_flush_cache_page(void *args)
+ {
+ 	struct flush_cache_page_args *fcp_args = args;
+@@ -716,6 +723,7 @@ static inline void local_r4k_flush_cache_page(void *args)
+ 			kunmap_atomic(vaddr);
+ 	}
+ }
++#endif
+ 
+ static void r4k_flush_cache_page(struct vm_area_struct *vma,
+ 	unsigned long addr, unsigned long pfn)
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 60d9e9f..c28d906 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -462,6 +462,13 @@ void local_flush_tlb_one(unsigned long page)
+ 	local_irq_restore(flags);
+ }
+ 
++#ifndef CONFIG_MMU
++void __update_tlb(struct vm_area_struct *vma, unsigned long address, pte_t pte)
++{
++	if (IS_ENABLED(CONFIG_MIPS_SF2000))
++		sf2000_progress_mark("tlb-update-nommu", 4, (unsigned int)address);
++}
++#else
+ /*
+  * We will need multiple versions of update_mmu_cache(), one that just
+  * updates the TLB with the new pte(s), and another which also checks
+ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
+ {
+ 	unsigned long flags;
+@@ -551,6 +559,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
+ 	flush_micro_tlb_vm(vma);
+ 	local_irq_restore(flags);
+ }
++#endif
+ 
+ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
+ 		     unsigned long entryhi, unsigned long pagemask)
+-- 
+2.45.0

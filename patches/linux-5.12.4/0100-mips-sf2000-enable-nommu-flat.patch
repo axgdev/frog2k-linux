@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000100 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: enable nommu flat bring-up
+
+The physical SF2000 reports Reserved Instruction on software TLB writes and
+the latest device logs reach the copied init image but loop on the first
+normal ELF syscall path. Treat this board as a NOMMU target instead of trying
+to manufacture a software-filled userspace mapping.
+
+Wire the SF2000 platform up to the generic FLAT binary loader and default MMU
+off for this board. Also keep the old ERL identity handoff disabled under
+NOMMU so the normal no-MMU exec path owns first userspace entry.
+---
+ arch/mips/Kconfig             | 4 +++-
+ arch/mips/include/asm/flat.h  | 7 +++++++
+ arch/mips/kernel/process.c    | 3 +++
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+ create mode 100644 arch/mips/include/asm/flat.h
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index 74a118e..dd0cf4a 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -256,6 +256,8 @@ config MIPS_SF2000
+ 	bool "Data Frog SF2000 / HC15xx"
+ 	select BOOT_RAW
+ 	select BUILTIN_DTB
++	select ARCH_HAS_BINFMT_FLAT
++	select BINFMT_FLAT_ARGVP_ENVP_ON_STACK
+ 	select CEVT_R4K
+ 	select CSRC_R4K
+ 	select DMA_NONCOHERENT
+@@ -3291,7 +3293,7 @@ config MIPS_AUTO_PFN_OFFSET
+ 
+ config MMU
+ 	bool
+-	default y
++	default y if !MIPS_SF2000
+ 
+ config ARCH_MMAP_RND_BITS_MIN
+ 	default 12 if 64BIT
+diff --git a/arch/mips/include/asm/flat.h b/arch/mips/include/asm/flat.h
+new file mode 100644
+index 0000000..c7e05c1
+--- /dev/null
++++ b/arch/mips/include/asm/flat.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ASM_MIPS_FLAT_H
++#define _ASM_MIPS_FLAT_H
++
++#include <asm-generic/flat.h>
++
++#endif
+diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
+index 250f29c..bc6856e 100644
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -64,5 +64,8 @@ static bool sf2000_identity_userspace_enabled(void)
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || !sf2000_rom_handoff_present())
+ 		return false;
+ 
++	if (!IS_ENABLED(CONFIG_MMU))
++		return false;
++
+ 	return (read_c0_ebase() & 0x1ffff000) == 0x01002000;
+ }
+-- 
+2.45.0

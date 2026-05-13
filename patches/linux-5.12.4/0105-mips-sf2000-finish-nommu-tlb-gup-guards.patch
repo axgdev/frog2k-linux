@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000105 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: finish nommu tlb and gup guards
+
+Close the NOMMU guard around the R4K TLB updater and stop selecting the fast
+get-user-pages implementation without an MMU. The fast GUP code is entirely
+page-table based and does not apply to the SF2000 NOMMU build.
+---
+ arch/mips/Kconfig      | 2 +-
+ arch/mips/mm/tlb-r4k.c | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index dd0cf4a..6e0782c 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -62,7 +62,7 @@ config MIPS
+ 	select HAVE_DMA_CONTIGUOUS
+ 	select HAVE_DYNAMIC_FTRACE
+ 	select HAVE_EBPF_JIT if 64BIT && !CPU_MICROMIPS && TARGET_ISA_REV >= 2
+ 	select HAVE_EXIT_THREAD
+-	select HAVE_FAST_GUP
++	select HAVE_FAST_GUP if MMU
+ 	select HAVE_FTRACE_MCOUNT_RECORD
+ 	select HAVE_FUNCTION_GRAPH_TRACER
+ 	select HAVE_FUNCTION_TRACER
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 47f8bdd..1768c9c 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -561,6 +561,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
+ 	flush_micro_tlb_vm(vma);
+ 	local_irq_restore(flags);
+ }
++#endif
+ 
+ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
+ 		     unsigned long entryhi, unsigned long pagemask)
+-- 
+2.45.0
+

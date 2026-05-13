@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000109 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: add nommu protection map and ioremap
+
+The MIPS cache setup writes protection_map even without mm/mmap.c, and the
+NOMMU build cannot allocate vmalloc-backed ioremap areas. Provide the MIPS
+protection map from arch code and restrict ioremap to direct low-memory KSEG1
+mappings when no MMU exists.
+---
+ arch/mips/mm/ioremap.c | 8 ++++++++
+ arch/mips/mm/mmap.c    | 4 ++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/arch/mips/mm/ioremap.c b/arch/mips/mm/ioremap.c
+index 4f90c00..e3b6e22 100644
+--- a/arch/mips/mm/ioremap.c
++++ b/arch/mips/mm/ioremap.c
+@@ -73,6 +73,10 @@ void __iomem *ioremap_prot(phys_addr_t phys_addr, unsigned long size,
+ 	    flags == _CACHE_UNCACHED)
+ 		return (void __iomem *) CKSEG1ADDR(phys_addr);
+ 
++#ifndef CONFIG_MMU
++	return NULL;
++#else
++
+ 	/*
+ 	 * Don't allow anybody to remap RAM that may be allocated by the page
+ 	 * allocator, since that could lead to races & data clobbering.
+@@ -109,11 +113,14 @@ void __iomem *ioremap_prot(phys_addr_t phys_addr, unsigned long size,
+ 
+ 	return (void __iomem *)(vaddr + offset);
+ }
++#endif
+ EXPORT_SYMBOL(ioremap_prot);
+ 
+ void iounmap(const volatile void __iomem *addr)
+ {
++#ifdef CONFIG_MMU
+ 	if (!plat_iounmap(addr) && !IS_KSEG1(addr))
+ 		vunmap((void *)((unsigned long)addr & PAGE_MASK));
++#endif
+ }
+ EXPORT_SYMBOL(iounmap);
+diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
+index b16b34c..e6b58de 100644
+--- a/arch/mips/mm/mmap.c
++++ b/arch/mips/mm/mmap.c
+@@ -25,5 +25,9 @@ EXPORT_SYMBOL(shm_align_mask);
+ 	((((addr) + shm_align_mask) & ~shm_align_mask) +	\
+ 	 (((pgoff) << PAGE_SHIFT) & shm_align_mask))
+ 
++#ifndef CONFIG_MMU
++pgprot_t protection_map[16] __ro_after_init;
++#endif
++
+ #ifdef CONFIG_MMU
+ enum mmap_allocation_direction {UP, DOWN};
+-- 
+2.45.0
