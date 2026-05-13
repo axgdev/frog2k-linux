@@ -331,6 +331,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--disable BINFMT_ELF \
 		--disable COMPAT_BINFMT_ELF \
 		--enable BINFMT_FLAT \
+		--disable BINFMT_FLAT_ARGVP_ENVP_ON_STACK \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
 		--disable DEVMEM \

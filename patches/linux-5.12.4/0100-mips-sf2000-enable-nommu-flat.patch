@@ -12,22 +12,21 @@ Wire the SF2000 platform up to the generic FLAT binary loader and default MMU
 off for this board. Also keep the old ERL identity handoff disabled under
 NOMMU so the normal no-MMU exec path owns first userspace entry.
 ---
- arch/mips/Kconfig             | 4 +++-
+ arch/mips/Kconfig             | 3 ++-
  arch/mips/include/asm/flat.h  | 7 +++++++
  arch/mips/kernel/process.c    | 3 +++
- 3 files changed, 13 insertions(+), 1 deletion(-)
+ 3 files changed, 12 insertions(+), 1 deletion(-)
  create mode 100644 arch/mips/include/asm/flat.h
 
 diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
 index 74a118e..dd0cf4a 100644
 --- a/arch/mips/Kconfig
 +++ b/arch/mips/Kconfig
-@@ -256,6 +256,8 @@ config MIPS_SF2000
+@@ -256,6 +256,7 @@ config MIPS_SF2000
  	bool "Data Frog SF2000 / HC15xx"
  	select BOOT_RAW
  	select BUILTIN_DTB
 +	select ARCH_HAS_BINFMT_FLAT
-+	select BINFMT_FLAT_ARGVP_ENVP_ON_STACK
  	select CEVT_R4K
  	select CSRC_R4K
  	select DMA_NONCOHERENT
