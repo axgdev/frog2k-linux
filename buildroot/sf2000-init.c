@@ -63,9 +63,9 @@ static char *const init_envp[] = {
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
 static unsigned long heartbeat_stack[SERVICE_STACK_WORDS];
 static unsigned long pad_stack[SERVICE_STACK_WORDS];
-static char *const *service_exec_argv;
 
 static void log_message(const char *message);
+extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
 
 static long syscall1(long nr, long a0)
 {
@@ -415,9 +415,8 @@ static unsigned long service_stack_top(unsigned long *stack)
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
 }
 
-static void service_child_exec(void)
+void service_child_exec(char *const *argv)
 {
-	char *const *argv = service_exec_argv;
 	long ret;
 
 	ret = syscall3(SYS_execve, (long)argv[0], (long)argv,
@@ -438,16 +437,15 @@ static void spawn_service(const char *name, char *const argv[],
 	unsigned long child_stack = service_stack_top(stack);
 
 	log_message(name);
-	service_exec_argv = argv;
 	diagnostic_watchdog_pet();
-	pid = syscall6(SYS_clone, CLONE_VM | SIGCHLD, child_stack, 0, 0, 0, 0);
+	pid = sf2000_clone_service(child_stack, argv);
 	if (pid < 0) {
 		log_message("sf2000_buildroot: service clone failed ");
 		log_hex_word((unsigned int)pid);
 		return;
 	}
 	if (pid == 0)
-		service_child_exec();
+		service_child_exec(argv);
 	diagnostic_watchdog_pet();
 }
 
