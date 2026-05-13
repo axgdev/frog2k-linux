@@ -89,12 +89,12 @@ _start:
 	li	$2, 4021
 	li	$8, 0xa1400000
 	li	$9, 0x51510427
-	sw	$9, 144($8)
+	sw	$9, 256($8)
 	syscall
 	 nop
 	li	$8, 0xa1400000
-	sw	$2, 148($8)
-	sw	$7, 152($8)
+	sw	$2, 260($8)
+	sw	$7, 264($8)
 
 	addiu	$4, $16, path_meminfo - 1b
 	move	$5, $0
@@ -102,12 +102,12 @@ _start:
 	li	$2, 4005
 	li	$8, 0xa1400000
 	li	$9, 0x51510428
-	sw	$9, 156($8)
+	sw	$9, 268($8)
 	syscall
 	 nop
 	li	$8, 0xa1400000
-	sw	$2, 160($8)
-	sw	$7, 164($8)
+	sw	$2, 272($8)
+	sw	$7, 276($8)
 	bnez	$7, 8f
 	 nop
 	move	$18, $2
@@ -117,12 +117,12 @@ _start:
 	li	$2, 4003
 	li	$8, 0xa1400000
 	li	$9, 0x51510429
-	sw	$9, 168($8)
+	sw	$9, 280($8)
 	syscall
 	 nop
 	li	$8, 0xa1400000
-	sw	$2, 172($8)
-	sw	$7, 176($8)
+	sw	$2, 284($8)
+	sw	$7, 288($8)
 	bnez	$7, 7f
 	 nop
 	blez	$2, 7f
@@ -143,28 +143,23 @@ _start:
 8:
 	li	$8, 0xa1400000
 	li	$9, 0x51510429
-	sw	$9, 168($8)
-	sw	$0, 172($8)
-	sw	$0, 176($8)
+	sw	$9, 280($8)
+	sw	$0, 284($8)
+	sw	$0, 288($8)
 
 9:
-	addiu	$10, $16, arg_busybox - 1b
-	addiu	$11, $16, arg_sh - 1b
-	sw	$10, 0($29)
-	sw	$11, 4($29)
-	sw	$0, 8($29)
 	addiu	$4, $16, path_busybox - 1b
-	move	$5, $29
+	move	$5, $0
 	move	$6, $0
 	li	$2, 4011
 	li	$8, 0xa1400000
 	li	$9, 0x5151042a
-	sw	$9, 180($8)
+	sw	$9, 292($8)
 	syscall
 	 nop
 	li	$8, 0xa1400000
-	sw	$2, 184($8)
-	sw	$7, 188($8)
+	sw	$2, 296($8)
+	sw	$7, 300($8)
 
 4:
 	li	$4, 0xfee1dead
@@ -216,10 +211,6 @@ path_meminfo:
 	.asciz	"/proc/meminfo"
 path_busybox:
 	.asciz	"/bin/busybox"
-arg_busybox:
-	.asciz	"busybox"
-arg_sh:
-	.asciz	"sh"
 msg_alive:
 	.ascii	"<6>sf2000_linux: flat init alive\n"
 msg_alive_end:
