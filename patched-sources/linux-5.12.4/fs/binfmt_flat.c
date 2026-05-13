@@ -68,8 +68,12 @@ static inline void sf2000_flat_value(const char *name, unsigned int value) { }
 #define flat_reloc_addr_fixup(rel, addr, limit)	(addr)
 #endif
 
-#ifndef flat_reloc_set_image_limit
-#define flat_reloc_set_image_limit(limit)	do { } while (0)
+#ifndef flat_reloc_begin
+#define flat_reloc_begin(limit)		do { } while (0)
+#endif
+
+#ifndef flat_reloc_prescan
+#define flat_reloc_prescan(rel, rp)	do { } while (0)
 #endif
 
 /****************************************************************************/
@@ -810,7 +814,7 @@ static int load_flat_file(struct linux_binprm *bprm,
 	libinfo->lib_list[id].loaded = 1;
 	libinfo->lib_list[id].entry = (0x00ffffff & ntohl(hdr->entry)) + textpos;
 	libinfo->lib_list[id].build_date = ntohl(hdr->build_date);
-	flat_reloc_set_image_limit(text_len + data_len + bss_len);
+	flat_reloc_begin(text_len + data_len + bss_len);
 
 	/*
 	 * We just load the allocations into some temporary memory to
@@ -856,6 +860,19 @@ static int load_flat_file(struct linux_binprm *bprm,
 	 * __start to address 4 so that is okay).
 	 */
 	if (rev > OLD_FLAT_VERSION) {
+		for (i = 0; i < relocs; i++) {
+			u32 addr, relval;
+			__be32 tmp;
+
+			if (get_user(tmp, reloc + i))
+				return -EFAULT;
+			relval = ntohl(tmp);
+			addr = flat_get_relocate_addr(relval);
+			rp = (u32 __user *)calc_reloc(addr, libinfo, id, 1);
+			if (rp != (u32 __user *)RELOC_FAILED)
+				flat_reloc_prescan(relval, rp);
+		}
+
 		for (i = 0; i < relocs; i++) {
 			u32 addr, raw_addr, relval;
 			__be32 tmp;

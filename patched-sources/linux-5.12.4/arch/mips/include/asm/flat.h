@@ -12,7 +12,7 @@
 #define FLAT_MIPS_R_MASK	0xc0000000
 #define FLAT_MIPS_R_ADDR	0x3fffffff
 #define FLAT_MIPS_HI16_SLOTS	4096
-#define FLAT_MIPS_HI16_SCAN	128
+#define FLAT_MIPS_HI16_SCAN	4096
 
 static u32 __user *flat_mips_hi16_rp;
 static u32 flat_mips_hi16_insn;
@@ -35,8 +35,16 @@ static inline u32 flat_mips_lo16_rs(u32 insn)
 	return (insn >> 21) & 0x1f;
 }
 
-static inline void mips_flat_reloc_set_image_limit(u32 limit)
+static inline void mips_flat_reloc_begin(u32 limit)
 {
+	int i;
+
+	flat_mips_hi16_rp = NULL;
+	flat_mips_hi16_insn = 0;
+	for (i = 0; i < FLAT_MIPS_HI16_SLOTS; i++) {
+		flat_mips_hi16_rps[i] = NULL;
+		flat_mips_hi16_insns[i] = 0;
+	}
 	flat_mips_image_limit = limit;
 }
 
@@ -171,6 +179,12 @@ static inline int flat_get_addr_from_rp(u32 __user *rp, u32 relval, u32 flags,
 	}
 }
 
+static inline void mips_flat_reloc_prescan(u32 relval, u32 __user *rp)
+{
+	if (flat_mips_reloc_type(relval) == FLAT_MIPS_R_HI16)
+		flat_mips_remember_hi16(rp, get_unaligned((__force u32 *)rp));
+}
+
 static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
 {
 	u32 *p = (__force u32 *)rp;
@@ -217,8 +231,10 @@ static inline u32 mips_flat_reloc_addr_fixup(u32 relval, u32 addr, u32 limit)
 
 #define flat_reloc_addr_fixup(rel, addr, limit) \
 	mips_flat_reloc_addr_fixup(rel, addr, limit)
-#define flat_reloc_set_image_limit(limit) \
-	mips_flat_reloc_set_image_limit(limit)
+#define flat_reloc_begin(limit) \
+	mips_flat_reloc_begin(limit)
+#define flat_reloc_prescan(rel, rp) \
+	mips_flat_reloc_prescan(rel, rp)
 
 /*
  * elf2flt stores the MIPS relocation kind in the top two bits. Keep the
