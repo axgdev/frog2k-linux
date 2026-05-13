@@ -62,9 +62,11 @@ BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
 BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
+BUILDROOT_FLTHDR := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-flthdr
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
 BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra
 BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static
+BUILDROOT_SCREEN_STACK_SIZE := 65536
 BUILDROOT_SUPERVISOR_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin
 BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
@@ -262,6 +264,7 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
 		-o '$@' '$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
