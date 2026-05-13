@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-#include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/cachectl.h>
 #include <sys/mman.h>
-#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -19,6 +16,8 @@ extern char **environ;
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
+#define SYS_nanosleep 4166
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -118,7 +117,31 @@ extern char **environ;
 static volatile uint8_t *gma_ram;
 static volatile uint8_t *gma;
 static volatile uint8_t *sysio;
-static volatile sig_atomic_t stopping;
+struct kernel_timespec {
+	long tv_sec;
+	long tv_nsec;
+};
+
+static volatile int stopping;
+
+static long syscall2(long nr, long a0, long a1)
+{
+	register long r2 __asm__("$2") = nr;
+	register long r4 __asm__("$4") = a0;
+	register long r5 __asm__("$5") = a1;
+	register long r7 __asm__("$7");
+
+	__asm__ volatile (
+		"syscall"
+		: "+r"(r2), "=r"(r7)
+		: "r"(r4), "r"(r5)
+		: "$3", "$6", "$8", "$9", "$10", "$11", "$12",
+		  "$13", "$14", "$15", "$24", "$25", "hi", "lo",
+		  "memory");
+	if (r7)
+		return -r2;
+	return r2;
+}
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
@@ -431,11 +454,11 @@ static void append_file_log(const char *line)
 
 static void sleep_ms(unsigned msec)
 {
-	struct timespec ts;
+	struct kernel_timespec ts;
 
 	ts.tv_sec = msec / 1000u;
 	ts.tv_nsec = (long)(msec % 1000u) * 1000000L;
-	while (nanosleep(&ts, &ts) < 0 && errno == EINTR && !stopping)
+	while (syscall2(SYS_nanosleep, (long)&ts, (long)&ts) < 0 && !stopping)
 		;
 }
 
@@ -820,12 +843,17 @@ static int panel_init_variant(const struct panel_variant *variant)
 	if (!panel_enabled)
 		return 0;
 
+	log_line("sf2000-screen: panel init pinmux\n");
 	panel_control_pinmux();
+	log_line("sf2000-screen: panel init gpio outputs\n");
 	panel_config_outputs();
+	log_line("sf2000-screen: panel init idle/reset\n");
 	panel_bus_idle();
 	panel_reset();
 	sleep_ms(120);
+	log_line("sf2000-screen: panel init read id\n");
 	panel_id = panel_read_id();
+	log_line("sf2000-screen: panel init sequence\n");
 	panel_apply_init_sequence(variant->init);
 	panel_cmd(ST7789_DISPON);
 	panel_restart_frame();
@@ -1054,10 +1082,20 @@ static void present_frame(void)
 	gma_set_bit(GMA_CTL, 1u << 18, 1);
 }
 
-static void handle_signal(int sig)
+static int env_is(const char *const *envp, const char *name, const char *value)
 {
-	(void)sig;
-	stopping = 1;
+	size_t name_len = strlen(name);
+
+	if (!envp)
+		return 0;
+	while (*envp) {
+		if (strncmp(*envp, name, name_len) == 0 &&
+				(*envp)[name_len] == '=' &&
+				strcmp(*envp + name_len + 1, value) == 0)
+			return 1;
+		envp++;
+	}
+	return 0;
 }
 
 static void log_gma_ready(void)
@@ -1152,12 +1190,11 @@ int main(int argc, char **argv, char **envp)
 		environ = envp;
 	const struct panel_variant *first_variant = &panel_variants[0];
 
-	if (getenv("SF2000_PANEL") && strcmp(getenv("SF2000_PANEL"), "0") == 0)
+	if (env_is((const char *const *)envp, "SF2000_PANEL", "0"))
 		panel_enabled = 0;
-	if (getenv("SF2000_LED") && strcmp(getenv("SF2000_LED"), "0") == 0)
+	if (env_is((const char *const *)envp, "SF2000_LED", "0"))
 		led_enabled = 0;
-	if (getenv("SF2000_FAST_PANEL") &&
-			strcmp(getenv("SF2000_FAST_PANEL"), "1") == 0)
+	if (env_is((const char *const *)envp, "SF2000_FAST_PANEL", "1"))
 		slow_panel_bus = 0;
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
@@ -1174,14 +1211,13 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 
-	signal(SIGINT, handle_signal);
-	signal(SIGTERM, handle_signal);
-
 	publish_marker("/run/sf2000-screen-own-backlight", "owned\n");
 	startup_backlight_diagnostic();
 
 	build_gma_descriptor();
+	log_line("sf2000-screen: before panel init\n");
 	panel_init_variant(first_variant);
+	log_line("sf2000-screen: after panel init\n");
 	panel_push_probe_pixels();
 	draw_diag_screen("GMA TRACE READY", first_variant->name,
 		first_variant->madctl[0], frame);
