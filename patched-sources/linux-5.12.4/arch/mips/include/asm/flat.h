@@ -160,7 +160,8 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
 		put_unaligned(insn, p);
 		return 0;
 	case FLAT_MIPS_R_HI16:
-		flat_mips_remember_hi16(rp, get_unaligned(p));
+		if (!flat_mips_lookup_hi16(rp, &insn))
+			flat_mips_remember_hi16(rp, get_unaligned(p));
 		return 0;
 	case FLAT_MIPS_R_LO16:
 		lo = get_unaligned(p);

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Wed, 13 May 2026 06:45:00 +0000
+Subject: [PATCH] mips: sf2000: keep cached original HI16
+
+BusyBox can emit relocation order LO16, HI16, LO16 for the same LUI.
+The first LO16 patches the LUI and caches the original instruction by
+scan. When the explicit HI16 relocation arrives later, do not overwrite
+that original with the already-patched instruction.
+---
+ arch/mips/include/asm/flat.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/include/asm/flat.h b/arch/mips/include/asm/flat.h
+index 0afc38e..c365019 100644
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -148,7 +148,8 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+ 		put_unaligned(insn, p);
+ 		return 0;
+ 	case FLAT_MIPS_R_HI16:
+-		flat_mips_remember_hi16(rp, get_unaligned(p));
++		if (!flat_mips_lookup_hi16(rp, &insn))
++			flat_mips_remember_hi16(rp, get_unaligned(p));
+ 		return 0;
+ 	case FLAT_MIPS_R_LO16:
+ 		lo = get_unaligned(p);
+-- 
+2.49.0
+
