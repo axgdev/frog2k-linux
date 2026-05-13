@@ -48,12 +48,13 @@ distinguish a missing latch from a later stub failure.
  	li	k1, 0x51510007
 --- a/arch/mips/kernel/process.c
 +++ b/arch/mips/kernel/process.c
-@@ -40,8 +40,6 @@
+@@ -40,9 +40,7 @@
  #include <asm/stacktrace.h>
  
  #define SF2000_IDENTITY_USER_STACK 0x013e0000UL
 -#define SF2000_IDENTITY_BRANCH_FLAG_KSEG1 ((volatile unsigned int *)0xa13ff000UL)
 -#define SF2000_IDENTITY_BRANCH_MAGIC 0x5151b001UL
+ 
  #ifdef CONFIG_HOTPLUG_CPU
  void arch_cpu_idle_dead(void)
  {

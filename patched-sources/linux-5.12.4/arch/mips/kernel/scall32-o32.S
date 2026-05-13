@@ -177,6 +177,13 @@ syscall_common:
 	addu	t1, t0
 	lw	t2, (t1)		# syscall routine
 
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa1400000
+	li	k1, 0x51510534
+	sw	k1, 128(k0)
+	sw	v0, 132(k0)
+	sw	t2, 136(k0)
+#endif
 	beqz	t2, illegal_syscall
 
 #ifdef CONFIG_MIPS_SF2000
@@ -194,6 +201,10 @@ syscall_common:
 	sw	k1, 20(k0)
 	sw	v0, 24(k0)
 	sw	a3, 28(k0)
+	li	k1, 0x51510535
+	sw	k1, 140(k0)
+	sw	v0, 144(k0)
+	sw	a3, 148(k0)
 #endif
 
 	li	t0, -EMAXERRNO - 1	# error?
@@ -271,6 +282,12 @@ bad_stack_a7:
 	 * The system call does not exist in this kernel
 	 */
 illegal_syscall:
+#ifdef CONFIG_MIPS_SF2000
+	li	k0, 0xa1400000
+	li	k1, 0x51510536
+	sw	k1, 152(k0)
+	sw	v0, 156(k0)
+#endif
 	li	v0, ENOSYS			# error
 	sw	v0, PT_R2(sp)
 	li	t0, 1				# set error flag

@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000117 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 13 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: extend syscall raw trace
+
+The first bFLT init is now entering handle_sys, but the init-side raw slots
+overwrite the existing syscall breadcrumbs.  Record the selected syscall table
+entry and return value in higher raw diagnostic words so the next device log can
+distinguish a bad dispatch from a normal syscall returning an errno.
+---
+ arch/mips/kernel/scall32-o32.S | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/arch/mips/kernel/scall32-o32.S b/arch/mips/kernel/scall32-o32.S
+index 1111111..2222222 100644
+--- a/arch/mips/kernel/scall32-o32.S
++++ b/arch/mips/kernel/scall32-o32.S
+@@ -176,6 +176,13 @@ syscall_common:
+ 	addu	t1, t0
+ 	lw	t2, (t1)		# syscall routine
+ 
++#ifdef CONFIG_MIPS_SF2000
++	li	k0, 0xa1400000
++	li	k1, 0x51510534
++	sw	k1, 128(k0)
++	sw	v0, 132(k0)
++	sw	t2, 136(k0)
++#endif
+ 	beqz	t2, illegal_syscall
+ 
+ #ifdef CONFIG_MIPS_SF2000
+@@ -197,6 +204,10 @@ syscall_common:
+ 	sw	k1, 20(k0)
+ 	sw	v0, 24(k0)
+ 	sw	a3, 28(k0)
++	li	k1, 0x51510535
++	sw	k1, 140(k0)
++	sw	v0, 144(k0)
++	sw	a3, 148(k0)
+ #endif
+ 
+ 	li	t0, -EMAXERRNO - 1	# error?
+@@ -263,6 +274,12 @@ bad_stack_a7:
+ 	 * The system call does not exist in this kernel
+ 	 */
+ illegal_syscall:
++#ifdef CONFIG_MIPS_SF2000
++	li	k0, 0xa1400000
++	li	k1, 0x51510536
++	sw	k1, 152(k0)
++	sw	v0, 156(k0)
++#endif
+ 	li	v0, ENOSYS			# error
+ 	sw	v0, PT_R2(sp)
+ 	li	t0, 1				# set error flag
+-- 
+2.45.0
