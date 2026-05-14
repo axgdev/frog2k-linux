@@ -768,7 +768,7 @@ static void progress_mark_mmc_snapshot(const char *suffix)
 	progress_mark("diag-mmc-dscaddr", 0x32u, direct_read32(MMC_PHYS + MMC_DSCADDR));
 	progress_mark("diag-mmc-bufaddr", 0x32u, direct_read32(MMC_PHYS + MMC_BUFADDR));
 	progress_mark("diag-mmc-cardthr", 0x32u, direct_read32(MMC_PHYS + MMC_CARDTHRCTL));
-	progress_mark(suffix, 0x32u, 0x0179u);
+	progress_mark(suffix, 0x32u, 0x0180u);
 }
 
 static void progress_mark_reset_snapshot(void)
@@ -776,7 +776,7 @@ static void progress_mark_reset_snapshot(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0179u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0180u);
 	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
@@ -823,7 +823,7 @@ static void progress_mark_reset_snapshot(void)
 
 	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0179u);
+	progress_mark("diag-reset-done", 0x30u, 0x0180u);
 }
 
 static void sleep_ms(unsigned msec)

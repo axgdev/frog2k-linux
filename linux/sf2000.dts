@@ -48,7 +48,7 @@
 	mmc_clk: mmc-clock {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <49000000>;
+		clock-frequency = <198000000>;
 	};
 
 	memory@0 {
@@ -118,13 +118,13 @@
 		};
 
 		mmc0: mmc@1884c000 {
-			compatible = "hichip,dw-mshc";
+			compatible = "hichip,hc15-mmc";
 			reg = <0x1884c000 0x2000>;
 			interrupts = <10>;
 			clocks = <&mmc_clk>, <&mmc_clk>;
 			clock-names = "biu", "ciu";
 			clock-frequency = <198000000>;
-			max-frequency = <12000000>;
+			max-frequency = <25000000>;
 			fifo-depth = <32>;
 			fifo-mode;
 			num-slots = <1>;

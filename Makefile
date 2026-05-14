@@ -487,8 +487,9 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
 		--enable MMC \
 		--enable MMC_BLOCK \
 		--set-val MMC_BLOCK_MINORS 8 \
-		--enable MMC_DW \
-		--enable MMC_DW_HICHIP \
+		--disable MMC_DW \
+		--disable MMC_DW_HICHIP \
+		--enable MMC_HC15 \
 		--enable HICHIP_SYS_INTC \
 		--disable MMC_SDHCI \
 		--disable MMC_CQHCI \

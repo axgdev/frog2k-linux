@@ -818,6 +818,15 @@ config MMC_DW_HICHIP
 	  The first SF2000 bring-up uses this for conservative SD-card block
 	  I/O before enabling high-speed tuning.
 
+config MMC_HC15
+	tristate "Hichip HC15xx SD/MMC"
+	depends on MMC && OF && MIPS_SF2000
+	help
+	  This selects the HC15xx byte-register SD/MMC host used by SF2000.
+	  The controller lives at the same address as the Hichip DW-MSHC node
+	  in the vendor device trees, but uses the compact HC15 register layout
+	  used by hcRTOS rather than the generic Synopsys DW-MMC register map.
+
 config MMC_DW_BLUEFIELD
 	tristate "BlueField specific extensions for Synopsys DW Memory Card Interface"
 	depends on MMC_DW
