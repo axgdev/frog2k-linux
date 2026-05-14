@@ -162,6 +162,8 @@ static void hc15_recover_controller(struct hc15_mmc *host)
 	writeb(host->div & 0xff, host->base + HC15_REG_CLKDIV_LO);
 	writeb((host->div >> 8) & 0xff, host->base + HC15_REG_CLKDIV_HI);
 	writeb(host->bus, host->base + HC15_REG_BUS);
+	writeb(readb(host->base + HC15_REG_BUS) & ~0x01,
+	       host->base + HC15_REG_BUS);
 	writeb(0, host->base + HC15_REG_TIMING);
 	writeb(0x40, host->base + HC15_REG_IRQSTS);
 
@@ -507,7 +509,6 @@ static void hc15_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		bus |= 0x04;
 		break;
 	}
-	bus |= 0x01;
 	writeb(bus, host->base + HC15_REG_BUS);
 	writeb(0, host->base + HC15_REG_TIMING);
 	host->bus = bus;
@@ -541,7 +542,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0184);
+	hc15_mark("hc15-probe", 0x0185);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

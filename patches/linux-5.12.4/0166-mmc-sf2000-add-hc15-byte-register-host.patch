@@ -28,7 +28,7 @@
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
 +++ b/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
-@@ -0,0 +1,615 @@
+@@ -0,0 +1,616 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -193,6 +193,8 @@
 +	writeb(host->div & 0xff, host->base + HC15_REG_CLKDIV_LO);
 +	writeb((host->div >> 8) & 0xff, host->base + HC15_REG_CLKDIV_HI);
 +	writeb(host->bus, host->base + HC15_REG_BUS);
++	writeb(readb(host->base + HC15_REG_BUS) & ~0x01,
++	       host->base + HC15_REG_BUS);
 +	writeb(0, host->base + HC15_REG_TIMING);
 +	writeb(0x40, host->base + HC15_REG_IRQSTS);
 +
@@ -538,7 +540,6 @@
 +		bus |= 0x04;
 +		break;
 +	}
-+	bus |= 0x01;
 +	writeb(bus, host->base + HC15_REG_BUS);
 +	writeb(0, host->base + HC15_REG_TIMING);
 +	host->bus = bus;
@@ -572,7 +573,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0184);
++	hc15_mark("hc15-probe", 0x0185);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
