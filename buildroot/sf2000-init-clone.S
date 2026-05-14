@@ -6,7 +6,7 @@ sf2000_clone_service:
 	addiu	$4, $4, -16
 	sw	$5, 0($4)
 	move	$5, $4
-	li	$4, 0x112
+	li	$4, 0x4112
 	li	$2, 4120
 	addiu	$29, $29, -32
 	sw	$0, 16($29)
