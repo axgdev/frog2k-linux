@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/jiffies.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sd.h>
@@ -49,8 +50,9 @@
 #define HC_SDIO_CLK_198MHZ	(0x3 << HC_SDIO_CLK_SEL_SHIFT)
 
 #define HC15_MAX_CLOCK		25000000
-#define HC15_MIN_CLOCK		400000
+#define HC15_MIN_CLOCK		100000
 #define HC15_INPUT_CLOCK	198000000
+#define HC15_CMD_TIMEOUT_MS	200
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -99,9 +101,30 @@ static void hc15_write8_phys(u32 phys, u8 value)
 	iounmap(reg);
 }
 
+static u32 hc15_read32_phys(u32 phys)
+{
+	void __iomem *reg = ioremap(phys, sizeof(u32));
+	u32 value;
+
+	if (!reg) {
+		hc15_mark("hc15-rd-mapfail", phys);
+		return 0xffffffff;
+	}
+
+	value = readl(reg);
+	iounmap(reg);
+	return value;
+}
+
 static void hc15_prepare_soc(void)
 {
 	unsigned int pin;
+
+	hc15_mark("hc15-sfclk-before", hc15_read32_phys(HC_SYS_SFCLK));
+	hc15_mark("hc15-gate0-before", hc15_read32_phys(HC_SYS_CLK_GATE0));
+	hc15_mark("hc15-reset-before", hc15_read32_phys(HC_SYS_RESET));
+	hc15_mark("hc15-sdio-before", hc15_read32_phys(HC_SYS_SDIO_MISC));
+	hc15_mark("hc15-iovolt-before", hc15_read32_phys(HC_SYS_IO_VOLTAGE));
 
 	for (pin = 16; pin <= 21; pin++)
 		hc15_write8_phys(HC_SYS_PINMUX_L + pin, 4);
@@ -117,6 +140,12 @@ static void hc15_prepare_soc(void)
 	udelay(5);
 	hc15_update32(HC_SYS_RESET, BIT(HC_SDIO_RESET_BIT), 0);
 	udelay(5);
+
+	hc15_mark("hc15-sfclk-after", hc15_read32_phys(HC_SYS_SFCLK));
+	hc15_mark("hc15-gate0-after", hc15_read32_phys(HC_SYS_CLK_GATE0));
+	hc15_mark("hc15-reset-after", hc15_read32_phys(HC_SYS_RESET));
+	hc15_mark("hc15-sdio-after", hc15_read32_phys(HC_SYS_SDIO_MISC));
+	hc15_mark("hc15-iovolt-after", hc15_read32_phys(HC_SYS_IO_VOLTAGE));
 }
 
 static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
@@ -181,20 +210,35 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 static void hc15_start_command(struct hc15_mmc *host)
 {
 	u8 value = readb(host->base + HC15_REG_CMDCTL);
+	u8 irq = readb(host->base + HC15_REG_IRQSTS);
 
-	writeb(0xff, host->base + HC15_REG_IRQSTS);
+	writeb(irq, host->base + HC15_REG_IRQSTS);
 	writeb(value | 0x01, host->base + HC15_REG_CMDCTL);
+
+	hc15_mark("hc15-irq-prestart", irq);
+	hc15_mark("hc15-cmdctl-start", readb(host->base + HC15_REG_CMDCTL));
+	hc15_mark("hc15-cmdidx-start", readb(host->base + HC15_REG_CMDIDX));
 }
 
 static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 {
 	u8 irq = 0;
+	u8 cmdctl = 0;
 	u8 status;
 	u8 norm = 0;
-	int ret;
+	unsigned long timeout = jiffies + msecs_to_jiffies(HC15_CMD_TIMEOUT_MS);
+	int ret = -ETIMEDOUT;
 
-	ret = readb_poll_timeout(host->base + HC15_REG_IRQSTS, irq,
-				 irq & 0x40, 10, 1000000);
+	do {
+		irq = readb(host->base + HC15_REG_IRQSTS);
+		cmdctl = readb(host->base + HC15_REG_CMDCTL);
+		if ((irq & 0x40) || !(cmdctl & 0x01)) {
+			ret = 0;
+			break;
+		}
+		udelay(10);
+	} while (time_before(jiffies, timeout));
+
 	status = readb(host->base + HC15_REG_CMDSTS);
 	writeb(irq, host->base + HC15_REG_IRQSTS);
 
@@ -216,8 +260,10 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 		norm |= 0x80;
 
 	hc15_mark("hc15-irq", irq);
+	hc15_mark("hc15-cmdctl-wait", cmdctl);
 	hc15_mark("hc15-status", status);
 	hc15_mark("hc15-norm-status", norm);
+	hc15_mark("hc15-wait-ret", ret);
 
 	if (ret) {
 		cmd->error = -ETIMEDOUT;
@@ -399,12 +445,10 @@ static void hc15_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	if (ios->clock) {
 		u32 clock = min_t(u32, ios->clock, HC15_MAX_CLOCK);
 
-		div = DIV_ROUND_UP(HC15_INPUT_CLOCK, clock * 2);
-		if (!div)
-			div = 1;
+		div = DIV_ROUND_UP(HC15_INPUT_CLOCK - 1, clock * 2) + 1;
 		if (div > 0xffff)
 			div = 0xffff;
-		actual = HC15_INPUT_CLOCK / (div * 2);
+		actual = DIV_ROUND_UP(HC15_INPUT_CLOCK - 1, (div - 1) * 2);
 	}
 
 	writeb(div & 0xff, host->base + HC15_REG_CLKDIV_LO);
@@ -426,6 +470,7 @@ static void hc15_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		bus |= 0x04;
 		break;
 	}
+	bus |= 0x01;
 	writeb(bus, host->base + HC15_REG_BUS);
 	writeb(0, host->base + HC15_REG_TIMING);
 
@@ -458,7 +503,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0181);
+	hc15_mark("hc15-probe", 0x0182);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
@@ -479,6 +524,8 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	mmc->f_min = HC15_MIN_CLOCK;
 	mmc->f_max = HC15_MAX_CLOCK;
 	mmc->caps = MMC_CAP_NEEDS_POLL;
+	mmc->caps2 = MMC_CAP2_NO_SDIO | MMC_CAP2_NO_MMC |
+		     MMC_CAP2_NO_WRITE_PROTECT;
 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 	mmc->max_blk_size = 512;
 	mmc->max_blk_count = 128;

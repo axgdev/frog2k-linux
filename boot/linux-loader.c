@@ -61,7 +61,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0181-hc15-mmc-irq-enable"
+#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0182-hc15-sd-only-cmdtrace"
 
 typedef unsigned long long u64;
 
