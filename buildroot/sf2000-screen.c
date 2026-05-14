@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/input.h>
@@ -23,6 +24,12 @@ extern char **environ;
 #define CONSOLE_ROWS 28u
 #define CONSOLE_LINE_LEN (CONSOLE_COLS + 1u)
 #define CONSOLE_SCROLLBACK_LINES 512u
+
+#define PROGRESS_PHYS 0x013f0000u
+#define PROGRESS_MAGIC 0x52504653u
+#define PROGRESS_VERSION 1u
+#define PROGRESS_ENTRIES 1024u
+#define PROGRESS_NAME_LEN 32u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -49,7 +56,9 @@ extern char **environ;
 #define SYS_CLOCK_GATE0_OFF 0x060u
 #define SYS_CLOCK_GATE1_OFF 0x064u
 #define SYS_CLK_CTR_OFF 0x078u
+#define SYS_SFCLK_OFF 0x07cu
 #define SYS_LCD_SETUP_OFF 0x094u
+#define SYS_IO_VOLTAGE_OFF 0x184u
 #define SYS_LVDS_PHY_OFF 0x440u
 #define SYS_VIDEO_SRC0_OFF 0x444u
 #define SYS_VIDEO_SRC1_OFF 0x448u
@@ -84,6 +93,23 @@ extern char **environ;
 #define WDT_PET_COUNT 0xffc61075u
 #define WDT_RESTART_COUNT 0xfffff000u
 #define WDT_RESTART_CONF 0x67u
+
+#define MMC_PHYS 0x1884c000u
+#define MMC_CTRL 0x000u
+#define MMC_PWREN 0x004u
+#define MMC_CLKDIV 0x008u
+#define MMC_CLKSRC 0x00cu
+#define MMC_CLKENA 0x010u
+#define MMC_CMD 0x02cu
+#define MMC_RINTSTS 0x044u
+#define MMC_STATUS 0x048u
+#define MMC_FIFOTH 0x04cu
+#define MMC_CDETECT 0x050u
+#define MMC_BMOD 0x080u
+#define MMC_DBADDR 0x088u
+#define MMC_IDSTS 0x08cu
+#define MMC_IDINTEN 0x090u
+#define MMC_CARDTHRCTL 0x100u
 
 #define PINPAD_L01 1u
 #define PINPAD_L02 2u
@@ -191,6 +217,24 @@ static void panel_restart_frame(void);
 struct glyph {
 	char ch;
 	uint8_t rows[7];
+};
+
+struct progress_entry {
+	uint32_t seq;
+	uint32_t kind;
+	uint32_t value;
+	uint32_t name_ptr;
+	char name[PROGRESS_NAME_LEN];
+};
+
+struct progress_log {
+	uint32_t magic;
+	uint32_t version;
+	uint32_t seq;
+	uint32_t write_index;
+	uint32_t wrapped;
+	uint32_t reserved[3];
+	struct progress_entry entries[PROGRESS_ENTRIES];
 };
 
 static const struct glyph glyphs[] = {
@@ -527,6 +571,194 @@ static void watchdog_restart_now(void)
 		WDT_RESTART_CONF;
 	for (;;)
 		__asm__ volatile ("" ::: "memory");
+}
+
+static void progress_copy_name(volatile char *dst, const char *src)
+{
+	unsigned i;
+
+	for (i = 0; i < PROGRESS_NAME_LEN - 1u && src[i]; i++)
+		dst[i] = src[i];
+	for (; i < PROGRESS_NAME_LEN; i++)
+		dst[i] = 0;
+}
+
+static void progress_mark(const char *name, uint32_t kind, uint32_t value)
+{
+	volatile struct progress_log *log =
+		(volatile struct progress_log *)(uintptr_t)KSEG1ADDR(PROGRESS_PHYS);
+	volatile struct progress_entry *entry;
+	uint32_t index;
+	uint32_t seq;
+
+	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
+		memset((void *)log, 0, sizeof(*log));
+		log->magic = PROGRESS_MAGIC;
+		log->version = PROGRESS_VERSION;
+	}
+
+	seq = log->seq + 1u;
+	index = log->write_index;
+	if (index >= PROGRESS_ENTRIES) {
+		index = 0;
+		log->wrapped = 1;
+	}
+
+	entry = &log->entries[index];
+	entry->seq = seq;
+	entry->kind = kind;
+	entry->value = value;
+	entry->name_ptr = (uint32_t)(uintptr_t)name;
+	progress_copy_name(entry->name, name);
+
+	log->write_index = index + 1u;
+	log->seq = seq;
+}
+
+static void progress_mark_text(const char *prefix, const char *text)
+{
+	char name[PROGRESS_NAME_LEN];
+	unsigned byte;
+	unsigned word_index = 0;
+	uint32_t word = 0;
+
+	for (byte = 0; text[byte] && byte < 96u; byte++) {
+		word |= (uint32_t)(uint8_t)text[byte] << ((byte & 3u) * 8u);
+		if ((byte & 3u) == 3u) {
+			snprintf(name, sizeof(name), "%s-w%u", prefix, word_index++);
+			progress_mark(name, 0x20u, word);
+			word = 0;
+		}
+	}
+	if (byte & 3u) {
+		snprintf(name, sizeof(name), "%s-w%u", prefix, word_index);
+		progress_mark(name, 0x20u, word);
+	}
+}
+
+static void progress_mark_file_head(const char *prefix, const char *path)
+{
+	char buf[96];
+	ssize_t got;
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0) {
+		progress_mark(prefix, 0x21u, (uint32_t)errno);
+		return;
+	}
+	got = read(fd, buf, sizeof(buf) - 1u);
+	close(fd);
+	if (got < 0) {
+		progress_mark(prefix, 0x22u, (uint32_t)errno);
+		return;
+	}
+	buf[got] = 0;
+	progress_mark(prefix, 0x23u, (uint32_t)got);
+	progress_mark_text(prefix, buf);
+}
+
+static void progress_mark_dir_count(const char *name, const char *path)
+{
+	char text[96];
+	DIR *dir = opendir(path);
+	struct dirent *de;
+	unsigned count = 0;
+	unsigned pos = 0;
+	uint32_t hash = 2166136261u;
+
+	if (!dir) {
+		progress_mark(name, 0x24u, (uint32_t)errno);
+		return;
+	}
+
+	text[0] = 0;
+	while ((de = readdir(dir)) != NULL) {
+		const char *s = de->d_name;
+
+		if (strcmp(s, ".") == 0 || strcmp(s, "..") == 0)
+			continue;
+		count++;
+		while (*s) {
+			hash ^= (uint8_t)*s;
+			hash *= 16777619u;
+			if (pos + 1u < sizeof(text))
+				text[pos++] = *s;
+			s++;
+		}
+		hash ^= (uint8_t)' ';
+		hash *= 16777619u;
+		if (pos + 1u < sizeof(text))
+			text[pos++] = ' ';
+	}
+	closedir(dir);
+	text[pos] = 0;
+	progress_mark(name, 0x25u, count);
+	progress_mark("diag-dir-hash", 0x25u, hash);
+	progress_mark_text(name, text);
+}
+
+static uint32_t direct_read32(uint32_t phys)
+{
+	return *(volatile uint32_t *)KSEG1ADDR(phys);
+}
+
+static uint8_t direct_read8(uint32_t phys)
+{
+	return *(volatile uint8_t *)KSEG1ADDR(phys);
+}
+
+static void progress_mark_reset_snapshot(void)
+{
+	uint32_t pins = 0;
+	unsigned i;
+
+	progress_mark("diag-reset-begin", 0x30u, 0x0175u);
+
+	progress_mark_file_head("diag-proc-part", "/proc/partitions");
+	progress_mark_file_head("diag-proc-dev", "/proc/devices");
+	progress_mark_file_head("diag-proc-int", "/proc/interrupts");
+	progress_mark_file_head("diag-proc-mount", "/proc/mounts");
+	progress_mark_dir_count("diag-sys-block", "/sys/block");
+	progress_mark_dir_count("diag-mmc-host", "/sys/class/mmc_host");
+	progress_mark_dir_count("diag-platform", "/sys/bus/platform/devices");
+	progress_mark_dir_count("diag-usb-dev", "/sys/bus/usb/devices");
+	progress_mark_dir_count("diag-dev-input", "/dev/input");
+	progress_mark_dir_count("diag-dev-root", "/dev");
+
+	progress_mark("diag-wdt-count", 0x31u,
+		direct_read32(WDT_BASE_PHYS + WDT_REG_OFF + WDT_COUNT_OFF));
+	progress_mark("diag-wdt-conf", 0x31u,
+		direct_read8(WDT_BASE_PHYS + WDT_REG_OFF + WDT_CONF_OFF));
+	progress_mark("diag-sfclk", 0x31u,
+		direct_read32(SYSIO_PHYS + SYS_SFCLK_OFF));
+	progress_mark("diag-gate0", 0x31u,
+		direct_read32(SYSIO_PHYS + SYS_CLOCK_GATE0_OFF));
+	progress_mark("diag-gate1", 0x31u,
+		direct_read32(SYSIO_PHYS + SYS_CLOCK_GATE1_OFF));
+	progress_mark("diag-iovolt", 0x31u,
+		direct_read32(SYSIO_PHYS + SYS_IO_VOLTAGE_OFF));
+	for (i = 16u; i <= 22u; i++)
+		pins |= (uint32_t)(direct_read8(SYSIO_PHYS + PINMUX_L_OFF + i) & 0xfu)
+			<< ((i - 16u) * 4u);
+	progress_mark("diag-pin-l16-22", 0x31u, pins);
+
+	progress_mark("diag-mmc-ctrl", 0x32u, direct_read32(MMC_PHYS + MMC_CTRL));
+	progress_mark("diag-mmc-pwren", 0x32u, direct_read32(MMC_PHYS + MMC_PWREN));
+	progress_mark("diag-mmc-clkdiv", 0x32u, direct_read32(MMC_PHYS + MMC_CLKDIV));
+	progress_mark("diag-mmc-clksrc", 0x32u, direct_read32(MMC_PHYS + MMC_CLKSRC));
+	progress_mark("diag-mmc-clkena", 0x32u, direct_read32(MMC_PHYS + MMC_CLKENA));
+	progress_mark("diag-mmc-cmd", 0x32u, direct_read32(MMC_PHYS + MMC_CMD));
+	progress_mark("diag-mmc-rint", 0x32u, direct_read32(MMC_PHYS + MMC_RINTSTS));
+	progress_mark("diag-mmc-status", 0x32u, direct_read32(MMC_PHYS + MMC_STATUS));
+	progress_mark("diag-mmc-fifoth", 0x32u, direct_read32(MMC_PHYS + MMC_FIFOTH));
+	progress_mark("diag-mmc-cdetect", 0x32u, direct_read32(MMC_PHYS + MMC_CDETECT));
+	progress_mark("diag-mmc-bmod", 0x32u, direct_read32(MMC_PHYS + MMC_BMOD));
+	progress_mark("diag-mmc-dbaddr", 0x32u, direct_read32(MMC_PHYS + MMC_DBADDR));
+	progress_mark("diag-mmc-idsts", 0x32u, direct_read32(MMC_PHYS + MMC_IDSTS));
+	progress_mark("diag-mmc-idinten", 0x32u, direct_read32(MMC_PHYS + MMC_IDINTEN));
+	progress_mark("diag-mmc-cardthr", 0x32u, direct_read32(MMC_PHYS + MMC_CARDTHRCTL));
+
+	progress_mark("diag-reset-done", 0x30u, 0x0175u);
 }
 
 static void sleep_ms(unsigned msec)
@@ -1587,6 +1819,8 @@ static int console_handle_buttons(uint32_t buttons)
 	if (buttons & CONSOLE_BTN_SELECT) {
 		console_add_line("SELECT pressed: restarting");
 		log_line("sf2000-screen: SELECT pressed, restarting\n");
+		runtime_watchdog_arm();
+		progress_mark_reset_snapshot();
 		sync();
 		reboot(LINUX_REBOOT_CMD_RESTART);
 		console_add_line("reboot syscall returned, watchdog reset");
@@ -1716,15 +1950,8 @@ static uint32_t console_poll_raw_buttons(void)
 	static unsigned raw_count;
 	uint32_t raw = scan_keypad_sf2000();
 
-	if (raw != logged_raw) {
-		char line[96];
-
+	if (raw != logged_raw)
 		logged_raw = raw;
-		snprintf(line, sizeof(line),
-			"dpad raw sf2000=0x%03x", raw);
-		console_add_line(line);
-		log_line("sf2000-screen: raw keypad sample changed\n");
-	}
 
 	if (raw == previous_raw) {
 		if (raw_count < 3u)
@@ -1736,17 +1963,8 @@ static uint32_t console_poll_raw_buttons(void)
 
 	if (raw_count >= 2u)
 		stable = raw;
-	if (stable != reported) {
+	if (stable != reported)
 		reported = stable;
-		if (stable) {
-			char line[64];
-
-			snprintf(line, sizeof(line),
-				"dpad stable sf2000=0x%03x", stable);
-			console_add_line(line);
-			log_line("sf2000-screen: raw keypad changed\n");
-		}
-	}
 	return console_buttons_from_normalized_keypad(stable);
 }
 

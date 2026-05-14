@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Thu, 14 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: quiet userspace write trace
+
+The generic write syscall trace was useful while proving NOMMU userspace,
+but it floods the retained progress buffer with kmsg text and hides more
+useful reset diagnostics. Keep the helper code available for future
+instrumentation, but stop recording every userspace write by default.
+---
+ fs/read_write.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -31,13 +31,13 @@
+ extern void sf2000_live_user_write(unsigned int fd, const void *buf,
+ 		unsigned int count, int ret);
+ 
+-static void sf2000_rw_value(const char *name, unsigned int value)
++static void __maybe_unused sf2000_rw_value(const char *name, unsigned int value)
+ {
+ 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		sf2000_progress_mark(name, 17, value);
+ }
+ 
+-static void sf2000_rw_word(unsigned int index, unsigned int value)
++static void __maybe_unused sf2000_rw_word(unsigned int index, unsigned int value)
+ {
+ 	switch (index) {
+ 	case 0:
+@@ -67,7 +67,7 @@
+ 	}
+ }
+ 
+-static void sf2000_rw_log_write(unsigned int fd, const char __user *buf,
++static void __maybe_unused sf2000_rw_log_write(unsigned int fd, const char __user *buf,
+ 		size_t count)
+ {
+ 	const char *raw = (const char *)buf;
+@@ -730,7 +730,6 @@
+ 	struct fd f = fdget_pos(fd);
+ 	ssize_t ret = -EBADF;
+ 
+-	sf2000_rw_log_write(fd, buf, count);
+ 	if (f.file) {
+ 		loff_t pos, *ppos = file_ppos(f.file);
+ 		if (ppos) {
+@@ -743,9 +742,6 @@
+ 		fdput_pos(f);
+ 	}
+ 
+-	sf2000_rw_value("write-ret", (unsigned int)ret);
+-	if (ret > 0)
+-		sf2000_live_user_write(fd, buf, (unsigned int)count, (int)ret);
+ 	return ret;
+ }
+ 

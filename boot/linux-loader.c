@@ -61,7 +61,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0174-select-restart-mmc-clock-diag"
+#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0175-reset-snapshot-quiet-keys"
 
 typedef unsigned long long u64;
 
@@ -531,16 +531,32 @@ static void progress_mark(const char *name, u32 kind, u32 value)
 static void bootlog_progress_entry(volatile struct progress_entry *entry)
 {
 	u32 i;
+	u32 value;
 
 	if (entry->seq == 0)
 		return;
 
+	value = entry->value;
 	bootlog_puts("progress seq=");
 	bootlog_hex(entry->seq);
 	bootlog_puts(" kind=");
 	bootlog_hex(entry->kind);
 	bootlog_puts(" value=");
-	bootlog_hex(entry->value);
+	bootlog_hex(value);
+	if (entry->kind == 0x20u) {
+		bootlog_puts(" ascii='");
+		for (i = 0; i < 4u; i++) {
+			u8 ch = (u8)(value >> (i * 8u));
+
+			if (ch >= 32u && ch < 127u)
+				bootlog_putc((char)ch);
+			else if (ch == '\n')
+				bootlog_putc('|');
+			else if (ch != 0)
+				bootlog_putc('.');
+		}
+		bootlog_putc('\'');
+	}
 	bootlog_puts(" name=");
 	for (i = 0; i < PROGRESS_NAME_LEN && entry->name[i] != '\0'; i++)
 		bootlog_putc(entry->name[i]);

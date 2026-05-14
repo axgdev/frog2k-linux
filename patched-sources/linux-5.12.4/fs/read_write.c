@@ -31,13 +31,13 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 extern void sf2000_live_user_write(unsigned int fd, const void *buf,
 		unsigned int count, int ret);
 
-static void sf2000_rw_value(const char *name, unsigned int value)
+static void __maybe_unused sf2000_rw_value(const char *name, unsigned int value)
 {
 	if (IS_ENABLED(CONFIG_MIPS_SF2000))
 		sf2000_progress_mark(name, 17, value);
 }
 
-static void sf2000_rw_word(unsigned int index, unsigned int value)
+static void __maybe_unused sf2000_rw_word(unsigned int index, unsigned int value)
 {
 	switch (index) {
 	case 0:
@@ -67,7 +67,7 @@ static void sf2000_rw_word(unsigned int index, unsigned int value)
 	}
 }
 
-static void sf2000_rw_log_write(unsigned int fd, const char __user *buf,
+static void __maybe_unused sf2000_rw_log_write(unsigned int fd, const char __user *buf,
 		size_t count)
 {
 	const char *raw = (const char *)buf;
@@ -730,7 +730,6 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 	struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 
-	sf2000_rw_log_write(fd, buf, count);
 	if (f.file) {
 		loff_t pos, *ppos = file_ppos(f.file);
 		if (ppos) {
@@ -743,9 +742,6 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 		fdput_pos(f);
 	}
 
-	sf2000_rw_value("write-ret", (unsigned int)ret);
-	if (ret > 0)
-		sf2000_live_user_write(fd, buf, (unsigned int)count, (int)ret);
 	return ret;
 }
 
