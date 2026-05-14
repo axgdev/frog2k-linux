@@ -415,6 +415,8 @@ static void sf2000_live_write_sector(const char *sector)
 		(sf2000_rom_cache_flush_fn)SF2000_ROM_CACHE_FLUSH_KSEG0;
 	volatile unsigned int *handoff = SF2000_LIVE_HANDOFF_KSEG1;
 
+	return;
+
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
 	if (!sf2000_rom_handoff_present())
