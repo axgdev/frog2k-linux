@@ -1435,6 +1435,7 @@ static void console_clamp_view(void)
 static void console_add_line(const char *line)
 {
 	char *dst;
+	int preserve_view = console_view_offset != 0;
 	unsigned len = 0;
 
 	if (console_line_count >= CONSOLE_SCROLLBACK_LINES) {
@@ -1454,6 +1455,8 @@ static void console_add_line(const char *line)
 		len++;
 	}
 	dst[len] = 0;
+	if (preserve_view)
+		console_view_offset++;
 	console_clamp_view();
 }
 
