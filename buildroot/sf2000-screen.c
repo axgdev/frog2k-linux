@@ -156,6 +156,11 @@ extern char **environ;
 #define KEY_SHIFTER_CLOCK_LOW_SPINS 220u
 #define KEY_SHIFTER_CLOCK_HIGH_SPINS 220u
 #define CONSOLE_INPUT_FDS 4u
+#define CONSOLE_POLL_MS 50u
+#define CONSOLE_IDLE_REDRAW_TICKS 40u
+#define CONSOLE_REPEAT_DELAY_TICKS 5u
+#define CONSOLE_REPEAT_INTERVAL_TICKS 1u
+#define CONSOLE_INPUT_REOPEN_TICKS 100u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -1630,11 +1635,11 @@ static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
 		console_add_line("dpad scroll: raw gpio fallback");
 }
 
-static int console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS])
+static void console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
+	uint32_t *held_buttons)
 {
 	struct input_event ev;
 	unsigned i;
-	int changed = 0;
 
 	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
 		if (fds[i] < 0)
@@ -1642,14 +1647,17 @@ static int console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS])
 		while (read(fds[i], &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
 			uint32_t button;
 
-			if (ev.type != EV_KEY || ev.value == 0)
+			if (ev.type != EV_KEY)
 				continue;
 			button = console_button_for_key(ev.code);
-			if (button)
-				changed |= console_handle_buttons(button);
+			if (!button)
+				continue;
+			if (ev.value)
+				*held_buttons |= button;
+			else
+				*held_buttons &= ~button;
 		}
 	}
-	return changed;
 }
 
 static uint32_t console_buttons_from_raw_keypad(uint32_t raw)
@@ -1667,14 +1675,12 @@ static uint32_t console_buttons_from_raw_keypad(uint32_t raw)
 	return buttons;
 }
 
-static int console_poll_raw_buttons(void)
+static uint32_t console_poll_raw_buttons(void)
 {
 	static uint32_t stable;
 	static uint32_t previous_raw;
 	static unsigned raw_count;
 	uint32_t raw = scan_keypad_sf2000();
-	uint32_t buttons;
-	uint32_t pressed;
 
 	if (raw == previous_raw) {
 		if (raw_count < 3u)
@@ -1684,15 +1690,35 @@ static int console_poll_raw_buttons(void)
 		raw_count = 0;
 	}
 
-	if (raw_count < 2u || raw == stable)
-		return 0;
+	if (raw_count >= 2u)
+		stable = raw;
+	return console_buttons_from_raw_keypad(stable);
+}
 
-	buttons = console_buttons_from_raw_keypad(raw);
-	pressed = buttons & ~console_buttons_from_raw_keypad(stable);
-	stable = raw;
-	if (!pressed)
-		return 0;
-	return console_handle_buttons(pressed);
+static int console_handle_held_buttons(uint32_t held_buttons)
+{
+	static uint32_t previous_held;
+	static unsigned hold_ticks;
+	uint32_t pressed = held_buttons & ~previous_held;
+	int changed = 0;
+
+	if (pressed)
+		changed |= console_handle_buttons(pressed);
+
+	if (held_buttons) {
+		if (held_buttons != previous_held)
+			hold_ticks = 0;
+		else
+			hold_ticks++;
+		if (hold_ticks >= CONSOLE_REPEAT_DELAY_TICKS &&
+				((hold_ticks - CONSOLE_REPEAT_DELAY_TICKS) %
+				 CONSOLE_REPEAT_INTERVAL_TICKS) == 0)
+			changed |= console_handle_buttons(held_buttons);
+	} else {
+		hold_ticks = 0;
+	}
+	previous_held = held_buttons;
+	return changed;
 }
 
 static void write_desc32(unsigned idx, uint32_t value)
@@ -1902,6 +1928,7 @@ static void run_direct_console(unsigned *frame)
 	char buf[768];
 	int input_fds[CONSOLE_INPUT_FDS];
 	int fd;
+	uint32_t evdev_held = 0;
 	unsigned idle = 0;
 	unsigned input_retry = 0;
 
@@ -1946,24 +1973,26 @@ static void run_direct_console(unsigned *frame)
 		}
 
 		if (console_input_has_fd(input_fds)) {
-			changed |= console_poll_evdev_buttons(input_fds);
+			console_poll_evdev_buttons(input_fds, &evdev_held);
+			changed |= console_handle_held_buttons(evdev_held);
 		} else {
-			changed |= console_poll_raw_buttons();
-			if (++input_retry >= 25u) {
+			evdev_held = 0;
+			changed |= console_handle_held_buttons(console_poll_raw_buttons());
+			if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
 				console_input_open_fds(input_fds);
 				input_retry = 0;
 				changed = 1;
 			}
 		}
 
-		if (changed || idle >= 8u) {
+		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
 			draw_console_screen(++*frame);
 			panel_push_frame(0);
 			idle = 0;
 		} else {
 			idle++;
 		}
-		sleep_ms(250);
+		sleep_ms(CONSOLE_POLL_MS);
 	}
 
 	if (fd >= 0)
