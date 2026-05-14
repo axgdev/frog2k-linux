@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000153 Mon Sep 17 00:00:00 2001
+From: Codex <codex@localhost>
+Date: Thu, 14 May 2026 00:00:00 +0000
+Subject: [PATCH] mips: sf2000: stop tracing every userspace read
+
+The direct LCD console now polls /dev/kmsg.  Tracing every read syscall fills
+the retained progress ring with repeated -EAGAIN entries and hides the more
+useful rcS/storage diagnostics.  Keep the write/open/ioctl breadcrumbs, but
+return normal read syscalls directly again.
+---
+ fs/read_write.c | 9 +--------
+ 1 file changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 3598594..d0188c5 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -719,14 +719,7 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
+ 
+ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+ {
+-	ssize_t ret;
+-
+-	sf2000_rw_value("read-fd", fd);
+-	sf2000_rw_value("read-buf", (unsigned int)buf);
+-	sf2000_rw_value("read-count", (unsigned int)count);
+-	ret = ksys_read(fd, buf, count);
+-	sf2000_rw_value("read-ret", (unsigned int)ret);
+-	return ret;
++	return ksys_read(fd, buf, count);
+ }
+ 
+ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
+-- 
+2.45.0

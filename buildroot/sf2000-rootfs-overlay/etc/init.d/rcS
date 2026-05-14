@@ -1,0 +1,28 @@
+#!/bin/sh
+
+log()
+{
+	printf 'sf2000_rcS: %s\n' "$*" > /dev/kmsg 2>/dev/null || true
+}
+
+log "start"
+for i in /etc/init.d/S??*; do
+	[ ! -f "$i" ] && continue
+	log "run $i"
+	case "$i" in
+		*.sh)
+			(
+				trap - INT QUIT TSTP
+				set start
+				. "$i"
+			)
+			rc=$?
+			;;
+		*)
+			"$i" start
+			rc=$?
+			;;
+	esac
+	log "done $i rc=$rc"
+done
+log "done"

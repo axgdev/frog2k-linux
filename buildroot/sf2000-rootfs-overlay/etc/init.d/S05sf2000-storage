@@ -3,6 +3,7 @@
 log()
 {
 	printf 'sf2000_storage: %s\n' "$*" > /dev/kmsg
+	printf '%s\n' "$*" > /run/sf2000-storage.status
 }
 
 dump_file()
@@ -23,30 +24,42 @@ dump_file()
 
 case "$1" in
 	start)
+		log "script start"
 		waited=0
 		while [ "$waited" -lt 5 ] && [ ! -e /run/sf2000-screen-ready ]; do
 			sleep 1
 			waited=$((waited + 1))
 		done
 		log "probe begin"
+		waited=0
+		while [ "$waited" -lt 10 ] &&
+				[ -z "$(ls /sys/class/mmc_host 2>/dev/null)" ] &&
+				[ -z "$(ls /dev/mmc* 2>/dev/null)" ]; do
+			log "waiting mmc host/block second=$waited"
+			sleep 1
+			waited=$((waited + 1))
+		done
 		dump_file proc-partitions /proc/partitions
 		dump_file proc-devices /proc/devices
 		log "sys-block $(ls /sys/block 2>/dev/null | tr '\n' ' ')"
 		log "sys-mmc-host $(ls /sys/class/mmc_host 2>/dev/null | tr '\n' ' ')"
 		log "platform-devices $(ls /sys/bus/platform/devices 2>/dev/null | tr '\n' ' ')"
+		log "platform-drivers $(ls /sys/bus/platform/drivers 2>/dev/null | tr '\n' ' ')"
 		log "dev-mmc $(ls /dev/mmc* 2>/dev/null | tr '\n' ' ')"
 		mkdir -p /mnt/sd
+		mounted=0
 		for dev in /dev/mmcblk0p1 /dev/mmcblk0; do
 			[ -b "$dev" ] || continue
 			log "mount try $dev"
 			if mount -t vfat -o rw,sync "$dev" /mnt/sd 2>/tmp/sf2000-mount.err; then
+				mounted=1
 				log "mount ok $dev"
 				ls /mnt/sd 2>/dev/null | sed 's/^/ls /' | while IFS= read -r line; do
 					log "$line"
 				done
-				printf 'sf2000 linux sd write test\n' > /mnt/sd/sf2000-linux-rw.txt &&
-					log "write ok /sf2000-linux-rw.txt" ||
-					log "write failed /sf2000-linux-rw.txt"
+				printf 'sf2000 linux sd write test\n' > /mnt/sd/sf2000-linux-rw-0159.txt &&
+					log "write ok /sf2000-linux-rw-0159.txt" ||
+					log "write failed /sf2000-linux-rw-0159.txt"
 				sync
 				umount /mnt/sd && log "umount ok" || log "umount failed"
 				break
@@ -54,6 +67,9 @@ case "$1" in
 				log "mount failed $dev $(cat /tmp/sf2000-mount.err 2>/dev/null)"
 			fi
 		done
+		if [ "$mounted" = 0 ]; then
+			log "no mounted sd block device"
+		fi
 		log "usb-devices $(ls /sys/bus/usb/devices 2>/dev/null | tr '\n' ' ')"
 		log "input-devices $(ls /dev/input 2>/dev/null | tr '\n' ' ')"
 		log "probe end"
