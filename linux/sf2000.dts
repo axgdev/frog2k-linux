@@ -48,7 +48,7 @@
 	mmc_clk: mmc-clock {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <49000000>;
+		clock-frequency = <198000000>;
 	};
 
 	memory@0 {
@@ -123,7 +123,7 @@
 			interrupts = <10>;
 			clocks = <&mmc_clk>, <&mmc_clk>;
 			clock-names = "biu", "ciu";
-			clock-frequency = <49000000>;
+			clock-frequency = <198000000>;
 			fifo-depth = <32>;
 			bus-width = <1>;
 			card-detect-delay = <200>;

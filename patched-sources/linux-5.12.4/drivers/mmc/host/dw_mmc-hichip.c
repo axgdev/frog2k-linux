@@ -54,6 +54,44 @@ static void hc_write8(u32 phys, u8 value)
 	iounmap(reg);
 }
 
+static u32 hc_read32(u32 phys)
+{
+	void __iomem *reg = ioremap(phys, sizeof(u32));
+	u32 value = 0xffffffff;
+
+	if (!reg)
+		return value;
+	value = readl(reg);
+	iounmap(reg);
+	return value;
+}
+
+static u8 hc_read8(u32 phys)
+{
+	void __iomem *reg = ioremap(phys, sizeof(u8));
+	u8 value = 0xff;
+
+	if (!reg)
+		return value;
+	value = readb(reg);
+	iounmap(reg);
+	return value;
+}
+
+static void hc_sdio_dump_regs(const char *where)
+{
+	pr_info("dw_mmc-hichip: %s sfclk=0x%08x gate0=0x%08x iov=0x%08x pinmux-l16-22=%02x %02x %02x %02x %02x %02x %02x\n",
+		where, hc_read32(HC_SYS_SFCLK), hc_read32(HC_SYS_CLK_GATE0),
+		hc_read32(HC_SYS_IO_VOLTAGE),
+		hc_read8(HC_SYS_PINMUX_L + 16),
+		hc_read8(HC_SYS_PINMUX_L + 17),
+		hc_read8(HC_SYS_PINMUX_L + 18),
+		hc_read8(HC_SYS_PINMUX_L + 19),
+		hc_read8(HC_SYS_PINMUX_L + 20),
+		hc_read8(HC_SYS_PINMUX_L + 21),
+		hc_read8(HC_SYS_PINMUX_L + 22));
+}
+
 static void hc_sdio_pinmux(void)
 {
 	unsigned int pin;
@@ -82,6 +120,7 @@ static int dw_mci_hichip_init(struct dw_mci *host)
 {
 	u32 clk_sel = hc_sdio_clock_select(host->bus_hz);
 
+	hc_sdio_dump_regs("before-init");
 	hc_sdio_pinmux();
 
 	pr_info("dw_mmc-hichip: bus_hz=%u clk_sel=0x%x\n",
@@ -97,6 +136,7 @@ static int dw_mci_hichip_init(struct dw_mci *host)
 	/* Conservative 3.3 V signaling for the removable boot SD card. */
 	hc_update32(HC_SYS_IO_VOLTAGE, 0x3 << 24, 0x1 << 24);
 
+	hc_sdio_dump_regs("after-init");
 	return 0;
 }
 
