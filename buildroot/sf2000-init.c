@@ -60,6 +60,7 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", 0 };
 static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
@@ -71,6 +72,7 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
+static unsigned long pad_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_stack[SERVICE_STACK_WORDS];
 static volatile unsigned char *direct_pad_sysio;
 static int direct_select_armed = 1;
@@ -636,6 +638,9 @@ void sf2000_init_main(void)
 	sleep_ms(200);
 	diagnostic_watchdog_pet();
 	wait_for_screen_ready();
+	spawn_vfork_service("sf2000_buildroot: starting pad after screen\n",
+		pad_argv, pad_stack);
+	diagnostic_watchdog_pet();
 	spawn_vfork_service("sf2000_buildroot: starting storage probe\n",
 		storage_argv, storage_stack);
 	diagnostic_watchdog_pet();
