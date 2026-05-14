@@ -28,6 +28,8 @@
 #ifdef CONFIG_MIPS
 extern void sf2000_progress_mark(const char *name, unsigned int kind,
 		unsigned int value);
+extern void sf2000_live_user_write(unsigned int fd, const void *buf,
+		unsigned int count, int ret);
 
 static void sf2000_rw_value(const char *name, unsigned int value)
 {
@@ -100,6 +102,8 @@ static void sf2000_rw_log_write(unsigned int fd, const char __user *buf,
 static void sf2000_rw_value(const char *name, unsigned int value) {}
 static void sf2000_rw_log_write(unsigned int fd, const char __user *buf,
 		size_t count) {}
+static void sf2000_live_user_write(unsigned int fd, const void *buf,
+		unsigned int count, int ret) {}
 #endif
 
 const struct file_operations generic_ro_fops = {
@@ -740,6 +744,8 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 	}
 
 	sf2000_rw_value("write-ret", (unsigned int)ret);
+	if (ret > 0)
+		sf2000_live_user_write(fd, buf, (unsigned int)count, (int)ret);
 	return ret;
 }
 

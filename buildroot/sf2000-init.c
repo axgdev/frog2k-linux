@@ -497,13 +497,13 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
+	spawn_vfork_service("sf2000_buildroot: starting rcS\n", rcs_argv,
+		rcs_stack);
+	diagnostic_watchdog_pet();
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
 	wait_for_screen_ready();
-	diagnostic_watchdog_pet();
-	spawn_vfork_service("sf2000_buildroot: starting rcS\n", rcs_argv,
-		rcs_stack);
 	diagnostic_watchdog_pet();
 	log_message("sf2000_buildroot: libc helpers started\n");
 

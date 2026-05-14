@@ -406,17 +406,13 @@ static void sf2000_live_hex(char *buf, unsigned int *pos, unsigned int value)
 		sf2000_live_putc(buf, pos, digits[(value >> shift) & 0xf]);
 }
 
-static void __attribute__((unused)) sf2000_live_progress_write(const char *name, unsigned int kind,
-	unsigned int value, unsigned int seq)
+static void sf2000_live_write_sector(const char *sector)
 {
-	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
 	sf2000_rom_disk_write_fn disk_write =
 		(sf2000_rom_disk_write_fn)SF2000_ROM_DISK_WRITE_KSEG0;
 	sf2000_rom_cache_flush_fn cache_flush =
 		(sf2000_rom_cache_flush_fn)SF2000_ROM_CACHE_FLUSH_KSEG0;
 	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
-	unsigned int pos = 0;
-	unsigned int i;
 
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
@@ -427,6 +423,18 @@ static void __attribute__((unused)) sf2000_live_progress_write(const char *name,
 	if (log->reserved[0] != SF2000_PROGRESS_LIVE_MAGIC ||
 	    log->reserved[2] == 0 || log->reserved[2] == 0xffffffffu)
 		return;
+
+	cache_flush(sector, SF2000_LIVE_SECTOR_SIZE);
+	disk_write((unsigned char)log->reserved[1], sector, log->reserved[2], 1);
+}
+
+static void __attribute__((unused)) sf2000_live_progress_write(const char *name, unsigned int kind,
+	unsigned int value, unsigned int seq)
+{
+	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
+	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
+	unsigned int pos = 0;
+	unsigned int i;
 
 	for (i = 0; i < SF2000_LIVE_SECTOR_SIZE; i++)
 		sector[i] = 0;
@@ -452,9 +460,62 @@ static void __attribute__((unused)) sf2000_live_progress_write(const char *name,
 	sf2000_live_hex(sector, &pos, *SF2000_WDT_CONF_KSEG1);
 	sf2000_live_puts(sector, &pos, "\n");
 
-	cache_flush(sector, SF2000_LIVE_SECTOR_SIZE);
-	disk_write((unsigned char)log->reserved[1], sector, log->reserved[2], 1);
+	sf2000_live_write_sector(sector);
 }
+
+void sf2000_live_user_write(unsigned int fd, const void *buf,
+	unsigned int count, int ret)
+{
+	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
+	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
+	const unsigned char *src = buf;
+	unsigned int pos = 0;
+	unsigned int limit;
+	unsigned int i;
+	unsigned int addr = (unsigned int)buf;
+
+	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+		return;
+	if (ret <= 0)
+		return;
+	if ((addr & 0xf0000000u) != 0x80000000u)
+		return;
+
+	for (i = 0; i < SF2000_LIVE_SECTOR_SIZE; i++)
+		sector[i] = 0;
+
+	sf2000_live_puts(sector, &pos, "sf2000-linux live userspace write\n");
+	sf2000_live_puts(sector, &pos, "write=");
+	sf2000_live_hex(sector, &pos, ++sf2000_live_write_count);
+	sf2000_live_puts(sector, &pos, " seq=");
+	sf2000_live_hex(sector, &pos, log->seq);
+	sf2000_live_puts(sector, &pos, " fd=");
+	sf2000_live_hex(sector, &pos, fd);
+	sf2000_live_puts(sector, &pos, " count=");
+	sf2000_live_hex(sector, &pos, count);
+	sf2000_live_puts(sector, &pos, " ret=");
+	sf2000_live_hex(sector, &pos, (unsigned int)ret);
+	sf2000_live_puts(sector, &pos, "\n");
+
+	limit = (unsigned int)ret;
+	if (limit > count)
+		limit = count;
+	if (limit > 360u)
+		limit = 360u;
+	for (i = 0; i < limit; i++) {
+		unsigned char ch = src[i];
+
+		if (ch == '\n' || ch == '\r' || ch == '\t' ||
+		    (ch >= ' ' && ch <= '~'))
+			sf2000_live_putc(sector, &pos, (char)ch);
+		else
+			sf2000_live_putc(sector, &pos, '.');
+	}
+	sf2000_live_puts(sector, &pos, "\n");
+
+	sf2000_live_write_sector(sector);
+}
+EXPORT_SYMBOL(sf2000_live_user_write);
 
 static void sf2000_watchdog_pet(void)
 {
