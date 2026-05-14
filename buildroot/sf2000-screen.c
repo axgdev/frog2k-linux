@@ -761,7 +761,7 @@ static void progress_mark_mmc_snapshot(const char *suffix)
 	progress_mark("diag-hc15-resp0", 0x32u, direct_read32(MMC_PHYS + HC15_RESP0));
 	progress_mark("diag-hc15-irqsts", 0x32u, direct_read8(MMC_PHYS + HC15_IRQSTS));
 	progress_mark("diag-hc15-timing", 0x32u, direct_read8(MMC_PHYS + HC15_TIMING));
-	progress_mark(suffix, 0x32u, 0x0183u);
+	progress_mark(suffix, 0x32u, 0x0184u);
 }
 
 static void progress_mark_reset_snapshot(void)
@@ -769,7 +769,7 @@ static void progress_mark_reset_snapshot(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0183u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0184u);
 	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
@@ -816,7 +816,7 @@ static void progress_mark_reset_snapshot(void)
 
 	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0183u);
+	progress_mark("diag-reset-done", 0x30u, 0x0184u);
 }
 
 static void sleep_ms(unsigned msec)

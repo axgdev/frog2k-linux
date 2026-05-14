@@ -60,6 +60,8 @@ struct hc15_mmc {
 	struct device *dev;
 	u32 clock;
 	u32 actual_clock;
+	u32 div;
+	u8 bus;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -148,6 +150,26 @@ static void hc15_prepare_soc(void)
 	hc15_mark("hc15-iovolt-after", hc15_read32_phys(HC_SYS_IO_VOLTAGE));
 }
 
+static void hc15_recover_controller(struct hc15_mmc *host)
+{
+	hc15_mark("hc15-recover-entry", readb(host->base + HC15_REG_CMDCTL));
+
+	hc15_update32(HC_SYS_RESET, 0, BIT(HC_SDIO_RESET_BIT));
+	udelay(20);
+	hc15_update32(HC_SYS_RESET, BIT(HC_SDIO_RESET_BIT), 0);
+	udelay(20);
+
+	writeb(host->div & 0xff, host->base + HC15_REG_CLKDIV_LO);
+	writeb((host->div >> 8) & 0xff, host->base + HC15_REG_CLKDIV_HI);
+	writeb(host->bus, host->base + HC15_REG_BUS);
+	writeb(0, host->base + HC15_REG_TIMING);
+	writeb(0x40, host->base + HC15_REG_IRQSTS);
+
+	hc15_mark("hc15-recover-cmdctl", readb(host->base + HC15_REG_CMDCTL));
+	hc15_mark("hc15-recover-status", readb(host->base + HC15_REG_CMDSTS));
+	hc15_mark("hc15-recover-bus", readb(host->base + HC15_REG_BUS));
+}
+
 static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 {
 	u8 value;
@@ -196,7 +218,10 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 {
 	u8 cmdidx = 0x40;
 	u8 cmdctl = hc15_cmd_type(cmd, data);
+	u8 oldctl = readb(host->base + HC15_REG_CMDCTL);
 
+	if (oldctl & 0x01)
+		hc15_recover_controller(host);
 	writel(cmd->arg, host->base + HC15_REG_CMDARG);
 
 	cmdidx |= cmd->opcode & 0x3f;
@@ -206,6 +231,7 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	writeb(cmdctl, host->base + HC15_REG_CMDCTL);
 
 	hc15_mark("hc15-cmd", cmd->opcode);
+	hc15_mark("hc15-arg", cmd->arg);
 	hc15_mark("hc15-flags", cmd->flags);
 	hc15_mark("hc15-cmdctl", cmdctl);
 	hc15_mark("hc15-cmdidx", cmdidx);
@@ -271,6 +297,7 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 
 	if (ret) {
 		cmd->error = -ETIMEDOUT;
+		hc15_recover_controller(host);
 		return ret;
 	}
 	if (norm & 0x01) {
@@ -292,6 +319,11 @@ static void hc15_get_response(struct hc15_mmc *host, struct mmc_command *cmd)
 	u32 r1 = readl(host->base + HC15_REG_RESP0 + 4);
 	u32 r2 = readl(host->base + HC15_REG_RESP0 + 8);
 	u32 r3 = readl(host->base + HC15_REG_RESP0 + 12);
+
+	hc15_mark("hc15-resp-r10", r0);
+	hc15_mark("hc15-resp-r14", r1);
+	hc15_mark("hc15-resp-r18", r2);
+	hc15_mark("hc15-resp-r1c", r3);
 
 	if (!(cmd->flags & MMC_RSP_PRESENT))
 		return;
@@ -459,6 +491,7 @@ static void hc15_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	writeb((div >> 8) & 0xff, host->base + HC15_REG_CLKDIV_HI);
 	host->clock = ios->clock;
 	host->actual_clock = actual;
+	host->div = div;
 	mmc->actual_clock = actual;
 
 	bus = readb(host->base + HC15_REG_BUS) & 0xf1;
@@ -477,6 +510,7 @@ static void hc15_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	bus |= 0x01;
 	writeb(bus, host->base + HC15_REG_BUS);
 	writeb(0, host->base + HC15_REG_TIMING);
+	host->bus = bus;
 
 	hc15_mark("hc15-set-clock", ios->clock);
 	hc15_mark("hc15-actual-clock", actual);
@@ -507,7 +541,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0183);
+	hc15_mark("hc15-probe", 0x0184);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
