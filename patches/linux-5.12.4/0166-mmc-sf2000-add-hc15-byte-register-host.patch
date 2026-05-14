@@ -1,8 +1,6 @@
-diff --git a/drivers/mmc/host/Kconfig b/drivers/mmc/host/Kconfig
-index 797d745..370c715 100644
---- a/drivers/mmc/host/Kconfig
-+++ b/drivers/mmc/host/Kconfig
-@@ -818,6 +818,15 @@ config MMC_DW_HICHIP
+--- a/drivers/mmc/host/Kconfig	2026-05-14 17:21:40.458837212 +0000
++++ b/drivers/mmc/host/Kconfig	2026-05-14 17:06:41.484203439 +0000
+@@ -818,6 +818,15 @@
  	  The first SF2000 bring-up uses this for conservative SD-card block
  	  I/O before enabling high-speed tuning.
  
@@ -18,11 +16,9 @@ index 797d745..370c715 100644
  config MMC_DW_BLUEFIELD
  	tristate "BlueField specific extensions for Synopsys DW Memory Card Interface"
  	depends on MMC_DW
-diff --git a/drivers/mmc/host/Makefile b/drivers/mmc/host/Makefile
-index 3176e74..0a6c7bb 100644
---- a/drivers/mmc/host/Makefile
-+++ b/drivers/mmc/host/Makefile
-@@ -57,6 +57,7 @@ obj-$(CONFIG_MMC_DW_BLUEFIELD)	+= dw_mmc-bluefield.o
+--- a/drivers/mmc/host/Makefile	2026-05-14 17:21:40.459371712 +0000
++++ b/drivers/mmc/host/Makefile	2026-05-14 17:06:49.064408392 +0000
+@@ -57,6 +57,7 @@
  obj-$(CONFIG_MMC_DW_EXYNOS)	+= dw_mmc-exynos.o
  obj-$(CONFIG_MMC_DW_HI3798CV200) += dw_mmc-hi3798cv200.o
  obj-$(CONFIG_MMC_DW_HICHIP)	+= dw_mmc-hichip.o
@@ -30,12 +26,9 @@ index 3176e74..0a6c7bb 100644
  obj-$(CONFIG_MMC_DW_K3)		+= dw_mmc-k3.o
  obj-$(CONFIG_MMC_DW_PCI)	+= dw_mmc-pci.o
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
-diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
-new file mode 100644
-index 0000000..5921b1f
---- /dev/null
-+++ b/drivers/mmc/host/hc15_mmc.c
-@@ -0,0 +1,511 @@
+--- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
++++ b/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
+@@ -0,0 +1,530 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -200,7 +193,7 @@ index 0000000..5921b1f
 +static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 +			     struct mmc_data *data)
 +{
-+	u8 cmdidx = readb(host->base + HC15_REG_CMDIDX) & 0x40;
++	u8 cmdidx = 0x40;
 +	u8 cmdctl = hc15_cmd_type(cmd, data);
 +
 +	writel(cmd->arg, host->base + HC15_REG_CMDARG);
@@ -228,25 +221,44 @@ index 0000000..5921b1f
 +{
 +	u8 irq = 0;
 +	u8 status;
++	u8 norm = 0;
 +	int ret;
 +
 +	ret = readb_poll_timeout(host->base + HC15_REG_IRQSTS, irq,
-+				 irq & 0xc0, 10, 1000000);
++				 irq & 0x40, 10, 1000000);
 +	status = readb(host->base + HC15_REG_CMDSTS);
 +	writeb(irq, host->base + HC15_REG_IRQSTS);
 +
++	if (status & 0x01)
++		norm |= 0x01;
++	if (status & 0x02)
++		norm |= 0x02;
++	if (status & 0x08)
++		norm |= 0x04;
++	if (status & 0x10)
++		norm |= 0x08;
++	if (status & 0x40)
++		norm |= 0x10;
++	if (status & 0x04)
++		norm |= 0x20;
++	if (status & 0x20)
++		norm |= 0x40;
++	if (status & 0x80)
++		norm |= 0x80;
++
 +	hc15_mark("hc15-irq", irq);
 +	hc15_mark("hc15-status", status);
++	hc15_mark("hc15-norm-status", norm);
 +
 +	if (ret) {
 +		cmd->error = -ETIMEDOUT;
 +		return ret;
 +	}
-+	if (status & 0x01) {
++	if (norm & 0x01) {
 +		cmd->error = -EILSEQ;
 +		return -EILSEQ;
 +	}
-+	if (status & 0x02) {
++	if (norm & 0x02) {
 +		cmd->error = -ETIMEDOUT;
 +		return -ETIMEDOUT;
 +	}
@@ -477,7 +489,7 @@ index 0000000..5921b1f
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0180);
++	hc15_mark("hc15-probe", 0x0181);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

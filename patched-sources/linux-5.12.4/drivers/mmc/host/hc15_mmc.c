@@ -162,7 +162,7 @@ static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 			     struct mmc_data *data)
 {
-	u8 cmdidx = readb(host->base + HC15_REG_CMDIDX) & 0x40;
+	u8 cmdidx = 0x40;
 	u8 cmdctl = hc15_cmd_type(cmd, data);
 
 	writel(cmd->arg, host->base + HC15_REG_CMDARG);
@@ -190,25 +190,44 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 {
 	u8 irq = 0;
 	u8 status;
+	u8 norm = 0;
 	int ret;
 
 	ret = readb_poll_timeout(host->base + HC15_REG_IRQSTS, irq,
-				 irq & 0xc0, 10, 1000000);
+				 irq & 0x40, 10, 1000000);
 	status = readb(host->base + HC15_REG_CMDSTS);
 	writeb(irq, host->base + HC15_REG_IRQSTS);
 
+	if (status & 0x01)
+		norm |= 0x01;
+	if (status & 0x02)
+		norm |= 0x02;
+	if (status & 0x08)
+		norm |= 0x04;
+	if (status & 0x10)
+		norm |= 0x08;
+	if (status & 0x40)
+		norm |= 0x10;
+	if (status & 0x04)
+		norm |= 0x20;
+	if (status & 0x20)
+		norm |= 0x40;
+	if (status & 0x80)
+		norm |= 0x80;
+
 	hc15_mark("hc15-irq", irq);
 	hc15_mark("hc15-status", status);
+	hc15_mark("hc15-norm-status", norm);
 
 	if (ret) {
 		cmd->error = -ETIMEDOUT;
 		return ret;
 	}
-	if (status & 0x01) {
+	if (norm & 0x01) {
 		cmd->error = -EILSEQ;
 		return -EILSEQ;
 	}
-	if (status & 0x02) {
+	if (norm & 0x02) {
 		cmd->error = -ETIMEDOUT;
 		return -ETIMEDOUT;
 	}
@@ -439,7 +458,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0180);
+	hc15_mark("hc15-probe", 0x0181);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
