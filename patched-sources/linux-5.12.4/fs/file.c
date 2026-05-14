@@ -30,14 +30,8 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_file_mark(const char *name, unsigned int value)
 {
-	static unsigned int mark_count;
-	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
-
-	diag[11] = 0x51510300;
-	diag[12] = value;
-	diag[13] = (unsigned int)__builtin_return_address(0);
-	if (mark_count++ < 256)
-		sf2000_progress_mark(name, 14, value);
+	(void)name;
+	(void)value;
 }
 #else
 static inline void sf2000_file_mark(const char *name, unsigned int value) { }

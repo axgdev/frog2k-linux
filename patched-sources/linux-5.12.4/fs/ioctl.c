@@ -30,7 +30,8 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_ioctl_mark(const char *name, unsigned int value)
 {
-	sf2000_progress_mark(name, 19, value);
+	(void)name;
+	(void)value;
 }
 #else
 static inline void sf2000_ioctl_mark(const char *name, unsigned int value) { }

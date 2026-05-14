@@ -193,7 +193,14 @@ static int dw_mci_hichip_probe(struct platform_device *pdev)
 	int irq;
 	int ret;
 
-	hc_mark("mmc-probe-entry", 0x0176);
+	hc_mark("mmc-probe-entry", 0x0177);
+	hc_sdio_mark_regs("before");
+	hc_sdio_pinmux();
+	hc_update32(HC_SYS_CLK_GATE0, BIT(HC_SDIO_CLK_GATE_BIT), 0);
+	hc_update32(HC_SYS_SFCLK, HC_SDIO_CLK_SEL_MASK,
+		HC_SDIO_CLK_49MHZ | BIT(HC_SDIO_CLK_GATE_BIT));
+	hc_update32(HC_SYS_IO_VOLTAGE, 0x3 << 24, 0x1 << 24);
+	hc_sdio_mark_regs("after");
 	if (pdev->dev.of_node) {
 		match = of_match_node(dw_mci_hichip_match, pdev->dev.of_node);
 		if (match && match->data)

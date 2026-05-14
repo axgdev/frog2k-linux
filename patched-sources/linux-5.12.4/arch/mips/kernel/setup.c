@@ -615,15 +615,7 @@ EXPORT_SYMBOL(sf2000_progress_mark);
 
 void sf2000_syscall_mark(unsigned int nr)
 {
-	static unsigned int count;
-
-	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
-		return;
-	if (count >= 256)
-		return;
-
-	count++;
-	sf2000_progress_mark("user-syscall", 6, nr);
+	(void)nr;
 }
 
 static void sf2000_status_led_set(int on)

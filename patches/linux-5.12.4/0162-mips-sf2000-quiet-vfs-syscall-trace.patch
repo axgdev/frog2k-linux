@@ -1,0 +1,95 @@
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -615,15 +615,7 @@
+ 
+ void sf2000_syscall_mark(unsigned int nr)
+ {
+-	static unsigned int count;
+-
+-	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+-		return;
+-	if (count >= 256)
+-		return;
+-
+-	count++;
+-	sf2000_progress_mark("user-syscall", 6, nr);
++	(void)nr;
+ }
+ 
+ static void sf2000_status_led_set(int on)
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -41,14 +41,8 @@
+ 
+ static void sf2000_open_mark(const char *name, unsigned int value)
+ {
+-	static unsigned int mark_count;
+-	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
+-
+-	diag[8] = 0x51510100;
+-	diag[9] = value;
+-	diag[10] = (unsigned int)__builtin_return_address(0);
+-	if (mark_count++ < 256)
+-		sf2000_progress_mark(name, 13, value);
++	(void)name;
++	(void)value;
+ }
+ #else
+ static inline void sf2000_open_mark(const char *name, unsigned int value) { }
+--- a/fs/file.c
++++ b/fs/file.c
+@@ -30,14 +30,8 @@
+ 
+ static void sf2000_file_mark(const char *name, unsigned int value)
+ {
+-	static unsigned int mark_count;
+-	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
+-
+-	diag[11] = 0x51510300;
+-	diag[12] = value;
+-	diag[13] = (unsigned int)__builtin_return_address(0);
+-	if (mark_count++ < 256)
+-		sf2000_progress_mark(name, 14, value);
++	(void)name;
++	(void)value;
+ }
+ #else
+ static inline void sf2000_file_mark(const char *name, unsigned int value) { }
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -50,19 +50,14 @@
+ 
+ static void sf2000_namei_raw_mark(unsigned int marker, unsigned int value)
+ {
+-	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
+-
+-	diag[8] = marker;
+-	diag[9] = value;
+-	diag[10] = (unsigned int)__builtin_return_address(0);
++	(void)marker;
++	(void)value;
+ }
+ 
+ static void sf2000_namei_progress_mark(const char *name, unsigned int value)
+ {
+-	static unsigned int mark_count;
+-
+-	if (mark_count++ < 256)
+-		sf2000_progress_mark(name, 13, value);
++	(void)name;
++	(void)value;
+ }
+ 
+ static void sf2000_namei_word(const char *name, const char *s, unsigned int off)
+--- a/fs/ioctl.c
++++ b/fs/ioctl.c
+@@ -30,7 +30,8 @@
+ 
+ static void sf2000_ioctl_mark(const char *name, unsigned int value)
+ {
+-	sf2000_progress_mark(name, 19, value);
++	(void)name;
++	(void)value;
+ }
+ #else
+ static inline void sf2000_ioctl_mark(const char *name, unsigned int value) { }

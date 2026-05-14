@@ -50,19 +50,14 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_namei_raw_mark(unsigned int marker, unsigned int value)
 {
-	volatile unsigned int *diag = (volatile unsigned int *)0xa1400000;
-
-	diag[8] = marker;
-	diag[9] = value;
-	diag[10] = (unsigned int)__builtin_return_address(0);
+	(void)marker;
+	(void)value;
 }
 
 static void sf2000_namei_progress_mark(const char *name, unsigned int value)
 {
-	static unsigned int mark_count;
-
-	if (mark_count++ < 256)
-		sf2000_progress_mark(name, 13, value);
+	(void)name;
+	(void)value;
 }
 
 static void sf2000_namei_word(const char *name, const char *s, unsigned int off)

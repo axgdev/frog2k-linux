@@ -102,15 +102,36 @@ extern char **environ;
 #define MMC_CLKDIV 0x008u
 #define MMC_CLKSRC 0x00cu
 #define MMC_CLKENA 0x010u
+#define MMC_TMOUT 0x014u
+#define MMC_CTYPE 0x018u
+#define MMC_BLKSIZ 0x01cu
+#define MMC_BYTCNT 0x020u
+#define MMC_INTMASK 0x024u
+#define MMC_CMDARG 0x028u
 #define MMC_CMD 0x02cu
+#define MMC_RESP0 0x030u
+#define MMC_MINTSTS 0x040u
 #define MMC_RINTSTS 0x044u
 #define MMC_STATUS 0x048u
 #define MMC_FIFOTH 0x04cu
 #define MMC_CDETECT 0x050u
+#define MMC_WRTPRT 0x054u
+#define MMC_GPIO 0x058u
+#define MMC_TCBCNT 0x05cu
+#define MMC_TBBCNT 0x060u
+#define MMC_DEBNCE 0x064u
+#define MMC_USRID 0x068u
+#define MMC_VERID 0x06cu
+#define MMC_HCON 0x070u
+#define MMC_UHS_REG 0x074u
+#define MMC_RST_N 0x078u
 #define MMC_BMOD 0x080u
+#define MMC_PLDMND 0x084u
 #define MMC_DBADDR 0x088u
 #define MMC_IDSTS 0x08cu
 #define MMC_IDINTEN 0x090u
+#define MMC_DSCADDR 0x094u
+#define MMC_BUFADDR 0x098u
 #define MMC_CARDTHRCTL 0x100u
 
 #define PINPAD_L01 1u
@@ -709,12 +730,54 @@ static uint8_t direct_read8(uint32_t phys)
 	return *(volatile uint8_t *)KSEG1ADDR(phys);
 }
 
+static void progress_mark_mmc_snapshot(const char *suffix)
+{
+	progress_mark("diag-mmc-ctrl", 0x32u, direct_read32(MMC_PHYS + MMC_CTRL));
+	progress_mark("diag-mmc-pwren", 0x32u, direct_read32(MMC_PHYS + MMC_PWREN));
+	progress_mark("diag-mmc-clkdiv", 0x32u, direct_read32(MMC_PHYS + MMC_CLKDIV));
+	progress_mark("diag-mmc-clksrc", 0x32u, direct_read32(MMC_PHYS + MMC_CLKSRC));
+	progress_mark("diag-mmc-clkena", 0x32u, direct_read32(MMC_PHYS + MMC_CLKENA));
+	progress_mark("diag-mmc-tmout", 0x32u, direct_read32(MMC_PHYS + MMC_TMOUT));
+	progress_mark("diag-mmc-ctype", 0x32u, direct_read32(MMC_PHYS + MMC_CTYPE));
+	progress_mark("diag-mmc-blksiz", 0x32u, direct_read32(MMC_PHYS + MMC_BLKSIZ));
+	progress_mark("diag-mmc-bytcnt", 0x32u, direct_read32(MMC_PHYS + MMC_BYTCNT));
+	progress_mark("diag-mmc-intmask", 0x32u, direct_read32(MMC_PHYS + MMC_INTMASK));
+	progress_mark("diag-mmc-cmdarg", 0x32u, direct_read32(MMC_PHYS + MMC_CMDARG));
+	progress_mark("diag-mmc-cmd", 0x32u, direct_read32(MMC_PHYS + MMC_CMD));
+	progress_mark("diag-mmc-resp0", 0x32u, direct_read32(MMC_PHYS + MMC_RESP0));
+	progress_mark("diag-mmc-mint", 0x32u, direct_read32(MMC_PHYS + MMC_MINTSTS));
+	progress_mark("diag-mmc-rint", 0x32u, direct_read32(MMC_PHYS + MMC_RINTSTS));
+	progress_mark("diag-mmc-status", 0x32u, direct_read32(MMC_PHYS + MMC_STATUS));
+	progress_mark("diag-mmc-fifoth", 0x32u, direct_read32(MMC_PHYS + MMC_FIFOTH));
+	progress_mark("diag-mmc-cdetect", 0x32u, direct_read32(MMC_PHYS + MMC_CDETECT));
+	progress_mark("diag-mmc-wrtprt", 0x32u, direct_read32(MMC_PHYS + MMC_WRTPRT));
+	progress_mark("diag-mmc-gpio", 0x32u, direct_read32(MMC_PHYS + MMC_GPIO));
+	progress_mark("diag-mmc-tcbcnt", 0x32u, direct_read32(MMC_PHYS + MMC_TCBCNT));
+	progress_mark("diag-mmc-tbbcnt", 0x32u, direct_read32(MMC_PHYS + MMC_TBBCNT));
+	progress_mark("diag-mmc-debnce", 0x32u, direct_read32(MMC_PHYS + MMC_DEBNCE));
+	progress_mark("diag-mmc-usrid", 0x32u, direct_read32(MMC_PHYS + MMC_USRID));
+	progress_mark("diag-mmc-verid", 0x32u, direct_read32(MMC_PHYS + MMC_VERID));
+	progress_mark("diag-mmc-hcon", 0x32u, direct_read32(MMC_PHYS + MMC_HCON));
+	progress_mark("diag-mmc-uhs", 0x32u, direct_read32(MMC_PHYS + MMC_UHS_REG));
+	progress_mark("diag-mmc-rstn", 0x32u, direct_read32(MMC_PHYS + MMC_RST_N));
+	progress_mark("diag-mmc-bmod", 0x32u, direct_read32(MMC_PHYS + MMC_BMOD));
+	progress_mark("diag-mmc-pldmnd", 0x32u, direct_read32(MMC_PHYS + MMC_PLDMND));
+	progress_mark("diag-mmc-dbaddr", 0x32u, direct_read32(MMC_PHYS + MMC_DBADDR));
+	progress_mark("diag-mmc-idsts", 0x32u, direct_read32(MMC_PHYS + MMC_IDSTS));
+	progress_mark("diag-mmc-idinten", 0x32u, direct_read32(MMC_PHYS + MMC_IDINTEN));
+	progress_mark("diag-mmc-dscaddr", 0x32u, direct_read32(MMC_PHYS + MMC_DSCADDR));
+	progress_mark("diag-mmc-bufaddr", 0x32u, direct_read32(MMC_PHYS + MMC_BUFADDR));
+	progress_mark("diag-mmc-cardthr", 0x32u, direct_read32(MMC_PHYS + MMC_CARDTHRCTL));
+	progress_mark(suffix, 0x32u, 0x0177u);
+}
+
 static void progress_mark_reset_snapshot(void)
 {
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0176u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0177u);
+	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
 	mkdir("/sys", 0755);
@@ -758,23 +821,9 @@ static void progress_mark_reset_snapshot(void)
 			<< ((i - 16u) * 4u);
 	progress_mark("diag-pin-l16-22", 0x31u, pins);
 
-	progress_mark("diag-mmc-ctrl", 0x32u, direct_read32(MMC_PHYS + MMC_CTRL));
-	progress_mark("diag-mmc-pwren", 0x32u, direct_read32(MMC_PHYS + MMC_PWREN));
-	progress_mark("diag-mmc-clkdiv", 0x32u, direct_read32(MMC_PHYS + MMC_CLKDIV));
-	progress_mark("diag-mmc-clksrc", 0x32u, direct_read32(MMC_PHYS + MMC_CLKSRC));
-	progress_mark("diag-mmc-clkena", 0x32u, direct_read32(MMC_PHYS + MMC_CLKENA));
-	progress_mark("diag-mmc-cmd", 0x32u, direct_read32(MMC_PHYS + MMC_CMD));
-	progress_mark("diag-mmc-rint", 0x32u, direct_read32(MMC_PHYS + MMC_RINTSTS));
-	progress_mark("diag-mmc-status", 0x32u, direct_read32(MMC_PHYS + MMC_STATUS));
-	progress_mark("diag-mmc-fifoth", 0x32u, direct_read32(MMC_PHYS + MMC_FIFOTH));
-	progress_mark("diag-mmc-cdetect", 0x32u, direct_read32(MMC_PHYS + MMC_CDETECT));
-	progress_mark("diag-mmc-bmod", 0x32u, direct_read32(MMC_PHYS + MMC_BMOD));
-	progress_mark("diag-mmc-dbaddr", 0x32u, direct_read32(MMC_PHYS + MMC_DBADDR));
-	progress_mark("diag-mmc-idsts", 0x32u, direct_read32(MMC_PHYS + MMC_IDSTS));
-	progress_mark("diag-mmc-idinten", 0x32u, direct_read32(MMC_PHYS + MMC_IDINTEN));
-	progress_mark("diag-mmc-cardthr", 0x32u, direct_read32(MMC_PHYS + MMC_CARDTHRCTL));
+	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0176u);
+	progress_mark("diag-reset-done", 0x30u, 0x0177u);
 }
 
 static void sleep_ms(unsigned msec)
