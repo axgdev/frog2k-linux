@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/cachectl.h>
 #include <sys/mman.h>
+#include <sys/reboot.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -165,6 +166,11 @@ extern char **environ;
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
 #define CONSOLE_BTN_RIGHT 0x08u
+#define CONSOLE_BTN_SELECT 0x10u
+
+#ifndef LINUX_REBOOT_CMD_RESTART
+#define LINUX_REBOOT_CMD_RESTART 0x01234567
+#endif
 
 static volatile uint8_t *gma_ram;
 static volatile uint8_t *gma;
@@ -1565,6 +1571,15 @@ static int console_handle_buttons(uint32_t buttons)
 	int changed = 0;
 	int page = (int)CONSOLE_ROWS - 3;
 
+	if (buttons & CONSOLE_BTN_SELECT) {
+		console_add_line("SELECT pressed: rebooting");
+		log_line("sf2000-screen: SELECT pressed, rebooting\n");
+		sync();
+		reboot(LINUX_REBOOT_CMD_RESTART);
+		console_add_line("reboot syscall returned");
+		log_line("sf2000-screen: reboot syscall returned\n");
+		changed = 1;
+	}
 	if (buttons & CONSOLE_BTN_UP)
 		changed |= console_scroll_delta(1);
 	if (buttons & CONSOLE_BTN_DOWN)
@@ -1586,6 +1601,8 @@ static uint32_t console_button_for_key(uint16_t code)
 		return CONSOLE_BTN_LEFT;
 	if (code == BTN_DPAD_RIGHT || code == KEY_RIGHT)
 		return CONSOLE_BTN_RIGHT;
+	if (code == BTN_SELECT || code == KEY_BACKSPACE)
+		return CONSOLE_BTN_SELECT;
 	return 0;
 }
 
@@ -1664,6 +1681,8 @@ static uint32_t console_buttons_from_raw_keypad(uint32_t raw)
 {
 	uint32_t buttons = 0;
 
+	if (raw & (1u << 6))
+		buttons |= CONSOLE_BTN_SELECT;
 	if (raw & (1u << 8))
 		buttons |= CONSOLE_BTN_UP;
 	if (raw & (1u << 9))
@@ -1678,6 +1697,7 @@ static uint32_t console_buttons_from_raw_keypad(uint32_t raw)
 static uint32_t console_poll_raw_buttons(void)
 {
 	static uint32_t stable;
+	static uint32_t reported;
 	static uint32_t previous_raw;
 	static unsigned raw_count;
 	uint32_t raw = scan_keypad_sf2000();
@@ -1692,6 +1712,17 @@ static uint32_t console_poll_raw_buttons(void)
 
 	if (raw_count >= 2u)
 		stable = raw;
+	if (stable != reported) {
+		reported = stable;
+		if (stable) {
+			char line[64];
+
+			snprintf(line, sizeof(line),
+				"dpad raw keypad 0x%03x", stable);
+			console_add_line(line);
+			log_line("sf2000-screen: raw keypad changed\n");
+		}
+	}
 	return console_buttons_from_raw_keypad(stable);
 }
 

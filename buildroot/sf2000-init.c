@@ -644,7 +644,6 @@ void sf2000_init_main(void)
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	for (;;) {
 		reap_children();
-		direct_select_reboot_poll();
 		diagnostic_watchdog_pet();
 		sleep_ms(250);
 	}
