@@ -9,8 +9,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/cachectl.h>
+#include <sys/mount.h>
 #include <sys/mman.h>
 #include <sys/reboot.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -622,7 +624,7 @@ static void progress_mark_text(const char *prefix, const char *text)
 	unsigned word_index = 0;
 	uint32_t word = 0;
 
-	for (byte = 0; text[byte] && byte < 96u; byte++) {
+	for (byte = 0; text[byte] && byte < 192u; byte++) {
 		word |= (uint32_t)(uint8_t)text[byte] << ((byte & 3u) * 8u);
 		if ((byte & 3u) == 3u) {
 			snprintf(name, sizeof(name), "%s-w%u", prefix, word_index++);
@@ -638,7 +640,7 @@ static void progress_mark_text(const char *prefix, const char *text)
 
 static void progress_mark_file_head(const char *prefix, const char *path)
 {
-	char buf[96];
+	char buf[192];
 	ssize_t got;
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 
@@ -659,7 +661,7 @@ static void progress_mark_file_head(const char *prefix, const char *path)
 
 static void progress_mark_dir_count(const char *name, const char *path)
 {
-	char text[96];
+	char text[192];
 	DIR *dir = opendir(path);
 	struct dirent *de;
 	unsigned count = 0;
@@ -712,7 +714,21 @@ static void progress_mark_reset_snapshot(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0175u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0176u);
+
+	mkdir("/proc", 0755);
+	mkdir("/sys", 0755);
+	mkdir("/dev", 0755);
+	errno = 0;
+	(void)mount("proc", "/proc", "proc", 0, "");
+	progress_mark("diag-mount-proc", 0x30u, (uint32_t)errno);
+	errno = 0;
+	(void)mount("sysfs", "/sys", "sysfs", 0, "");
+	progress_mark("diag-mount-sys", 0x30u, (uint32_t)errno);
+	errno = 0;
+	(void)mount("devtmpfs", "/dev", "devtmpfs", 0, "");
+	progress_mark("diag-mount-dev", 0x30u, (uint32_t)errno);
+	errno = 0;
 
 	progress_mark_file_head("diag-proc-part", "/proc/partitions");
 	progress_mark_file_head("diag-proc-dev", "/proc/devices");
@@ -758,7 +774,7 @@ static void progress_mark_reset_snapshot(void)
 	progress_mark("diag-mmc-idinten", 0x32u, direct_read32(MMC_PHYS + MMC_IDINTEN));
 	progress_mark("diag-mmc-cardthr", 0x32u, direct_read32(MMC_PHYS + MMC_CARDTHRCTL));
 
-	progress_mark("diag-reset-done", 0x30u, 0x0175u);
+	progress_mark("diag-reset-done", 0x30u, 0x0176u);
 }
 
 static void sleep_ms(unsigned msec)

@@ -109,13 +109,13 @@ static int try_mount_write(const char *dev)
 		return -1;
 	}
 	log_msgf("sf2000_storage_probe: mount ok %s\n", dev);
-	fd = open("/mnt/sd/sf2000-linux-rw-0175.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0176.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0175\n";
+		const char msg[] = "sf2000 linux sd write test 0176\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);

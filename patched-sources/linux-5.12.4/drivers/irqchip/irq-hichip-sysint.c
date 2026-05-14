@@ -185,3 +185,5 @@ err_unmap:
 	kfree(intc);
 	return ret;
 }
+
+IRQCHIP_DECLARE(hichip_sysint, "hichip,generic-intc", hichip_sysint_init);

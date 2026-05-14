@@ -1,0 +1,107 @@
+--- a/drivers/mmc/host/dw_mmc-hichip.c
++++ b/drivers/mmc/host/dw_mmc-hichip.c
+@@ -29,13 +29,27 @@
+ #define HC_SDIO_PIN_LAST	21
+ #define HC_SDIO_PIN_CD		22
+ 
++#ifdef CONFIG_MIPS_SF2000
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++				 unsigned int value);
++
++static void hc_mark(const char *name, u32 value)
++{
++	sf2000_progress_mark(name, 0x33, value);
++}
++#else
++static void hc_mark(const char *name, u32 value) { }
++#endif
++
+ static void hc_update32(u32 phys, u32 clear, u32 set)
+ {
+ 	void __iomem *reg = ioremap(phys, sizeof(u32));
+ 	u32 value;
+ 
+-	if (!reg)
++	if (!reg) {
++		hc_mark("mmc-mapfail", phys);
+ 		return;
++	}
+ 
+ 	value = readl(reg);
+ 	value &= ~clear;
+@@ -92,6 +106,19 @@
+ 		hc_read8(HC_SYS_PINMUX_L + 22));
+ }
+ 
++static void hc_sdio_mark_regs(const char *prefix)
++{
++	if (prefix[0] == 'b') {
++		hc_mark("mmc-before-sfclk", hc_read32(HC_SYS_SFCLK));
++		hc_mark("mmc-before-gate0", hc_read32(HC_SYS_CLK_GATE0));
++		hc_mark("mmc-before-iov", hc_read32(HC_SYS_IO_VOLTAGE));
++	} else {
++		hc_mark("mmc-after-sfclk", hc_read32(HC_SYS_SFCLK));
++		hc_mark("mmc-after-gate0", hc_read32(HC_SYS_CLK_GATE0));
++		hc_mark("mmc-after-iov", hc_read32(HC_SYS_IO_VOLTAGE));
++	}
++}
++
+ static void hc_sdio_pinmux(void)
+ {
+ 	unsigned int pin;
+@@ -120,6 +147,9 @@
+ {
+ 	u32 clk_sel = hc_sdio_clock_select(host->bus_hz);
+ 
++	hc_mark("mmc-init-entry", host->bus_hz);
++	hc_mark("mmc-init-hcon", mci_readl(host, HCON));
++	hc_sdio_mark_regs("before");
+ 	hc_sdio_dump_regs("before-init");
+ 	hc_sdio_pinmux();
+ 
+@@ -137,6 +167,8 @@
+ 	hc_update32(HC_SYS_IO_VOLTAGE, 0x3 << 24, 0x1 << 24);
+ 
+ 	hc_sdio_dump_regs("after-init");
++	hc_sdio_mark_regs("after");
++	hc_mark("mmc-init-done", mci_readl(host, HCON));
+ 	return 0;
+ }
+ 
+@@ -157,16 +189,35 @@
+ {
+ 	const struct dw_mci_drv_data *drv_data = &hichip_data;
+ 	const struct of_device_id *match;
++	struct resource *res;
++	int irq;
++	int ret;
+ 
++	hc_mark("mmc-probe-entry", 0x0176);
+ 	if (pdev->dev.of_node) {
+ 		match = of_match_node(dw_mci_hichip_match, pdev->dev.of_node);
+ 		if (match && match->data)
+ 			drv_data = match->data;
+ 	}
+ 
++	irq = platform_get_irq_optional(pdev, 0);
++	hc_mark("mmc-probe-irq", (u32)irq);
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (res) {
++		hc_mark("mmc-probe-res-start", (u32)res->start);
++		hc_mark("mmc-probe-res-size", (u32)resource_size(res));
++	} else {
++		hc_mark("mmc-probe-no-res", 0xffffffff);
++	}
++
+ 	dev_info(&pdev->dev, "registering Hichip DW-MSHC host\n");
+ 
+-	return dw_mci_pltfm_register(pdev, drv_data);
++	ret = dw_mci_pltfm_register(pdev, drv_data);
++	hc_mark("mmc-probe-ret", (u32)ret);
++	if (ret)
++		dev_err(&pdev->dev, "Hichip DW-MSHC registration failed ret=%d\n",
++			ret);
++	return ret;
+ }
+ 
+ static struct platform_driver dw_mci_hichip_driver = {

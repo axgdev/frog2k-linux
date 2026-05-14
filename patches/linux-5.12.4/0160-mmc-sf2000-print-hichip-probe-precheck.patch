@@ -1,0 +1,14 @@
+--- a/drivers/mmc/host/dw_mmc-hichip.c
++++ b/drivers/mmc/host/dw_mmc-hichip.c
+@@ -206,8 +206,11 @@
+ 	if (res) {
+ 		hc_mark("mmc-probe-res-start", (u32)res->start);
+ 		hc_mark("mmc-probe-res-size", (u32)resource_size(res));
++		dev_info(&pdev->dev, "precheck irq=%d res=%pa size=0x%llx\n",
++			 irq, &res->start, (unsigned long long)resource_size(res));
+ 	} else {
+ 		hc_mark("mmc-probe-no-res", 0xffffffff);
++		dev_info(&pdev->dev, "precheck irq=%d no IORESOURCE_MEM\n", irq);
+ 	}
+ 
+ 	dev_info(&pdev->dev, "registering Hichip DW-MSHC host\n");
