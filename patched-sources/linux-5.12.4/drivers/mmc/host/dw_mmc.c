@@ -57,14 +57,24 @@
 extern void sf2000_progress_mark(const char *name, unsigned int kind,
 				 unsigned int value);
 
+static bool dw_mci_is_hichip(struct dw_mci *host)
+{
+	return host->dev && host->dev->of_node &&
+		of_device_is_compatible(host->dev->of_node, "hichip,dw-mshc");
+}
+
 static void dw_mci_sf2000_mark(struct dw_mci *host, const char *name,
 			       u32 value)
 {
-	if (host->dev && host->dev->of_node &&
-	    of_device_is_compatible(host->dev->of_node, "hichip,dw-mshc"))
+	if (dw_mci_is_hichip(host))
 		sf2000_progress_mark(name, 0x34, value);
 }
 #else
+static bool dw_mci_is_hichip(struct dw_mci *host)
+{
+	return false;
+}
+
 static void dw_mci_sf2000_mark(struct dw_mci *host, const char *name,
 			       u32 value)
 {
@@ -205,8 +215,7 @@ static void dw_mci_init_debugfs(struct dw_mci_slot *slot)
 static bool dw_mci_ctrl_reset(struct dw_mci *host, u32 reset)
 {
 	u32 ctrl;
-	bool hichip = host->dev && host->dev->of_node &&
-		of_device_is_compatible(host->dev->of_node, "hichip,dw-mshc");
+	bool hichip = dw_mci_is_hichip(host);
 
 	ctrl = mci_readl(host, CTRL);
 	dw_mci_sf2000_mark(host, "dw-reset-before-ctrl", ctrl);
@@ -277,9 +286,17 @@ static void mci_send_cmd(struct dw_mci_slot *slot, u32 cmd, u32 arg)
 {
 	struct dw_mci *host = slot->host;
 	unsigned int cmd_status = 0;
+	bool hichip = dw_mci_is_hichip(host);
+
+	if (hichip && (cmd & SDMMC_CMD_UPD_CLK)) {
+		cmd &= ~(SDMMC_CMD_PRV_DAT_WAIT | SDMMC_CMD_USE_HOLD_REG);
+		dw_mci_sf2000_mark(host, "dw-send-hc-updclk", cmd);
+	}
 
 	dw_mci_sf2000_mark(host, "dw-send-cmd", cmd);
 	dw_mci_sf2000_mark(host, "dw-send-arg", arg);
+	if (hichip)
+		mci_writel(host, RINTSTS, 0xffffffff);
 	mci_writel(host, CMDARG, arg);
 	wmb(); /* drain writebuffer */
 	dw_mci_wait_while_busy(host, cmd);
@@ -2824,6 +2841,13 @@ static int dw_mci_init_slot_caps(struct dw_mci_slot *slot)
 			return -EINVAL;
 		}
 		mmc->caps |= drv_data->caps[ctrl_id];
+	}
+
+	if (dw_mci_is_hichip(host)) {
+		set_bit(DW_MMC_CARD_NO_LOW_PWR, &slot->flags);
+		set_bit(DW_MMC_CARD_NO_USE_HOLD, &slot->flags);
+		dw_mci_sf2000_mark(host, "dw-slot-hc-flags",
+				    (u32)slot->flags);
 	}
 
 	if (host->pdata->caps2)

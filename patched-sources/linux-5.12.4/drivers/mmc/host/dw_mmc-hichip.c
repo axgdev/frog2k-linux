@@ -193,7 +193,7 @@ static int dw_mci_hichip_probe(struct platform_device *pdev)
 	int irq;
 	int ret;
 
-	hc_mark("mmc-probe-entry", 0x0178);
+	hc_mark("mmc-probe-entry", 0x0179);
 	hc_sdio_mark_regs("before");
 	hc_sdio_pinmux();
 	hc_update32(HC_SYS_CLK_GATE0, BIT(HC_SDIO_CLK_GATE_BIT), 0);

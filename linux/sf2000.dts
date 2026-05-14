@@ -123,7 +123,7 @@
 			interrupts = <10>;
 			clocks = <&mmc_clk>, <&mmc_clk>;
 			clock-names = "biu", "ciu";
-			clock-frequency = <49000000>;
+			clock-frequency = <198000000>;
 			max-frequency = <12000000>;
 			fifo-depth = <32>;
 			fifo-mode;
