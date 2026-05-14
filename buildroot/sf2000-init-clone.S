@@ -3,10 +3,25 @@
 	.globl sf2000_clone_service
 	.ent sf2000_clone_service
 sf2000_clone_service:
+	li	$6, 0x112
+	b	sf2000_clone_service_with_flags
+	nop
+	.end sf2000_clone_service
+
+	.globl sf2000_clone_service_vfork
+	.ent sf2000_clone_service_vfork
+sf2000_clone_service_vfork:
+	li	$6, 0x4112
+	b	sf2000_clone_service_with_flags
+	nop
+	.end sf2000_clone_service_vfork
+
+	.ent sf2000_clone_service_with_flags
+sf2000_clone_service_with_flags:
 	addiu	$4, $4, -16
 	sw	$5, 0($4)
 	move	$5, $4
-	li	$4, 0x4112
+	move	$4, $6
 	li	$2, 4120
 	addiu	$29, $29, -32
 	sw	$0, 16($29)
@@ -29,4 +44,4 @@ sf2000_clone_service:
 	addiu	$29, $29, 32
 	jr	$31
 	nop
-	.end sf2000_clone_service
+	.end sf2000_clone_service_with_flags

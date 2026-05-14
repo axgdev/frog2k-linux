@@ -65,6 +65,8 @@ static unsigned long rcs_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
+extern long sf2000_clone_service_vfork(unsigned long child_stack,
+		char *const argv[]);
 
 static long syscall1(long nr, long a0)
 {
@@ -438,15 +440,17 @@ void service_child_exec(char *const *argv)
 	syscall1(SYS_exit, 127);
 }
 
-static void spawn_service(const char *name, char *const argv[],
-		unsigned long *stack)
+typedef long (*clone_service_fn)(unsigned long child_stack, char *const argv[]);
+
+static void spawn_service_with(const char *name, char *const argv[],
+		unsigned long *stack, clone_service_fn clone_service)
 {
 	long pid;
 	unsigned long child_stack = service_stack_top(stack);
 
 	log_message(name);
 	diagnostic_watchdog_pet();
-	pid = sf2000_clone_service(child_stack, argv);
+	pid = clone_service(child_stack, argv);
 	if (pid < 0) {
 		log_message("sf2000_buildroot: service clone failed ");
 		log_hex_word((unsigned int)pid);
@@ -455,6 +459,18 @@ static void spawn_service(const char *name, char *const argv[],
 	if (pid == 0)
 		service_child_exec(argv);
 	diagnostic_watchdog_pet();
+}
+
+static void spawn_service(const char *name, char *const argv[],
+		unsigned long *stack)
+{
+	spawn_service_with(name, argv, stack, sf2000_clone_service);
+}
+
+static void spawn_vfork_service(const char *name, char *const argv[],
+		unsigned long *stack)
+{
+	spawn_service_with(name, argv, stack, sf2000_clone_service_vfork);
 }
 
 static void reap_children(void)
@@ -486,7 +502,8 @@ void sf2000_init_main(void)
 	diagnostic_watchdog_pet();
 	wait_for_screen_ready();
 	diagnostic_watchdog_pet();
-	spawn_service("sf2000_buildroot: starting rcS\n", rcs_argv, rcs_stack);
+	spawn_vfork_service("sf2000_buildroot: starting rcS\n", rcs_argv,
+		rcs_stack);
 	diagnostic_watchdog_pet();
 	log_message("sf2000_buildroot: libc helpers started\n");
 
