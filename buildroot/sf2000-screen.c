@@ -95,8 +95,6 @@ extern char **environ;
 #define PINPAD_L23 23u
 #define PINPAD_L24 24u
 #define PINPAD_L25 25u
-#define PINPAD_L26 26u
-#define PINPAD_L27 27u
 #define PINPAD_R05 69u
 #define PINPAD_T00 96u
 #define PINPAD_T01 97u
@@ -154,11 +152,8 @@ extern char **environ;
 #define BTN_DPAD_RIGHT 0x223
 #endif
 
-#define KEY_SHIFTER_BITS 16u
 #define KEY_SHIFTER_LOAD_SPINS 300u
-#define KEY_SHIFTER_SETTLE_SPINS 300u
-#define KEY_SHIFTER_CLOCK_LOW_SPINS 220u
-#define KEY_SHIFTER_CLOCK_HIGH_SPINS 220u
+#define KEY_SHIFTER_CLOCK_LOW_SPINS 180u
 #define CONSOLE_INPUT_FDS 4u
 #define CONSOLE_POLL_MS 50u
 #define CONSOLE_IDLE_REDRAW_TICKS 40u
@@ -170,14 +165,6 @@ extern char **environ;
 #define CONSOLE_BTN_LEFT 0x04u
 #define CONSOLE_BTN_RIGHT 0x08u
 #define CONSOLE_BTN_SELECT 0x10u
-
-static const uint8_t stock_bit_for_button[12] = {
-	11, 10, 12, 13, 14, 0, 3, 4, 6, 7, 5, 1,
-};
-
-static const uint8_t gb300_stock_bit_for_shift[KEY_SHIFTER_BITS] = {
-	15, 11, 10, 12, 13, 14, 0, 3, 4, 6, 7, 5, 1, 2, 8, 9,
-};
 
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -771,8 +758,8 @@ static void gpio_config_input(unsigned pad)
 static void status_led_set(int on)
 {
 	/*
-	 * Do not drive L25 here. UniFrog's GB300/stock keypad profile uses L25
-	 * as a data line, so treating it as a status LED masks button input.
+	 * Leave L25 untouched while debugging keypad input. The SF2000 HCRToS
+	 * frontend uses it as a status LED, but it is not needed for scrolling.
 	 */
 	(void)on;
 }
@@ -788,7 +775,6 @@ static uint32_t scan_keypad_sf2000(void)
 	gpio_set_pad(PINPAD_L23, 0);
 	sleep_spins(KEY_SHIFTER_LOAD_SPINS);
 	gpio_config_input(PINPAD_L23);
-	sleep_spins(KEY_SHIFTER_SETTLE_SPINS);
 
 	for (i = 0; i < 12u; i++) {
 		if (1 ^ gpio_get_pad(PINPAD_L23))
@@ -797,56 +783,9 @@ static uint32_t scan_keypad_sf2000(void)
 		gpio_set_pad(PINPAD_L24, 0);
 		sleep_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
 		gpio_set_pad(PINPAD_L24, 1);
-		sleep_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
 	}
 
 	return raw_mask;
-}
-
-static uint32_t scan_keypad_stock_bits(void)
-{
-	uint32_t raw_mask = 0;
-	unsigned i;
-
-	gpio_config_output(PINPAD_L26);
-	gpio_config_output(PINPAD_L27);
-	gpio_config_output(PINPAD_L25);
-	gpio_set_pad(PINPAD_L27, 0);
-	gpio_set_pad(PINPAD_L25, 0);
-	gpio_set_pad(PINPAD_L26, 0);
-	sleep_spins(KEY_SHIFTER_LOAD_SPINS);
-
-	gpio_config_input(PINPAD_L27);
-	gpio_config_input(PINPAD_L25);
-	sleep_spins(KEY_SHIFTER_SETTLE_SPINS);
-
-	for (i = 0; i < KEY_SHIFTER_BITS; i++) {
-		int raw0 = 1 ^ gpio_get_pad(PINPAD_L27);
-		int raw1 = 1 ^ gpio_get_pad(PINPAD_L25);
-
-		if (raw0 || raw1)
-			raw_mask |= 1u << gb300_stock_bit_for_shift[i];
-
-		gpio_set_pad(PINPAD_L26, 0);
-		sleep_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
-		gpio_set_pad(PINPAD_L26, 1);
-		sleep_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
-	}
-
-	return raw_mask;
-}
-
-static uint32_t normalize_stock_keypad(uint32_t raw)
-{
-	uint32_t normalized = 0;
-	unsigned i;
-
-	for (i = 0; i < 12u; i++) {
-		if (raw & (1u << stock_bit_for_button[i]))
-			normalized |= 1u << i;
-	}
-
-	return normalized;
 }
 
 static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
@@ -1707,7 +1646,7 @@ static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
 	if (console_input_has_fd(fds))
 		console_add_line("dpad scroll: evdev up/down left/right");
 	else
-		console_add_line("dpad scroll: raw sf2000+stock fallback");
+		console_add_line("dpad scroll: raw sf2000 fallback");
 }
 
 static void console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
@@ -1756,44 +1695,38 @@ static uint32_t console_poll_raw_buttons(void)
 {
 	static uint32_t stable;
 	static uint32_t reported;
-	static uint32_t previous_norm;
-	static uint32_t reported_sf2000;
-	static uint32_t reported_stock;
+	static uint32_t previous_raw;
+	static uint32_t logged_raw;
 	static unsigned raw_count;
-	uint32_t raw_sf2000 = scan_keypad_sf2000();
-	uint32_t raw_stock = scan_keypad_stock_bits();
-	uint32_t norm_stock = normalize_stock_keypad(raw_stock);
-	uint32_t norm = (raw_sf2000 & 0xfffu) | norm_stock;
+	uint32_t raw = scan_keypad_sf2000();
 
-	if (raw_sf2000 != reported_sf2000 || raw_stock != reported_stock) {
+	if (raw != logged_raw) {
 		char line[96];
 
-		reported_sf2000 = raw_sf2000;
-		reported_stock = raw_stock;
+		logged_raw = raw;
 		snprintf(line, sizeof(line),
-			"dpad raw sf=%03x stock=%04x norm=%03x",
-			raw_sf2000, raw_stock, norm);
+			"dpad raw sf2000=0x%03x", raw);
 		console_add_line(line);
 		log_line("sf2000-screen: raw keypad sample changed\n");
 	}
 
-	if (norm == previous_norm) {
+	if (raw == previous_raw) {
 		if (raw_count < 3u)
 			raw_count++;
 	} else {
-		previous_norm = norm;
+		previous_raw = raw;
 		raw_count = 0;
 	}
 
 	if (raw_count >= 2u)
-		stable = norm;
+		stable = raw;
 	if (stable != reported) {
 		reported = stable;
 		if (stable) {
 			char line[64];
 
 			snprintf(line, sizeof(line),
-				"dpad normalized keypad 0x%03x", stable);
+				"dpad stable sf2000=0x%03x", stable);
 			console_add_line(line);
 			log_line("sf2000-screen: raw keypad changed\n");
 		}
