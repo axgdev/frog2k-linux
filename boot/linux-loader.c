@@ -55,12 +55,13 @@ typedef unsigned long uintptr;
 #define FA_READ 0x01u
 #define PROGRESS_ADDR 0xa13f0000u
 #define RAW_DIAG_ADDR 0xa1400000u
+#define LIVE_HANDOFF_ADDR 0xa140f000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0162-live-write-rcs-first"
+#define LOADER_BUILD_TAG "2026-05-14 nommu-flat-0163-screen-storage-probe"
 
 typedef unsigned long long u64;
 
@@ -248,6 +249,7 @@ static int log_ready;
 static int log_tried;
 static volatile struct progress_log * const progress_log =
 	(volatile struct progress_log *)PROGRESS_ADDR;
+static volatile u32 * const live_handoff = (volatile u32 *)LIVE_HANDOFF_ADDR;
 
 static u32 le16(const u8 *p)
 {
@@ -479,9 +481,9 @@ static void progress_set_live_log_sector(void)
 	if (log_file_lba(sector_index, &lba) != 0)
 		return;
 
-	progress_log->reserved[0] = PROGRESS_LIVE_MAGIC;
-	progress_log->reserved[1] = log_fs.pdrv;
-	progress_log->reserved[2] = lba;
+	live_handoff[0] = PROGRESS_LIVE_MAGIC;
+	live_handoff[1] = log_fs.pdrv;
+	live_handoff[2] = lba;
 
 	bootlog_puts("live progress sector index=");
 	bootlog_hex(sector_index);
@@ -489,6 +491,8 @@ static void progress_set_live_log_sector(void)
 	bootlog_hex(log_fs.pdrv);
 	bootlog_puts(" lba=");
 	bootlog_hex(lba);
+	bootlog_puts(" handoff=");
+	bootlog_hex(LIVE_HANDOFF_ADDR);
 	bootlog_puts("\n");
 	bootlog_flush();
 }

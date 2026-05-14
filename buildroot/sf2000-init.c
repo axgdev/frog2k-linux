@@ -50,7 +50,7 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
-static char *const rcs_argv[] = { "/bin/sh", "/etc/init.d/rcS", 0 };
+static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
@@ -61,7 +61,7 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
-static unsigned long rcs_stack[SERVICE_STACK_WORDS];
+static unsigned long storage_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -497,14 +497,15 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
-	spawn_vfork_service("sf2000_buildroot: starting rcS\n", rcs_argv,
-		rcs_stack);
-	diagnostic_watchdog_pet();
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
-	wait_for_screen_ready();
+	sleep_ms(200);
 	diagnostic_watchdog_pet();
+	spawn_vfork_service("sf2000_buildroot: starting storage probe\n",
+		storage_argv, storage_stack);
+	diagnostic_watchdog_pet();
+	wait_for_screen_ready();
 	log_message("sf2000_buildroot: libc helpers started\n");
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");

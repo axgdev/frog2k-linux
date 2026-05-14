@@ -1,0 +1,63 @@
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] mips: sf2000: keep live log handoff out of progress header
+
+The NOMMU entry diagnostics still overwrite the progress header reserved words. Move the live log pdrv/LBA handoff to a dedicated retained word block near the end of the reserved diagnostic area.
+
+---
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index 2e0444d..82b0a7d 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -110,6 +110,7 @@ static const char builtin_cmdline[] __initconst = "";
+ #define SF2000_PROGRESS_PHYS 0x013f0000u
+ #define SF2000_PROGRESS_RESERVE_SIZE 0x00020000u
+ #define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
++#define SF2000_LIVE_HANDOFF_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x0140f000))
+ #define SF2000_PROGRESS_MAGIC 0x52504653u
+ #define SF2000_PROGRESS_VERSION 1u
+ #define SF2000_PROGRESS_ENTRIES 1024u
+@@ -412,7 +413,7 @@ static void sf2000_live_write_sector(const char *sector)
+ 		(sf2000_rom_disk_write_fn)SF2000_ROM_DISK_WRITE_KSEG0;
+ 	sf2000_rom_cache_flush_fn cache_flush =
+ 		(sf2000_rom_cache_flush_fn)SF2000_ROM_CACHE_FLUSH_KSEG0;
+-	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
++	volatile unsigned int *handoff = SF2000_LIVE_HANDOFF_KSEG1;
+ 
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
+@@ -420,12 +421,12 @@ static void sf2000_live_write_sector(const char *sector)
+ 		return;
+ 	if (*SF2000_WDT_CONF_KSEG1 != 0)
+ 		return;
+-	if (log->reserved[0] != SF2000_PROGRESS_LIVE_MAGIC ||
+-	    log->reserved[2] == 0 || log->reserved[2] == 0xffffffffu)
++	if (handoff[0] != SF2000_PROGRESS_LIVE_MAGIC ||
++	    handoff[2] == 0 || handoff[2] == 0xffffffffu)
+ 		return;
+ 
+ 	cache_flush(sector, SF2000_LIVE_SECTOR_SIZE);
+-	disk_write((unsigned char)log->reserved[1], sector, log->reserved[2], 1);
++	disk_write((unsigned char)handoff[1], sector, handoff[2], 1);
+ }
+ 
+ static void __attribute__((unused)) sf2000_live_progress_write(const char *name, unsigned int kind,
+@@ -433,6 +434,6 @@ static void __attribute__((unused)) sf2000_live_progress_write(const char *name,
+ {
+ 	static char sector[SF2000_LIVE_SECTOR_SIZE] __aligned(16);
+-	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
++	volatile unsigned int *handoff = SF2000_LIVE_HANDOFF_KSEG1;
+ 	unsigned int pos = 0;
+ 	unsigned int i;
+ 
+@@ -449,9 +451,9 @@ static void __attribute__((unused)) sf2000_live_progress_write(const char *name,
+ 	sf2000_live_puts(sector, &pos, " value=");
+ 	sf2000_live_hex(sector, &pos, value);
+ 	sf2000_live_puts(sector, &pos, " pdrv=");
+-	sf2000_live_hex(sector, &pos, log->reserved[1]);
++	sf2000_live_hex(sector, &pos, handoff[1]);
+ 	sf2000_live_puts(sector, &pos, " lba=");
+-	sf2000_live_hex(sector, &pos, log->reserved[2]);
++	sf2000_live_hex(sector, &pos, handoff[2]);
+ 	sf2000_live_puts(sector, &pos, "\nname=");
+ 	sf2000_live_puts(sector, &pos, name);
+ 	sf2000_live_puts(sector, &pos, "\nwdt_count=");
