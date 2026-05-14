@@ -60,7 +60,6 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
-static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", 0 };
 static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
@@ -72,10 +71,10 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
-static unsigned long pad_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_stack[SERVICE_STACK_WORDS];
 static volatile unsigned char *direct_pad_sysio;
 static int direct_select_armed = 1;
+static unsigned int direct_last_buttons = 0xffffffffu;
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -511,6 +510,13 @@ static void direct_select_reboot_poll(void)
 {
 	unsigned int buttons = direct_scan_sf2000_buttons();
 
+	if (buttons != direct_last_buttons) {
+		direct_last_buttons = buttons;
+		if (buttons) {
+			log_message("sf2000_buildroot: direct buttons ");
+			log_hex_word(buttons);
+		}
+	}
 	if (!(buttons & (1u << SELECT_BUTTON_INDEX))) {
 		direct_select_armed = 1;
 		return;
@@ -620,8 +626,7 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
-	spawn_service("sf2000_buildroot: starting pad\n", pad_argv,
-		pad_stack);
+	log_message("sf2000_buildroot: direct SELECT reboot poll active\n");
 	diagnostic_watchdog_pet();
 	sleep_ms(50);
 	diagnostic_watchdog_pet();
