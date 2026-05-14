@@ -57,6 +57,7 @@ static char *const init_envp[] = {
 	"TERM=linux",
 	"SF2000_PAD_PROFILE=sf2000",
 	"SF2000_SCREEN=0",
+	"SF2000_HEARTBEAT=0",
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
@@ -391,6 +392,32 @@ static void log_hex_word(unsigned int value)
 	write_all(1, buf);
 }
 
+static int path_exists(const char *path)
+{
+	long fd = syscall3(SYS_open, (long)path, O_RDONLY, 0);
+
+	if (fd < 0)
+		return 0;
+	syscall1(SYS_close, fd);
+	return 1;
+}
+
+static void wait_for_screen_ready(void)
+{
+	unsigned int i;
+
+	log_message("sf2000_buildroot: waiting screen ready\n");
+	for (i = 0; i < 80; i++) {
+		if (path_exists("/run/sf2000-screen-ready")) {
+			log_message("sf2000_buildroot: screen ready\n");
+			return;
+		}
+		diagnostic_watchdog_pet();
+		sleep_ms(125);
+	}
+	log_message("sf2000_buildroot: screen ready timeout\n");
+}
+
 static unsigned long service_stack_top(unsigned long *stack)
 {
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
@@ -456,6 +483,8 @@ void sf2000_init_main(void)
 
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
+	diagnostic_watchdog_pet();
+	wait_for_screen_ready();
 	diagnostic_watchdog_pet();
 	spawn_service("sf2000_buildroot: starting rcS\n", rcs_argv, rcs_stack);
 	diagnostic_watchdog_pet();
