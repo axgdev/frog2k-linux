@@ -50,14 +50,17 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const rcs_argv[] = { "/bin/sh", "/etc/init.d/rcS", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
 	"TERM=linux",
 	"SF2000_PAD_PROFILE=sf2000",
+	"SF2000_SCREEN=0",
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
+static unsigned long rcs_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -454,7 +457,9 @@ void sf2000_init_main(void)
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
-	log_message("sf2000_buildroot: libc helpers deferred\n");
+	spawn_service("sf2000_buildroot: starting rcS\n", rcs_argv, rcs_stack);
+	diagnostic_watchdog_pet();
+	log_message("sf2000_buildroot: libc helpers started\n");
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	for (;;) {

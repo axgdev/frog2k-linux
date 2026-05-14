@@ -125,11 +125,11 @@
 			clock-names = "biu", "ciu";
 			clock-frequency = <49000000>;
 			fifo-depth = <32>;
-			bus-width = <4>;
+			bus-width = <1>;
 			card-detect-delay = <200>;
-			cap-sd-highspeed;
+			broken-cd;
 			disable-wp;
-			non-removable;
+			no-1-8-v;
 			status = "okay";
 		};
 

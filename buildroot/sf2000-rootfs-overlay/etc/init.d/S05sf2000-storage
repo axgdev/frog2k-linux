@@ -30,7 +30,10 @@ case "$1" in
 		done
 		log "probe begin"
 		dump_file proc-partitions /proc/partitions
+		dump_file proc-devices /proc/devices
 		log "sys-block $(ls /sys/block 2>/dev/null | tr '\n' ' ')"
+		log "sys-mmc-host $(ls /sys/class/mmc_host 2>/dev/null | tr '\n' ' ')"
+		log "platform-devices $(ls /sys/bus/platform/devices 2>/dev/null | tr '\n' ' ')"
 		log "dev-mmc $(ls /dev/mmc* 2>/dev/null | tr '\n' ' ')"
 		mkdir -p /mnt/sd
 		for dev in /dev/mmcblk0p1 /dev/mmcblk0; do

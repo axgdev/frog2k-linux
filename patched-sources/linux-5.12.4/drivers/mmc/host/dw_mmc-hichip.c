@@ -15,6 +15,7 @@
 #define HC_SYS_SFCLK		0x1880007c
 #define HC_SYS_IO_VOLTAGE	0x18800184
 #define HC_SYS_CLK_GATE0	0x18800060
+#define HC_SYS_PINMUX_L		0x188004a0
 
 #define HC_SDIO_CLK_GATE_BIT	1
 #define HC_SDIO_CLK_SEL_SHIFT	20
@@ -23,6 +24,10 @@
 #define HC_SDIO_CLK_99MHZ	(0x1 << HC_SDIO_CLK_SEL_SHIFT)
 #define HC_SDIO_CLK_150MHZ	(0x2 << HC_SDIO_CLK_SEL_SHIFT)
 #define HC_SDIO_CLK_198MHZ	(0x3 << HC_SDIO_CLK_SEL_SHIFT)
+
+#define HC_SDIO_PIN_FIRST	16
+#define HC_SDIO_PIN_LAST	21
+#define HC_SDIO_PIN_CD		22
 
 static void hc_update32(u32 phys, u32 clear, u32 set)
 {
@@ -39,6 +44,29 @@ static void hc_update32(u32 phys, u32 clear, u32 set)
 	iounmap(reg);
 }
 
+static void hc_write8(u32 phys, u8 value)
+{
+	void __iomem *reg = ioremap(phys, sizeof(u8));
+
+	if (!reg)
+		return;
+	writeb(value, reg);
+	iounmap(reg);
+}
+
+static void hc_sdio_pinmux(void)
+{
+	unsigned int pin;
+
+	for (pin = HC_SDIO_PIN_FIRST; pin <= HC_SDIO_PIN_LAST; pin++)
+		hc_write8(HC_SYS_PINMUX_L + pin, 4);
+
+	/* L22 is card-detect GPIO in the SF2000 hcrtos board description. */
+	hc_write8(HC_SYS_PINMUX_L + HC_SDIO_PIN_CD, 0);
+
+	pr_info("dw_mmc-hichip: pinmux L16-L21=sdio L22=gpio\n");
+}
+
 static u32 hc_sdio_clock_select(unsigned long hz)
 {
 	if (hz >= 198000000)
@@ -53,6 +81,8 @@ static u32 hc_sdio_clock_select(unsigned long hz)
 static int dw_mci_hichip_init(struct dw_mci *host)
 {
 	u32 clk_sel = hc_sdio_clock_select(host->bus_hz);
+
+	hc_sdio_pinmux();
 
 	pr_info("dw_mmc-hichip: bus_hz=%u clk_sel=0x%x\n",
 		host->bus_hz, clk_sel >> HC_SDIO_CLK_SEL_SHIFT);
@@ -93,6 +123,8 @@ static int dw_mci_hichip_probe(struct platform_device *pdev)
 		if (match && match->data)
 			drv_data = match->data;
 	}
+
+	dev_info(&pdev->dev, "registering Hichip DW-MSHC host\n");
 
 	return dw_mci_pltfm_register(pdev, drv_data);
 }
