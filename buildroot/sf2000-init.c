@@ -5,6 +5,8 @@ typedef unsigned int size_t;
 #define SYS_open 4005
 #define SYS_close 4006
 #define SYS_execve 4011
+#define SYS_sync 4036
+#define SYS_reboot 4088
 #define SYS_clone 4120
 #define SYS_pause 4029
 #define SYS_dup2 4063
@@ -31,10 +33,15 @@ typedef unsigned int size_t;
 #define PINMUX_R_OFF 0x4e0UL
 #define GPIO_L_OUT_OFF 0x54UL
 #define GPIO_L_DIR_OFF 0x58UL
+#define GPIO_L_IN_OFF 0x50UL
 #define GPIO_R_OUT_OFF 0xf4UL
 #define GPIO_R_DIR_OFF 0xf8UL
+#define PIN_L23 23UL
+#define PIN_L24 24UL
 #define PIN_L25 25UL
 #define PIN_R05 5UL
+#define SELECT_BUTTON_INDEX 6UL
+#define KEY_SHIFTER_BITS 12UL
 #define STATUS_L25 (1UL << PIN_L25)
 #define BACKLIGHT_R05 (1UL << PIN_R05)
 #define WDT_MAP_BASE_PHYS 0x18818000UL
@@ -43,6 +50,9 @@ typedef unsigned int size_t;
 #define WDT_COUNT_OFF 0x00UL
 #define WDT_CONF_OFF 0x04UL
 #define WDT_DIAG_COUNT 0xffc61075UL
+#define LINUX_REBOOT_MAGIC1 0xfee1deadUL
+#define LINUX_REBOOT_MAGIC2 0x28121969UL
+#define LINUX_REBOOT_CMD_RESTART 0x01234567UL
 
 struct timespec {
 	long tv_sec;
@@ -50,6 +60,7 @@ struct timespec {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", 0 };
 static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
@@ -61,7 +72,10 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
+static unsigned long pad_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_stack[SERVICE_STACK_WORDS];
+static volatile unsigned char *direct_pad_sysio;
+static int direct_select_armed = 1;
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -404,12 +418,121 @@ static int path_exists(const char *path)
 	return 1;
 }
 
+static void short_delay(void)
+{
+	volatile unsigned int spin;
+
+	for (spin = 0; spin < 1200u; spin++)
+		__asm__ volatile ("" ::: "memory");
+}
+
+static volatile unsigned char *map_sysio_once(void)
+{
+	long fd;
+
+	if (direct_pad_sysio)
+		return direct_pad_sysio;
+
+	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
+	if (fd < 0) {
+		direct_pad_sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+		return direct_pad_sysio;
+	}
+
+	direct_pad_sysio = sys_mmap2(0, SYSIO_SIZE, PROT_READ | PROT_WRITE,
+		MAP_SHARED, fd, SYSIO_BASE_PHYS);
+	syscall1(SYS_close, fd);
+	if ((long)direct_pad_sysio < 0)
+		direct_pad_sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+	return direct_pad_sysio;
+}
+
+static void gpio_l_configure(volatile unsigned char *sysio, unsigned long pin,
+		int output)
+{
+	unsigned int bit = 1u << pin;
+	unsigned int dir;
+
+	mmio_write8(sysio, PINMUX_L_OFF + pin, 0);
+	dir = mmio_read32(sysio, GPIO_L_DIR_OFF);
+	if (output)
+		dir |= bit;
+	else
+		dir &= ~bit;
+	mmio_write32(sysio, GPIO_L_DIR_OFF, dir);
+}
+
+static void gpio_l_set(volatile unsigned char *sysio, unsigned long pin,
+		int high)
+{
+	unsigned int bit = 1u << pin;
+	unsigned int out = mmio_read32(sysio, GPIO_L_OUT_OFF);
+
+	if (high)
+		out |= bit;
+	else
+		out &= ~bit;
+	mmio_write32(sysio, GPIO_L_OUT_OFF, out);
+}
+
+static int gpio_l_get(volatile unsigned char *sysio, unsigned long pin)
+{
+	return (mmio_read32(sysio, GPIO_L_IN_OFF) >> pin) & 1u;
+}
+
+static unsigned int direct_scan_sf2000_buttons(void)
+{
+	volatile unsigned char *sysio = map_sysio_once();
+	unsigned int raw_mask = 0;
+	unsigned int i;
+
+	gpio_l_configure(sysio, PIN_L24, 1);
+	gpio_l_set(sysio, PIN_L24, 1);
+	gpio_l_configure(sysio, PIN_L23, 1);
+	gpio_l_set(sysio, PIN_L23, 0);
+	short_delay();
+	gpio_l_configure(sysio, PIN_L23, 0);
+	short_delay();
+
+	for (i = 0; i < KEY_SHIFTER_BITS; i++) {
+		if (1 ^ gpio_l_get(sysio, PIN_L23))
+			raw_mask |= 1u << i;
+
+		gpio_l_set(sysio, PIN_L24, 0);
+		short_delay();
+		gpio_l_set(sysio, PIN_L24, 1);
+		short_delay();
+	}
+
+	return raw_mask;
+}
+
+static void direct_select_reboot_poll(void)
+{
+	unsigned int buttons = direct_scan_sf2000_buttons();
+
+	if (!(buttons & (1u << SELECT_BUTTON_INDEX))) {
+		direct_select_armed = 1;
+		return;
+	}
+	if (!direct_select_armed)
+		return;
+
+	direct_select_armed = 0;
+	log_message("sf2000_buildroot: SELECT pressed, rebooting\n");
+	syscall1(SYS_sync, 0);
+	syscall4(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+		LINUX_REBOOT_CMD_RESTART, 0);
+	log_message("sf2000_buildroot: reboot syscall returned\n");
+}
+
 static void wait_for_screen_ready(void)
 {
 	unsigned int i;
 
 	log_message("sf2000_buildroot: waiting screen ready\n");
 	for (i = 0; i < 80; i++) {
+		direct_select_reboot_poll();
 		if (path_exists("/run/sf2000-screen-ready")) {
 			log_message("sf2000_buildroot: screen ready\n");
 			return;
@@ -497,20 +620,26 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 
+	spawn_service("sf2000_buildroot: starting pad\n", pad_argv,
+		pad_stack);
+	diagnostic_watchdog_pet();
+	sleep_ms(50);
+	diagnostic_watchdog_pet();
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
 	sleep_ms(200);
 	diagnostic_watchdog_pet();
+	wait_for_screen_ready();
 	spawn_vfork_service("sf2000_buildroot: starting storage probe\n",
 		storage_argv, storage_stack);
 	diagnostic_watchdog_pet();
-	wait_for_screen_ready();
 	log_message("sf2000_buildroot: libc helpers started\n");
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	for (;;) {
 		reap_children();
+		direct_select_reboot_poll();
 		diagnostic_watchdog_pet();
 		sleep_ms(250);
 	}
