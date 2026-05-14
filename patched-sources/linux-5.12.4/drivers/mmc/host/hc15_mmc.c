@@ -151,6 +151,7 @@ static void hc15_prepare_soc(void)
 static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 {
 	u8 value;
+	u8 rsp = cmd->flags & 0x1f;
 
 	switch (cmd->flags & MMC_CMD_MASK) {
 	case MMC_CMD_BC:
@@ -168,20 +169,22 @@ static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 		break;
 	}
 
-	switch (cmd->opcode) {
-	case MMC_GO_IDLE_STATE:
+	switch (rsp) {
+	case 0:
 		break;
-	case MMC_SEND_OP_COND:
-	case MMC_ALL_SEND_CID:
-	case SD_SEND_RELATIVE_ADDR:
-	case SD_SEND_IF_COND:
+	case MMC_RSP_PRESENT:
 		value |= 0x30;
 		break;
-	case MMC_SELECT_CARD:
+	case MMC_RSP_PRESENT | MMC_RSP_136 | MMC_RSP_CRC:
 		value |= 0x20;
 		break;
 	default:
-		value |= 0x10;
+		if ((rsp == MMC_RSP_R1 || rsp == MMC_RSP_R1B) &&
+		    (cmd->opcode == SD_SEND_RELATIVE_ADDR ||
+		     cmd->opcode == SD_SEND_IF_COND))
+			value |= 0x40;
+		else
+			value |= 0x10;
 		break;
 	}
 
@@ -203,6 +206,7 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	writeb(cmdctl, host->base + HC15_REG_CMDCTL);
 
 	hc15_mark("hc15-cmd", cmd->opcode);
+	hc15_mark("hc15-flags", cmd->flags);
 	hc15_mark("hc15-cmdctl", cmdctl);
 	hc15_mark("hc15-cmdidx", cmdidx);
 }
@@ -503,7 +507,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0182);
+	hc15_mark("hc15-probe", 0x0183);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
