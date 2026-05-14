@@ -80,7 +80,10 @@ extern char **environ;
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
+#define WDT_CONF_OFF 0x04u
 #define WDT_PET_COUNT 0xffc61075u
+#define WDT_RESTART_COUNT 0xfffff000u
+#define WDT_RESTART_CONF 0x67u
 
 #define PINPAD_L01 1u
 #define PINPAD_L02 2u
@@ -513,6 +516,19 @@ static void watchdog_pet(void)
 		WDT_PET_COUNT;
 }
 
+static void watchdog_restart_now(void)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
+	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
+		WDT_RESTART_COUNT;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) =
+		WDT_RESTART_CONF;
+	for (;;)
+		__asm__ volatile ("" ::: "memory");
+}
+
 static void sleep_ms(unsigned msec)
 {
 	volatile unsigned spin;
@@ -693,16 +709,16 @@ static void runtime_watchdog_arm(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
-	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
 	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) = 0xffe64035u;
-	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0x26;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0x26;
 }
 
 static void runtime_watchdog_disable(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
-	*(volatile uint8_t *)(wdt + WDT_REG_OFF + 4) = 0;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
 }
 
 static void panel_vou_rgb_enable(void)
@@ -1569,13 +1585,13 @@ static int console_handle_buttons(uint32_t buttons)
 	int page = (int)CONSOLE_ROWS - 3;
 
 	if (buttons & CONSOLE_BTN_SELECT) {
-		console_add_line("SELECT pressed: rebooting");
-		log_line("sf2000-screen: SELECT pressed, rebooting\n");
+		console_add_line("SELECT pressed: restarting");
+		log_line("sf2000-screen: SELECT pressed, restarting\n");
 		sync();
 		reboot(LINUX_REBOOT_CMD_RESTART);
-		console_add_line("reboot syscall returned");
-		log_line("sf2000-screen: reboot syscall returned\n");
-		changed = 1;
+		console_add_line("reboot syscall returned, watchdog reset");
+		log_line("sf2000-screen: reboot syscall returned, watchdog reset\n");
+		watchdog_restart_now();
 	}
 	if (buttons & CONSOLE_BTN_UP)
 		changed |= console_scroll_delta(1);

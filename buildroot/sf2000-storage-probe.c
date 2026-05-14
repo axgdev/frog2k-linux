@@ -97,8 +97,11 @@ static int try_mount_write(const char *dev)
 {
 	int fd;
 
-	if (access(dev, R_OK) != 0)
+	if (access(dev, R_OK) != 0) {
+		log_msgf("sf2000_storage_probe: missing %s errno=%d\n",
+			dev, errno);
 		return -1;
+	}
 	log_msgf("sf2000_storage_probe: mount try %s\n", dev);
 	if (mount(dev, "/mnt/sd", "vfat", MS_SYNCHRONOUS, "") != 0) {
 		log_msgf("sf2000_storage_probe: mount failed %s errno=%d\n",
@@ -106,13 +109,13 @@ static int try_mount_write(const char *dev)
 		return -1;
 	}
 	log_msgf("sf2000_storage_probe: mount ok %s\n", dev);
-	fd = open("/mnt/sd/sf2000-linux-rw-0172.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0173.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0172\n";
+		const char msg[] = "sf2000 linux sd write test 0173\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
@@ -133,8 +136,12 @@ int main(void)
 	ensure_mounts();
 	log_dir("sys-block", "/sys/block");
 	log_dir("mmc-host", "/sys/class/mmc_host");
+	log_dir("platform-devices", "/sys/bus/platform/devices");
+	log_dir("platform-drivers", "/sys/bus/platform/drivers");
 	log_dir("dev", "/dev");
 	log_file_head("proc-partitions", "/proc/partitions");
+	log_file_head("proc-devices", "/proc/devices");
+	log_file_head("proc-interrupts", "/proc/interrupts");
 	if (try_mount_write("/dev/mmcblk0p1") != 0)
 		(void)try_mount_write("/dev/mmcblk0");
 	log_line("sf2000_storage_probe: done\n");
