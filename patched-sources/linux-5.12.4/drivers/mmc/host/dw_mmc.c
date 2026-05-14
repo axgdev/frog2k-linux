@@ -210,6 +210,13 @@ static bool dw_mci_ctrl_reset(struct dw_mci *host, u32 reset)
 
 	ctrl = mci_readl(host, CTRL);
 	dw_mci_sf2000_mark(host, "dw-reset-before-ctrl", ctrl);
+	if (hichip) {
+		dw_mci_sf2000_mark(host, "dw-reset-skip-hcon",
+				    mci_readl(host, HCON));
+		dw_mci_sf2000_mark(host, "dw-reset-skip-status",
+				    mci_readl(host, STATUS));
+		return true;
+	}
 	ctrl |= reset;
 	mci_writel(host, CTRL, ctrl);
 	dw_mci_sf2000_mark(host, "dw-reset-write-ctrl", ctrl);
@@ -271,6 +278,8 @@ static void mci_send_cmd(struct dw_mci_slot *slot, u32 cmd, u32 arg)
 	struct dw_mci *host = slot->host;
 	unsigned int cmd_status = 0;
 
+	dw_mci_sf2000_mark(host, "dw-send-cmd", cmd);
+	dw_mci_sf2000_mark(host, "dw-send-arg", arg);
 	mci_writel(host, CMDARG, arg);
 	wmb(); /* drain writebuffer */
 	dw_mci_wait_while_busy(host, cmd);
@@ -278,10 +287,16 @@ static void mci_send_cmd(struct dw_mci_slot *slot, u32 cmd, u32 arg)
 
 	if (readl_poll_timeout_atomic(host->regs + SDMMC_CMD, cmd_status,
 				      !(cmd_status & SDMMC_CMD_START),
-				      1, 500 * USEC_PER_MSEC))
+				      1, 500 * USEC_PER_MSEC)) {
+		dw_mci_sf2000_mark(host, "dw-send-timeout", cmd_status);
+		dw_mci_sf2000_mark(host, "dw-send-rint", mci_readl(host, RINTSTS));
+		dw_mci_sf2000_mark(host, "dw-send-status", mci_readl(host, STATUS));
 		dev_err(&slot->mmc->class_dev,
 			"Timeout sending command (cmd %#x arg %#x status %#x)\n",
 			cmd, arg, cmd_status);
+	} else {
+		dw_mci_sf2000_mark(host, "dw-send-done", cmd_status);
+	}
 }
 
 static u32 dw_mci_prepare_command(struct mmc_host *mmc, struct mmc_command *cmd)
@@ -441,6 +456,8 @@ static void dw_mci_start_command(struct dw_mci *host,
 	wmb(); /* drain writebuffer */
 	dw_mci_wait_while_busy(host, cmd_flags);
 
+	dw_mci_sf2000_mark(host, "dw-start-opcode", cmd->opcode);
+	dw_mci_sf2000_mark(host, "dw-start-flags", cmd_flags);
 	mci_writel(host, CMD, cmd_flags | SDMMC_CMD_START);
 
 	/* response expected command only */
@@ -3003,6 +3020,7 @@ static void dw_mci_init_dma(struct dw_mci *host)
 no_dma:
 	dev_info(host->dev, "Using PIO mode.\n");
 	host->use_dma = TRANS_MODE_PIO;
+	dw_mci_sf2000_mark(host, "dw-pio-ready", mci_readl(host, HCON));
 }
 
 static void dw_mci_cmd11_timer(struct timer_list *t)
@@ -3306,10 +3324,12 @@ int dw_mci_probe(struct dw_mci *host)
 
 	host->dma_ops = host->pdata->dma_ops;
 	dw_mci_init_dma(host);
+	dw_mci_sf2000_mark(host, "dw-after-init-dma", host->use_dma);
 
 	/* Clear the interrupts for the host controller */
 	mci_writel(host, RINTSTS, 0xFFFFFFFF);
 	mci_writel(host, INTMASK, 0); /* disable all mmc interrupt first */
+	dw_mci_sf2000_mark(host, "dw-after-mask", mci_readl(host, CTRL));
 
 	/* Put in max timeout */
 	mci_writel(host, TMOUT, 0xFFFFFFFF);
@@ -3334,10 +3354,12 @@ int dw_mci_probe(struct dw_mci *host)
 	host->fifoth_val =
 		SDMMC_SET_FIFOTH(0x2, fifo_size / 2 - 1, fifo_size / 2);
 	mci_writel(host, FIFOTH, host->fifoth_val);
+	dw_mci_sf2000_mark(host, "dw-after-fifoth", host->fifoth_val);
 
 	/* disable clock to CIU */
 	mci_writel(host, CLKENA, 0);
 	mci_writel(host, CLKSRC, 0);
+	dw_mci_sf2000_mark(host, "dw-after-clk-off", mci_readl(host, CLKENA));
 
 	/*
 	 * In 2.40a spec, Data offset is changed.
@@ -3358,6 +3380,7 @@ int dw_mci_probe(struct dw_mci *host)
 			       host->irq_flags, "dw-mci", host);
 	if (ret)
 		goto err_dmaunmap;
+	dw_mci_sf2000_mark(host, "dw-after-request-irq", (u32)ret);
 
 	/*
 	 * Enable interrupts for command done, data over, data empty,
@@ -3368,6 +3391,7 @@ int dw_mci_probe(struct dw_mci *host)
 		   DW_MCI_ERROR_FLAGS);
 	/* Enable mci interrupt */
 	mci_writel(host, CTRL, SDMMC_CTRL_INT_ENABLE);
+	dw_mci_sf2000_mark(host, "dw-after-int-enable", mci_readl(host, CTRL));
 
 	dev_info(host->dev,
 		 "DW MMC controller at irq %d,%d bit host data width,%u deep fifo\n",
@@ -3375,6 +3399,7 @@ int dw_mci_probe(struct dw_mci *host)
 
 	/* We need at least one slot to succeed */
 	ret = dw_mci_init_slot(host);
+	dw_mci_sf2000_mark(host, "dw-after-init-slot", (u32)ret);
 	if (ret) {
 		dev_dbg(host->dev, "slot %d init failed\n", i);
 		goto err_dmaunmap;
@@ -3382,6 +3407,7 @@ int dw_mci_probe(struct dw_mci *host)
 
 	/* Now that slots are all setup, we can enable card detect */
 	dw_mci_enable_cd(host);
+	dw_mci_sf2000_mark(host, "dw-probe-done", mci_readl(host, STATUS));
 
 	return 0;
 
