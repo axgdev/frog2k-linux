@@ -1,5 +1,5 @@
---- a/drivers/mmc/host/Kconfig	2026-05-14 18:08:59.828471709 +0000
-+++ b/drivers/mmc/host/Kconfig	2026-05-14 17:06:41.484203439 +0000
+--- a/drivers/mmc/host/Kconfig
++++ b/drivers/mmc/host/Kconfig
 @@ -818,6 +818,15 @@
  	  The first SF2000 bring-up uses this for conservative SD-card block
  	  I/O before enabling high-speed tuning.
@@ -16,8 +16,8 @@
  config MMC_DW_BLUEFIELD
  	tristate "BlueField specific extensions for Synopsys DW Memory Card Interface"
  	depends on MMC_DW
---- a/drivers/mmc/host/Makefile	2026-05-14 18:08:59.828994750 +0000
-+++ b/drivers/mmc/host/Makefile	2026-05-14 17:06:49.064408392 +0000
+--- a/drivers/mmc/host/Makefile
++++ b/drivers/mmc/host/Makefile
 @@ -57,6 +57,7 @@
  obj-$(CONFIG_MMC_DW_EXYNOS)	+= dw_mmc-exynos.o
  obj-$(CONFIG_MMC_DW_HI3798CV200) += dw_mmc-hi3798cv200.o
@@ -26,8 +26,8 @@
  obj-$(CONFIG_MMC_DW_K3)		+= dw_mmc-k3.o
  obj-$(CONFIG_MMC_DW_PCI)	+= dw_mmc-pci.o
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
---- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
-+++ b/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.000000000 +0000
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
 @@ -0,0 +1,616 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
@@ -210,7 +210,7 @@
 +
 +	switch (cmd->flags & MMC_CMD_MASK) {
 +	case MMC_CMD_BC:
-+		value = 0x00;
++		value = 0x04;
 +		break;
 +	case MMC_CMD_BCR:
 +		value = 0x02;
@@ -220,7 +220,7 @@
 +		break;
 +	case MMC_CMD_AC:
 +	default:
-+		value = 0x04;
++		value = 0x00;
 +		break;
 +	}
 +
@@ -573,7 +573,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0185);
++	hc15_mark("hc15-probe", 0x0186);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

@@ -179,7 +179,7 @@ static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 
 	switch (cmd->flags & MMC_CMD_MASK) {
 	case MMC_CMD_BC:
-		value = 0x00;
+		value = 0x04;
 		break;
 	case MMC_CMD_BCR:
 		value = 0x02;
@@ -189,7 +189,7 @@ static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
 		break;
 	case MMC_CMD_AC:
 	default:
-		value = 0x04;
+		value = 0x00;
 		break;
 	}
 
@@ -542,7 +542,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0185);
+	hc15_mark("hc15-probe", 0x0186);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
