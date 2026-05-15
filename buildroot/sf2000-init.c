@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0202UL
+#define INIT_TAG 0x0203UL
 
 struct timespec {
 	long tv_sec;
@@ -472,38 +472,6 @@ static int path_exists(const char *path)
 	return 1;
 }
 
-static void wait_for_screen_ready(void)
-{
-	unsigned int i;
-
-	log_message("sf2000_buildroot: waiting screen ready\n");
-	progress_mark("init-wait-screen", 0x3eu, INIT_TAG);
-	for (i = 0; i < 16; i++) {
-		if (path_exists("/run/sf2000-screen-ready")) {
-			log_message("sf2000_buildroot: screen ready\n");
-			progress_mark("init-screen-ready", 0x3eu, i);
-			return;
-		}
-		diagnostic_watchdog_pet();
-		sleep_ms(125);
-	}
-	log_message("sf2000_buildroot: screen ready timeout\n");
-	progress_mark("init-screen-timeout", 0x3eu, INIT_TAG);
-}
-
-static void settle_screen_before_storage(void)
-{
-	unsigned int i;
-
-	log_message("sf2000_buildroot: screen settle before storage\n");
-	progress_mark("init-screen-settle", 0x3eu, INIT_TAG);
-	for (i = 0; i < 24; i++) {
-		diagnostic_watchdog_pet();
-		sleep_ms(125);
-	}
-	progress_mark("init-screen-settle-done", 0x3eu, INIT_TAG);
-}
-
 static unsigned long service_stack_top(unsigned long *stack)
 {
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
@@ -563,6 +531,9 @@ static void reap_children(void)
 
 void sf2000_init_main(void)
 {
+	unsigned int storage_started = 0;
+	unsigned int screen_wait_ticks = 0;
+
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
 	progress_mark("init-stdio", 0x3eu, INIT_TAG);
@@ -589,22 +560,37 @@ void sf2000_init_main(void)
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
-	settle_screen_before_storage();
-	diagnostic_watchdog_pet();
-	progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
-	spawn_service("sf2000_buildroot: starting storage probe after screen\n",
-		storage_argv, storage_late_stack);
-	diagnostic_watchdog_pet();
-	wait_for_screen_ready();
-	log_message("sf2000_buildroot: libc helpers started\n");
-	progress_mark("init-helpers-started", 0x3eu, INIT_TAG);
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
 	for (;;) {
 		reap_children();
+		if (!storage_started) {
+			if (path_exists("/run/sf2000-screen-ready")) {
+				log_message("sf2000_buildroot: screen ready\n");
+				progress_mark("init-screen-ready", 0x3eu,
+					screen_wait_ticks);
+				storage_started = 1;
+			} else if (screen_wait_ticks >= 50u) {
+				log_message("sf2000_buildroot: screen ready timeout\n");
+				progress_mark("init-screen-timeout", 0x3eu,
+					screen_wait_ticks);
+				storage_started = 1;
+			} else {
+				screen_wait_ticks++;
+			}
+			if (storage_started) {
+				progress_mark("init-storage-spawn", 0x3eu,
+					INIT_TAG);
+				spawn_service("sf2000_buildroot: starting storage probe after screen\n",
+					storage_argv, storage_late_stack);
+				log_message("sf2000_buildroot: libc helpers started\n");
+				progress_mark("init-helpers-started", 0x3eu,
+					INIT_TAG);
+			}
+		}
 		diagnostic_watchdog_pet();
-		sleep_ms(250);
+		sleep_ms(100);
 	}
 
 	syscall1(SYS_exit, 1);

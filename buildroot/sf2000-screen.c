@@ -606,7 +606,7 @@ static void watchdog_restart_now(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
-	progress_mark("diag-watchdog-now", 0x30u, 0x0202u);
+	progress_mark("diag-watchdog-now", 0x30u, 0x0203u);
 	if (sysio)
 		backlight_set(1);
 	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
@@ -768,7 +768,7 @@ static void progress_mark_mmc_snapshot(const char *suffix)
 	progress_mark("diag-hc15-resp0", 0x32u, direct_read32(MMC_PHYS + HC15_RESP0));
 	progress_mark("diag-hc15-irqsts", 0x32u, direct_read8(MMC_PHYS + HC15_IRQSTS));
 	progress_mark("diag-hc15-timing", 0x32u, direct_read8(MMC_PHYS + HC15_TIMING));
-	progress_mark(suffix, 0x32u, 0x0202u);
+	progress_mark(suffix, 0x32u, 0x0203u);
 }
 
 static void progress_mark_reset_snapshot_full(void)
@@ -776,7 +776,7 @@ static void progress_mark_reset_snapshot_full(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0202u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0203u);
 	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
@@ -823,7 +823,7 @@ static void progress_mark_reset_snapshot_full(void)
 
 	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0202u);
+	progress_mark("diag-reset-done", 0x30u, 0x0203u);
 }
 
 static void progress_mark_reset_snapshot_fast(void)
@@ -831,7 +831,7 @@ static void progress_mark_reset_snapshot_fast(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-fast-reset-begin", 0x30u, 0x0202u);
+	progress_mark("diag-fast-reset-begin", 0x30u, 0x0203u);
 	progress_mark_mmc_snapshot("diag-fast-mmc-done");
 	progress_mark("diag-fast-wdt-count", 0x31u,
 		direct_read32(WDT_BASE_PHYS + WDT_REG_OFF + WDT_COUNT_OFF));
@@ -847,7 +847,7 @@ static void progress_mark_reset_snapshot_fast(void)
 		pins |= (uint32_t)(direct_read8(SYSIO_PHYS + PINMUX_L_OFF + i) & 0xfu)
 			<< ((i - 16u) * 4u);
 	progress_mark("diag-fast-pin-l16-22", 0x31u, pins);
-	progress_mark("diag-fast-reset-done", 0x30u, 0x0202u);
+	progress_mark("diag-fast-reset-done", 0x30u, 0x0203u);
 }
 
 static void sleep_ms(unsigned msec)
@@ -1982,7 +1982,7 @@ static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
 		fds[i] = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	}
 	if (console_input_has_fd(fds))
-		console_add_line("dpad scroll: evdev up/down left/right");
+		console_add_line("dpad scroll: evdev plus raw fallback");
 	else
 		console_add_line("dpad scroll: raw sf2000 fallback");
 }
@@ -2335,10 +2335,12 @@ static void run_direct_console(unsigned *frame)
 
 		if (console_input_has_fd(input_fds)) {
 			console_poll_evdev_buttons(input_fds, &evdev_held);
-			changed |= console_handle_held_buttons(evdev_held);
+			changed |= console_handle_held_buttons(evdev_held |
+				console_poll_raw_buttons());
 		} else {
 			evdev_held = 0;
-			changed |= console_handle_held_buttons(console_poll_raw_buttons());
+			changed |= console_handle_held_buttons(
+				console_poll_raw_buttons());
 			if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
 				console_input_open_fds(input_fds);
 				input_retry = 0;

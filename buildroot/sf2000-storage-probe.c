@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -16,7 +17,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0202u
+#define STORAGE_TAG 0x0203u
 
 struct progress_entry {
 	uint32_t seq;
@@ -207,7 +208,54 @@ static void log_file_head(const char *label, const char *path)
 			((uint32_t)(unsigned char)buf[3] << 24));
 }
 
-static int try_mount_write(const char *dev)
+static void ensure_block_nodes(void)
+{
+	int ret;
+
+	errno = 0;
+	ret = mknod("/dev/mmcblk0", S_IFBLK | 0660, makedev(179, 0));
+	progress_mark("stor-mknod-mmc0-ret", 0x3du, (uint32_t)ret);
+	progress_mark("stor-mknod-mmc0-err", 0x3du, (uint32_t)errno);
+	errno = 0;
+	ret = mknod("/dev/mmcblk0p1", S_IFBLK | 0660, makedev(179, 1));
+	progress_mark("stor-mknod-mmc0p1-ret", 0x3du, (uint32_t)ret);
+	progress_mark("stor-mknod-mmc0p1-err", 0x3du, (uint32_t)errno);
+	errno = 0;
+	ret = mknod("/dev/mmcblk0p2", S_IFBLK | 0660, makedev(179, 2));
+	progress_mark("stor-mknod-mmc0p2-ret", 0x3du, (uint32_t)ret);
+	progress_mark("stor-mknod-mmc0p2-err", 0x3du, (uint32_t)errno);
+}
+
+static void log_block_head(const char *dev)
+{
+	unsigned char buf[512];
+	ssize_t got;
+	int fd;
+
+	progress_mark("stor-blk-open-begin", 0x3du, hash_name(dev));
+	fd = open(dev, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		log_msgf("sf2000_storage_probe: block open failed %s errno=%d\n",
+			dev, errno);
+		progress_mark("stor-blk-open-fail", 0x3du, (uint32_t)errno);
+		return;
+	}
+	progress_mark("stor-blk-open-ok", 0x3du, hash_name(dev));
+	got = read(fd, buf, sizeof(buf));
+	progress_mark("stor-blk-read-ret", 0x3du, (uint32_t)got);
+	if (got >= 4)
+		progress_mark("stor-blk-head0", 0x3du,
+			(uint32_t)buf[0] |
+			((uint32_t)buf[1] << 8) |
+			((uint32_t)buf[2] << 16) |
+			((uint32_t)buf[3] << 24));
+	if (got >= 512)
+		progress_mark("stor-blk-sig", 0x3du,
+			(uint32_t)buf[510] | ((uint32_t)buf[511] << 8));
+	close(fd);
+}
+
+static int try_mount_write_type(const char *dev, const char *fstype)
 {
 	int fd;
 
@@ -218,23 +266,25 @@ static int try_mount_write(const char *dev)
 		progress_mark("stor-missing", 0x3du, (uint32_t)errno);
 		return -1;
 	}
-	log_msgf("sf2000_storage_probe: mount try %s\n", dev);
-	if (mount(dev, "/mnt/sd", "vfat", MS_SYNCHRONOUS, "") != 0) {
-		log_msgf("sf2000_storage_probe: mount failed %s errno=%d\n",
-			dev, errno);
+	log_msgf("sf2000_storage_probe: mount try %s type=%s\n", dev, fstype);
+	progress_mark("stor-mount-type", 0x3du, hash_name(fstype));
+	errno = 0;
+	if (mount(dev, "/mnt/sd", fstype, MS_SYNCHRONOUS, "") != 0) {
+		log_msgf("sf2000_storage_probe: mount failed %s type=%s errno=%d\n",
+			dev, fstype, errno);
 		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
 		return -1;
 	}
-	log_msgf("sf2000_storage_probe: mount ok %s\n", dev);
+	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0202.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0203.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0202\n";
+		const char msg[] = "sf2000 linux sd write test 0203\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
@@ -254,11 +304,21 @@ static int try_mount_write(const char *dev)
 	return 0;
 }
 
+static int try_mount_write(const char *dev)
+{
+	if (try_mount_write_type(dev, "vfat") == 0)
+		return 0;
+	if (try_mount_write_type(dev, "msdos") == 0)
+		return 0;
+	return -1;
+}
+
 int main(void)
 {
 	progress_mark("stor-start", 0x3au, STORAGE_TAG);
 	log_line("sf2000_storage_probe: start\n");
 	ensure_mounts();
+	ensure_block_nodes();
 	log_dir("sys-block", "/sys/block");
 	log_dir("mmc-host", "/sys/class/mmc_host");
 	log_dir("platform-devices", "/sys/bus/platform/devices");
@@ -267,7 +327,11 @@ int main(void)
 	log_file_head("proc-partitions", "/proc/partitions");
 	log_file_head("proc-devices", "/proc/devices");
 	log_file_head("proc-interrupts", "/proc/interrupts");
-	if (try_mount_write("/dev/mmcblk0p1") != 0)
+	log_block_head("/dev/mmcblk0");
+	log_block_head("/dev/mmcblk0p1");
+	log_block_head("/dev/mmcblk0p2");
+	if (try_mount_write("/dev/mmcblk0p1") != 0 &&
+	    try_mount_write("/dev/mmcblk0p2") != 0)
 		(void)try_mount_write("/dev/mmcblk0");
 	log_line("sf2000_storage_probe: done\n");
 	progress_mark("stor-done", 0x3au, STORAGE_TAG);
