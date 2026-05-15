@@ -27,7 +27,7 @@
  obj-$(CONFIG_MMC_DW_PCI)	+= dw_mmc-pci.o
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.004000000 +0000
-+++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 05:55:33.772390267 +0000
++++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 06:16:42.295595245 +0000
 @@ -0,0 +1,848 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
@@ -804,7 +804,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0196);
++	hc15_mark("hc15-probe", 0x0197);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

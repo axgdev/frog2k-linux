@@ -43,10 +43,34 @@ typedef unsigned int size_t;
 #define WDT_COUNT_OFF 0x00UL
 #define WDT_CONF_OFF 0x04UL
 #define WDT_DIAG_COUNT 0xffc61075UL
+#define PROGRESS_PHYS 0x013f0000UL
+#define PROGRESS_MAGIC 0x52504653UL
+#define PROGRESS_VERSION 1UL
+#define PROGRESS_ENTRIES 1024UL
+#define PROGRESS_NAME_LEN 32UL
+#define INIT_TAG 0x0197UL
 
 struct timespec {
 	long tv_sec;
 	long tv_nsec;
+};
+
+struct progress_entry {
+	unsigned int seq;
+	unsigned int kind;
+	unsigned int value;
+	unsigned int name_ptr;
+	char name[PROGRESS_NAME_LEN];
+};
+
+struct progress_log {
+	unsigned int magic;
+	unsigned int version;
+	unsigned int write_index;
+	unsigned int wrapped;
+	unsigned int seq;
+	unsigned int reserved[11];
+	struct progress_entry entries[PROGRESS_ENTRIES];
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
@@ -62,11 +86,56 @@ static char *const init_envp[] = {
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_stack[SERVICE_STACK_WORDS];
+static unsigned long storage_late_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
-extern long sf2000_clone_service_vfork(unsigned long child_stack,
-		char *const argv[]);
+
+static void progress_copy_name(volatile char *dst, const char *src)
+{
+	unsigned int i;
+
+	for (i = 0; i < PROGRESS_NAME_LEN - 1u && src[i]; i++)
+		dst[i] = src[i];
+	for (; i < PROGRESS_NAME_LEN; i++)
+		dst[i] = 0;
+}
+
+static void progress_mark(const char *name, unsigned int kind,
+		unsigned int value)
+{
+	volatile struct progress_log *log =
+		(volatile struct progress_log *)KSEG1ADDR(PROGRESS_PHYS);
+	volatile struct progress_entry *entry;
+	unsigned int index;
+	unsigned int seq;
+	unsigned int i;
+
+	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
+		volatile unsigned int *p = (volatile unsigned int *)log;
+
+		for (i = 0; i < sizeof(*log) / sizeof(*p); i++)
+			p[i] = 0;
+		log->magic = PROGRESS_MAGIC;
+		log->version = PROGRESS_VERSION;
+	}
+
+	seq = log->seq + 1u;
+	index = log->write_index;
+	if (index >= PROGRESS_ENTRIES) {
+		index = 0;
+		log->wrapped = 1;
+	}
+
+	entry = &log->entries[index];
+	entry->seq = seq;
+	entry->kind = kind;
+	entry->value = value;
+	entry->name_ptr = (unsigned int)(unsigned long)name;
+	progress_copy_name(entry->name, name);
+	log->write_index = index + 1u;
+	log->seq = seq;
+}
 
 static long syscall1(long nr, long a0)
 {
@@ -409,15 +478,18 @@ static void wait_for_screen_ready(void)
 	unsigned int i;
 
 	log_message("sf2000_buildroot: waiting screen ready\n");
+	progress_mark("init-wait-screen", 0x3eu, INIT_TAG);
 	for (i = 0; i < 80; i++) {
 		if (path_exists("/run/sf2000-screen-ready")) {
 			log_message("sf2000_buildroot: screen ready\n");
+			progress_mark("init-screen-ready", 0x3eu, i);
 			return;
 		}
 		diagnostic_watchdog_pet();
 		sleep_ms(125);
 	}
 	log_message("sf2000_buildroot: screen ready timeout\n");
+	progress_mark("init-screen-timeout", 0x3eu, INIT_TAG);
 }
 
 static unsigned long service_stack_top(unsigned long *stack)
@@ -429,8 +501,10 @@ void service_child_exec(char *const *argv)
 {
 	long ret;
 
+	progress_mark("init-child-exec", 0x3eu, INIT_TAG);
 	ret = syscall3(SYS_execve, (long)argv[0], (long)argv,
 		(long)init_envp);
+	progress_mark("init-child-exec-fail", 0x3eu, (unsigned int)ret);
 	log_message("sf2000_buildroot: service exec failed\n");
 	log_message("sf2000_buildroot: service path ");
 	log_message(argv[0]);
@@ -449,8 +523,10 @@ static void spawn_service_with(const char *name, char *const argv[],
 	unsigned long child_stack = service_stack_top(stack);
 
 	log_message(name);
+	progress_mark("init-spawn-begin", 0x3eu, (unsigned int)child_stack);
 	diagnostic_watchdog_pet();
 	pid = clone_service(child_stack, argv);
+	progress_mark("init-spawn-ret", 0x3eu, (unsigned int)pid);
 	if (pid < 0) {
 		log_message("sf2000_buildroot: service clone failed ");
 		log_hex_word((unsigned int)pid);
@@ -467,12 +543,6 @@ static void spawn_service(const char *name, char *const argv[],
 	spawn_service_with(name, argv, stack, sf2000_clone_service);
 }
 
-static void spawn_vfork_service(const char *name, char *const argv[],
-		unsigned long *stack)
-{
-	spawn_service_with(name, argv, stack, sf2000_clone_service_vfork);
-}
-
 static void reap_children(void)
 {
 	while (syscall4(SYS_wait4, -1, 0, 1, 0) > 0)
@@ -481,7 +551,9 @@ static void reap_children(void)
 
 void sf2000_init_main(void)
 {
+	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
+	progress_mark("init-stdio", 0x3eu, INIT_TAG);
 	if (early_watchdog_disable() == 0)
 		log_message("sf2000_buildroot: early watchdog disabled\n");
 	else
@@ -496,6 +568,13 @@ void sf2000_init_main(void)
 	else
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
+	progress_mark("init-userspace-alive", 0x3eu, INIT_TAG);
+
+	diagnostic_watchdog_pet();
+	spawn_service("sf2000_buildroot: starting storage probe early\n",
+		storage_argv, storage_stack);
+	diagnostic_watchdog_pet();
+	sleep_ms(50);
 
 	log_message("sf2000_buildroot: screen owns keypad\n");
 	diagnostic_watchdog_pet();
@@ -507,12 +586,14 @@ void sf2000_init_main(void)
 	sleep_ms(200);
 	diagnostic_watchdog_pet();
 	wait_for_screen_ready();
-	spawn_vfork_service("sf2000_buildroot: starting storage probe\n",
-		storage_argv, storage_stack);
+	spawn_service("sf2000_buildroot: starting storage probe after screen\n",
+		storage_argv, storage_late_stack);
 	diagnostic_watchdog_pet();
 	log_message("sf2000_buildroot: libc helpers started\n");
+	progress_mark("init-helpers-started", 0x3eu, INIT_TAG);
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
+	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
 	for (;;) {
 		reap_children();
 		diagnostic_watchdog_pet();
