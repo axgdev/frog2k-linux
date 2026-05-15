@@ -380,10 +380,10 @@ static void hc15_get_response(struct hc15_mmc *host, struct mmc_command *cmd)
 		return;
 
 	if (cmd->flags & MMC_RSP_136) {
-		cmd->resp[0] = (r3 << 24) | (r2 >> 8);
-		cmd->resp[1] = (r2 << 24) | (r1 >> 8);
-		cmd->resp[2] = (r1 << 24) | (r0 >> 8);
-		cmd->resp[3] = r0 << 24;
+		cmd->resp[0] = r3;
+		cmd->resp[1] = r2;
+		cmd->resp[2] = r1;
+		cmd->resp[3] = r0;
 	} else {
 		cmd->resp[0] = (r1 << 24) | (r0 >> 8);
 	}
@@ -770,7 +770,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0194);
+	hc15_mark("hc15-probe", 0x0195);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
