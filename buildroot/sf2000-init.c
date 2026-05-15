@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0198UL
+#define INIT_TAG 0x0199UL
 
 struct timespec {
 	long tv_sec;
@@ -85,7 +85,6 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
-static unsigned long storage_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_late_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
@@ -569,12 +568,6 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 	progress_mark("init-userspace-alive", 0x3eu, INIT_TAG);
-
-	diagnostic_watchdog_pet();
-	spawn_service("sf2000_buildroot: starting storage probe early\n",
-		storage_argv, storage_stack);
-	diagnostic_watchdog_pet();
-	sleep_ms(50);
 
 	log_message("sf2000_buildroot: screen owns keypad\n");
 	diagnostic_watchdog_pet();
