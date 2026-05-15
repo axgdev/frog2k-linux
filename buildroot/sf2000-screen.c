@@ -17,6 +17,8 @@
 
 extern char **environ;
 
+static void progress_mark(const char *name, uint32_t kind, uint32_t value);
+
 #define WIDTH 320u
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
@@ -602,6 +604,7 @@ static void watchdog_restart_now(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
+	progress_mark("diag-watchdog-now", 0x30u, 0x0192u);
 	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
 	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
 		WDT_RESTART_COUNT;
@@ -761,7 +764,7 @@ static void progress_mark_mmc_snapshot(const char *suffix)
 	progress_mark("diag-hc15-resp0", 0x32u, direct_read32(MMC_PHYS + HC15_RESP0));
 	progress_mark("diag-hc15-irqsts", 0x32u, direct_read8(MMC_PHYS + HC15_IRQSTS));
 	progress_mark("diag-hc15-timing", 0x32u, direct_read8(MMC_PHYS + HC15_TIMING));
-	progress_mark(suffix, 0x32u, 0x0191u);
+	progress_mark(suffix, 0x32u, 0x0192u);
 }
 
 static void progress_mark_reset_snapshot(void)
@@ -769,7 +772,7 @@ static void progress_mark_reset_snapshot(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0191u);
+	progress_mark("diag-reset-begin", 0x30u, 0x0192u);
 	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
@@ -816,7 +819,7 @@ static void progress_mark_reset_snapshot(void)
 
 	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0191u);
+	progress_mark("diag-reset-done", 0x30u, 0x0192u);
 }
 
 static void sleep_ms(unsigned msec)
@@ -1880,10 +1883,10 @@ static int console_handle_buttons(uint32_t buttons)
 		runtime_watchdog_arm();
 		progress_mark_reset_snapshot();
 		sync();
-		reboot(LINUX_REBOOT_CMD_RESTART);
-		console_add_line("reboot syscall returned, watchdog reset");
-		log_line("sf2000-screen: reboot syscall returned, watchdog reset\n");
+		console_add_line("direct watchdog reset");
+		log_line("sf2000-screen: direct watchdog reset\n");
 		watchdog_restart_now();
+		reboot(LINUX_REBOOT_CMD_RESTART);
 	}
 	if (buttons & CONSOLE_BTN_UP)
 		changed |= console_scroll_delta(1);

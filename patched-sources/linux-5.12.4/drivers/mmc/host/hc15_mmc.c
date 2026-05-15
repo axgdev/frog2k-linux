@@ -54,6 +54,7 @@
 #define HC15_INPUT_CLOCK	198000000
 #define HC15_CMD_TIMEOUT_MS	200
 #define HC15_SD_APP_SEND_SCR	51
+#define HC15_DATA_VARIANTS	16
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -66,6 +67,8 @@ struct hc15_mmc {
 	u8 data_variant_next;
 	u8 data_variant_active;
 	int data_variant_locked;
+	u32 last_app_arg;
+	bool last_app_valid;
 	u32 last_read_sample;
 };
 
@@ -246,6 +249,18 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	hc15_mark("hc15-cmdidx", cmdidx);
 }
 
+static u8 hc15_data_pioctl(struct hc15_mmc *host)
+{
+	static const u8 pioctl[] = { 0x04, 0x00, 0x06, 0x02 };
+
+	return pioctl[(host->data_variant_active >> 2) & 0x03];
+}
+
+static bool hc15_data_wait_before_pio(struct hc15_mmc *host)
+{
+	return host->data_variant_active & 0x02;
+}
+
 static void hc15_start_command(struct hc15_mmc *host)
 {
 	u8 value = readb(host->base + HC15_REG_CMDCTL);
@@ -365,30 +380,12 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
 	u32 blocks = data->blocks ? data->blocks : 1;
 	u8 cnt_hi = (blocks - 1) >> 8;
 	u8 cnt_lo = (blocks - 1) & 0xff;
-	u8 cmdidx = readb(host->base + HC15_REG_CMDIDX);
-	u8 pio = 0x04;
+	u8 pio = hc15_data_pioctl(host);
 
 	writew(data->blksz, host->base + HC15_REG_BLKSIZ);
 	writeb(cnt_lo, host->base + HC15_REG_BLKCNT_LO);
 	writeb(cnt_hi, host->base + HC15_REG_BLKCNT_HI);
-	switch ((host->data_variant_active >> 1) & 0x03) {
-	case 2:
-		pio = 0x00;
-		break;
-	case 3:
-		pio = 0x06;
-		break;
-	default:
-		pio = 0x04;
-		break;
-	}
 	writeb(pio, host->base + HC15_REG_PIO);
-
-	if (data->blksz == 256)
-		cmdidx |= 0x80;
-	else
-		cmdidx &= ~0x80;
-	writeb(cmdidx, host->base + HC15_REG_CMDIDX);
 
 	hc15_mark("hc15-data-blksz", data->blksz);
 	hc15_mark("hc15-data-blocks", blocks);
@@ -490,27 +487,19 @@ out:
 	return ret;
 }
 
-static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
+static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+			     struct mmc_data *data)
 {
-	struct hc15_mmc *host = mmc_priv(mmc);
-	struct mmc_command *cmd = mrq->cmd;
-	struct mmc_data *data = mrq->data;
 	bool data_read = data && (data->flags & MMC_DATA_READ);
-	bool wait_before_pio = false;
+	bool wait_before_pio = data_read && hc15_data_wait_before_pio(host);
 
-	if (data_read) {
-		if (host->data_variant_locked >= 0)
-			host->data_variant_active = host->data_variant_locked;
-		else
-			host->data_variant_active = host->data_variant_next++ & 0x07;
-		wait_before_pio = host->data_variant_active & 0x02;
-		hc15_mark("hc15-data-variant", host->data_variant_active);
-	} else {
-		host->data_variant_active = 0;
-	}
-
-	if (data)
+	cmd->error = 0;
+	if (data) {
+		data->error = 0;
+		data->bytes_xfered = 0;
+		host->last_read_sample = 0;
 		hc15_setup_data(host, data);
+	}
 
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
@@ -526,6 +515,103 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	if (data_read && wait_before_pio && !cmd->error)
 		hc15_pio_read(host, data);
 
+	if (data) {
+		hc15_mark("hc15-data-error", data->error);
+		hc15_mark("hc15-data-bytes", data->bytes_xfered);
+	}
+	hc15_mark("hc15-cmd-error", cmd->error);
+}
+
+static void hc15_send_internal_app(struct hc15_mmc *host)
+{
+	struct mmc_command app = {
+		.opcode = MMC_APP_CMD,
+		.arg = host->last_app_arg,
+		.flags = MMC_RSP_R1 | MMC_CMD_AC,
+	};
+
+	if (!host->last_app_valid)
+		return;
+
+	host->data_variant_active = 0;
+	hc15_mark("hc15-scan-appcmd", app.arg);
+	hc15_run_command(host, &app, NULL);
+	hc15_mark("hc15-scan-appret", app.error);
+}
+
+static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd,
+				  struct mmc_data *data)
+{
+	unsigned int variant;
+	u32 bytes;
+
+	if (!data || !(data->flags & MMC_DATA_READ) ||
+	    cmd->opcode != HC15_SD_APP_SEND_SCR ||
+	    host->data_variant_locked >= 0)
+		return false;
+
+	bytes = data->blksz * data->blocks;
+	hc15_mark("hc15-scan-scr", HC15_DATA_VARIANTS);
+	for (variant = 0; variant < HC15_DATA_VARIANTS; variant++) {
+		if (variant)
+			hc15_send_internal_app(host);
+
+		host->data_variant_active = variant;
+		hc15_mark("hc15-data-variant", variant);
+		hc15_run_command(host, cmd, data);
+		hc15_mark("hc15-scan-sample", host->last_read_sample);
+		hc15_mark("hc15-scan-cmderr", cmd->error);
+		hc15_mark("hc15-scan-dataerr", data->error);
+		hc15_mark("hc15-scan-bytes", data->bytes_xfered);
+
+		if (!cmd->error && !data->error &&
+		    data->bytes_xfered == bytes && host->last_read_sample) {
+			host->data_variant_locked = variant;
+			hc15_mark("hc15-data-lock", host->data_variant_locked);
+			return true;
+		}
+
+		if (!cmd->error && !data->error && data->bytes_xfered == bytes) {
+			data->error = -EILSEQ;
+			hc15_mark("hc15-data-zero-scr", variant);
+		}
+		hc15_recover_controller(host);
+	}
+
+	cmd->error = 0;
+	data->error = -EILSEQ;
+	hc15_mark("hc15-scan-scr-fail", host->last_read_sample);
+	return true;
+}
+
+static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
+{
+	struct hc15_mmc *host = mmc_priv(mmc);
+	struct mmc_command *cmd = mrq->cmd;
+	struct mmc_data *data = mrq->data;
+	bool data_read = data && (data->flags & MMC_DATA_READ);
+
+	if (cmd->opcode == MMC_APP_CMD) {
+		host->last_app_arg = cmd->arg;
+		host->last_app_valid = true;
+	}
+
+	if (hc15_request_scan_scr(host, cmd, data))
+		goto done;
+
+	if (data_read) {
+		if (host->data_variant_locked >= 0)
+			host->data_variant_active = host->data_variant_locked;
+		else
+			host->data_variant_active =
+				host->data_variant_next++ & (HC15_DATA_VARIANTS - 1);
+		hc15_mark("hc15-data-variant", host->data_variant_active);
+	} else {
+		host->data_variant_active = 0;
+	}
+
+	hc15_run_command(host, cmd, data);
+
 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
 	    !data->error && data->bytes_xfered == data->blksz * data->blocks) {
 		if (host->last_read_sample) {
@@ -537,12 +623,7 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		}
 	}
 
-	if (data) {
-		hc15_mark("hc15-data-error", data->error);
-		hc15_mark("hc15-data-bytes", data->bytes_xfered);
-	}
-	hc15_mark("hc15-cmd-error", cmd->error);
-
+done:
 	if (mrq->stop && !cmd->error && (!data || !data->error)) {
 		hc15_set_command(host, mrq->stop, NULL);
 		hc15_start_command(host);
@@ -622,7 +703,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0191);
+	hc15_mark("hc15-probe", 0x0192);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
