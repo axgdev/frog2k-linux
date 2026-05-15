@@ -259,15 +259,24 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 	u8 status;
 	u8 norm = 0;
 	unsigned long timeout = jiffies + msecs_to_jiffies(HC15_CMD_TIMEOUT_MS);
+	bool need_irq = cmd->flags & MMC_RSP_PRESENT;
+	bool noresp_done = false;
 	int ret = -ETIMEDOUT;
 
 	do {
 		irq = readb(host->base + HC15_REG_IRQSTS);
 		cmdctl = readb(host->base + HC15_REG_CMDCTL);
-		if ((irq & 0x40) || !(cmdctl & 0x01)) {
+		if (irq & 0x40) {
 			ret = 0;
 			break;
 		}
+		if (!need_irq && !(cmdctl & 0x01)) {
+			noresp_done = true;
+			ret = 0;
+			break;
+		}
+		if (irq & 0x80)
+			break;
 		udelay(10);
 	} while (time_before(jiffies, timeout));
 
@@ -296,6 +305,7 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 	hc15_mark("hc15-status", status);
 	hc15_mark("hc15-norm-status", norm);
 	hc15_mark("hc15-wait-ret", ret);
+	hc15_mark("hc15-wait-mode", noresp_done ? 1 : 0);
 
 	if (ret) {
 		cmd->error = -ETIMEDOUT;
@@ -542,7 +552,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0186);
+	hc15_mark("hc15-probe", 0x0187);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
