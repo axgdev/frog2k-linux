@@ -252,15 +252,15 @@ static void hc15_start_command(struct hc15_mmc *host)
 	hc15_mark("hc15-cmdidx-start", readb(host->base + HC15_REG_CMDIDX));
 }
 
-static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
+static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd,
+			 bool allow_start_done)
 {
 	u8 irq = 0;
 	u8 cmdctl = 0;
 	u8 status;
 	u8 norm = 0;
 	unsigned long timeout = jiffies + msecs_to_jiffies(HC15_CMD_TIMEOUT_MS);
-	bool need_irq = cmd->flags & MMC_RSP_PRESENT;
-	bool noresp_done = false;
+	bool start_done = false;
 	int ret = -ETIMEDOUT;
 
 	do {
@@ -270,8 +270,9 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 			ret = 0;
 			break;
 		}
-		if (!need_irq && !(cmdctl & 0x01)) {
-			noresp_done = true;
+		if ((allow_start_done || !(cmd->flags & MMC_RSP_PRESENT)) &&
+		    !(cmdctl & 0x01)) {
+			start_done = true;
 			ret = 0;
 			break;
 		}
@@ -305,7 +306,7 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd)
 	hc15_mark("hc15-status", status);
 	hc15_mark("hc15-norm-status", norm);
 	hc15_mark("hc15-wait-ret", ret);
-	hc15_mark("hc15-wait-mode", noresp_done ? 1 : 0);
+	hc15_mark("hc15-wait-mode", start_done ? (allow_start_done ? 2 : 1) : 0);
 
 	if (ret) {
 		cmd->error = -ETIMEDOUT;
@@ -465,7 +466,7 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
 
-	hc15_wait_irq(host, cmd);
+	hc15_wait_irq(host, cmd, data);
 	hc15_get_response(host, cmd);
 
 	if (!cmd->error && data && (data->flags & MMC_DATA_READ))
@@ -476,7 +477,7 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	if (mrq->stop && !cmd->error && (!data || !data->error)) {
 		hc15_set_command(host, mrq->stop, NULL);
 		hc15_start_command(host);
-		hc15_wait_irq(host, mrq->stop);
+		hc15_wait_irq(host, mrq->stop, false);
 		hc15_get_response(host, mrq->stop);
 	}
 
@@ -552,7 +553,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0188);
+	hc15_mark("hc15-probe", 0x0189);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
