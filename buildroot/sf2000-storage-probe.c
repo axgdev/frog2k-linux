@@ -18,7 +18,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0213u
+#define STORAGE_TAG 0x0214u
 
 struct progress_entry {
 	uint32_t seq;
@@ -364,12 +364,6 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	int fd;
 
 	progress_mark("stor-try", 0x3du, hash_name(dev));
-	if (access(dev, R_OK) != 0) {
-		log_msgf("sf2000_storage_probe: missing %s errno=%d\n",
-			dev, errno);
-		progress_mark("stor-missing", 0x3du, (uint32_t)errno);
-		return -1;
-	}
 	log_msgf("sf2000_storage_probe: mount try %s type=%s\n", dev, fstype);
 	progress_mark("stor-mount-type", 0x3du, hash_name(fstype));
 	errno = 0;
@@ -381,14 +375,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	}
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0213.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0214.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0213\n";
+		const char msg[] = "sf2000 linux sd write test 0214\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -449,16 +443,12 @@ int main(void)
 	set_readahead_zero("/dev/mmcblk0p2");
 	set_readahead_zero("/dev/mmcblk0sys");
 	set_readahead_zero("/dev/mmcblk0class");
-	set_readahead_zero("/dev/mmcblk0p1sys");
-	set_readahead_zero("/dev/mmcblk0p2sys");
 	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
-	if (try_mount_write("/dev/mmcblk0p1sys") == 0 ||
-	    try_mount_write("/dev/mmcblk0p2sys") == 0 ||
+	if (try_mount_write("/dev/mmcblk0") == 0 ||
 	    try_mount_write("/dev/mmcblk0p1") == 0 ||
 	    try_mount_write("/dev/mmcblk0p2") == 0 ||
 	    try_mount_write("/dev/mmcblk0sys") == 0 ||
-	    try_mount_write("/dev/mmcblk0class") == 0 ||
-	    try_mount_write("/dev/mmcblk0") == 0)
+	    try_mount_write("/dev/mmcblk0class") == 0)
 		mounted = 0;
 	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
 	progress_mark("stor-fast-done", 0x3au, STORAGE_TAG);
@@ -467,11 +457,9 @@ int main(void)
 		progress_mark("stor-done", 0x3au, STORAGE_TAG);
 		return 0;
 	}
-	log_block_head("/dev/mmcblk0p1sys");
-	log_block_head("/dev/mmcblk0p2sys");
+	log_block_head("/dev/mmcblk0");
 	log_block_head("/dev/mmcblk0p1");
 	log_block_head("/dev/mmcblk0p2");
-	log_block_head("/dev/mmcblk0");
 	log_block_head("/dev/mmcblk0sys");
 	log_block_head("/dev/mmcblk0class");
 	log_file_head("sys-mmc0-dev", "/sys/block/mmcblk0/dev");

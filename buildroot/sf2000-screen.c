@@ -37,7 +37,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0213u
+#define SCREEN_TAG 0x0214u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -1176,12 +1176,6 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	int fd;
 
 	progress_mark("stor-try", 0x3du, storage_hash_name(dev));
-	if (access(dev, R_OK) != 0) {
-		storage_log_msgf("sf2000_storage_inline: missing %s errno=%d\n",
-			dev, errno);
-		progress_mark("stor-missing", 0x3du, (uint32_t)errno);
-		return -1;
-	}
 	storage_log_msgf("sf2000_storage_inline: mount try %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-type", 0x3du, storage_hash_name(fstype));
@@ -1195,14 +1189,14 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0213.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0214.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0213 inline\n";
+		const char msg[] = "sf2000 linux sd write test 0214 inline\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -1289,15 +1283,11 @@ static void run_inline_storage_probe_once(const char *source)
 	storage_set_readahead_zero("/dev/mmcblk0p2");
 	storage_set_readahead_zero("/dev/mmcblk0sys");
 	storage_set_readahead_zero("/dev/mmcblk0class");
-	storage_set_readahead_zero("/dev/mmcblk0p1sys");
-	storage_set_readahead_zero("/dev/mmcblk0p2sys");
-	if (storage_try_mount_write("/dev/mmcblk0p1sys") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0p2sys") == 0 ||
+	if (storage_try_mount_write("/dev/mmcblk0") == 0 ||
 	    storage_try_mount_write("/dev/mmcblk0p1") == 0 ||
 	    storage_try_mount_write("/dev/mmcblk0p2") == 0 ||
 	    storage_try_mount_write("/dev/mmcblk0sys") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0class") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0") == 0)
+	    storage_try_mount_write("/dev/mmcblk0class") == 0)
 		mounted = 0;
 	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
 	if (mounted == 0) {
@@ -1305,11 +1295,9 @@ static void run_inline_storage_probe_once(const char *source)
 		progress_mark("stor-done", 0x3au, SCREEN_TAG);
 		return;
 	}
-	storage_log_block_head("/dev/mmcblk0p1sys");
-	storage_log_block_head("/dev/mmcblk0p2sys");
+	storage_log_block_head("/dev/mmcblk0");
 	storage_log_block_head("/dev/mmcblk0p1");
 	storage_log_block_head("/dev/mmcblk0p2");
-	storage_log_block_head("/dev/mmcblk0");
 	storage_log_block_head("/dev/mmcblk0sys");
 	storage_log_block_head("/dev/mmcblk0class");
 	storage_log_msgf("sf2000_storage_inline: done\n");
