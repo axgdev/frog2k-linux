@@ -339,7 +339,7 @@ static void sf2000_screen_present(void)
 static void sf2000_screen_mark(unsigned int kind, unsigned int detail)
 {
 	unsigned int seq = ++sf2000_screen_seq;
-	unsigned short bg = kind == 1 ? 0x0187 : 0x2808;
+	unsigned short bg = kind == 1 ? 0x0188 : 0x2808;
 	unsigned short fg = kind == 1 ? 0xffe0 : 0x07ff;
 	unsigned short dim = kind == 1 ? 0x03ef : 0x4924;
 	unsigned int i;

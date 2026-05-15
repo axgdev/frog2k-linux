@@ -496,13 +496,13 @@
 +	hc15_set_command(host, cmd, data);
 +	hc15_start_command(host);
 +
-+	if (data && (data->flags & MMC_DATA_READ))
-+		hc15_pio_read(host, data);
-+	else if (data && (data->flags & MMC_DATA_WRITE))
-+		hc15_pio_write(host, data);
-+
 +	hc15_wait_irq(host, cmd);
 +	hc15_get_response(host, cmd);
++
++	if (!cmd->error && data && (data->flags & MMC_DATA_READ))
++		hc15_pio_read(host, data);
++	else if (!cmd->error && data && (data->flags & MMC_DATA_WRITE))
++		hc15_pio_write(host, data);
 +
 +	if (mrq->stop && !cmd->error && (!data || !data->error)) {
 +		hc15_set_command(host, mrq->stop, NULL);
@@ -583,7 +583,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0187);
++	hc15_mark("hc15-probe", 0x0188);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
