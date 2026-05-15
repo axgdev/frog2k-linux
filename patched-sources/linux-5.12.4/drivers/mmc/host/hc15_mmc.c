@@ -54,10 +54,12 @@
 #define HC15_MIN_CLOCK		100000
 #define HC15_INPUT_CLOCK	198000000
 #define HC15_CMD_TIMEOUT_MS	200
+#define HC15_PIO_TIMEOUT_US	120000
 #define HC15_SD_APP_SEND_SCR	51
 #define HC15_DATA_VARIANTS	1
+#define HC15_READ_VARIANTS	8
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0216
+#define HC15_PROBE_TAG		0x0217
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -71,6 +73,7 @@ struct hc15_mmc {
 	bool last_app_valid;
 	u32 last_read_sample;
 	u32 last_read_sample2;
+	u8 read_variant;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -231,13 +234,14 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	u8 cmdctl = hc15_cmd_type(cmd, data);
 	u8 oldctl = readb(host->base + HC15_REG_CMDCTL);
 	bool read_data = data && (data->flags & MMC_DATA_READ);
+	bool invert_read_dir = read_data && (host->read_variant & 0x02);
 
 	if (oldctl & 0x01)
 		hc15_recover_controller(host);
 	writel(cmd->arg, host->base + HC15_REG_CMDARG);
 
 	cmdidx |= cmd->opcode & 0x3f;
-	if (!read_data)
+	if (!read_data || invert_read_dir)
 		cmdidx |= 0x80;
 	writeb(cmdidx, host->base + HC15_REG_CMDIDX);
 	writeb(cmdctl, host->base + HC15_REG_CMDCTL);
@@ -425,7 +429,7 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 			ret = readw_poll_timeout(host->base + HC15_REG_PIO,
 						 pio,
 						 hc15_data_wait_ready(host, pio),
-						 1, 1000000);
+						 1, HC15_PIO_TIMEOUT_US);
 			if (ret) {
 				hc15_mark("hc15-pio-read-timeout", pio);
 				goto out;
@@ -537,7 +541,7 @@ static int hc15_pio_write(struct hc15_mmc *host, struct mmc_data *data)
 			writew(value, host->base + HC15_REG_FIFO);
 			ret = readw_poll_timeout(host->base + HC15_REG_PIO,
 						 pio, !(pio & 0x0002),
-						 1, 1000000);
+						 1, HC15_PIO_TIMEOUT_US);
 			if (ret) {
 				hc15_mark("hc15-pio-write-timeout", pio);
 				goto out;
@@ -562,6 +566,8 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 			     struct mmc_data *data)
 {
 	bool data_read = data && (data->flags & MMC_DATA_READ);
+	bool read_after_wait = data_read && (host->read_variant & 0x01);
+	bool read_preclean = data_read && (host->read_variant & 0x04);
 
 	cmd->error = 0;
 	if (data) {
@@ -572,16 +578,24 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 		hc15_setup_data(host, data);
 	}
 
+	if (read_preclean)
+		hc15_pio_cleanup(host);
+
+	if (data_read)
+		hc15_mark("hc15-read-variant", host->read_variant);
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
 
-	if (data_read)
+	if (data_read && !read_after_wait)
 		hc15_pio_read(host, data);
 	else if (data && (data->flags & MMC_DATA_WRITE))
 		hc15_pio_write(host, data);
 
 	hc15_wait_irq(host, cmd, data);
 	hc15_get_response(host, cmd);
+
+	if (data_read && read_after_wait && !cmd->error)
+		hc15_pio_read(host, data);
 
 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
 	    !cmd->error && data->error) {
@@ -594,6 +608,42 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
 	}
 	hc15_mark("hc15-cmd-error", cmd->error);
+}
+
+static bool hc15_request_scan_read(struct hc15_mmc *host,
+				   struct mmc_command *cmd,
+				   struct mmc_data *data)
+{
+	u8 saved_variant = host->read_variant;
+	unsigned int variant;
+	u32 bytes;
+
+	if (!data || !(data->flags & MMC_DATA_READ) ||
+	    cmd->opcode == HC15_SD_APP_SEND_SCR)
+		return false;
+	if (data->blksz != 512 || data->blocks != 1)
+		return false;
+
+	bytes = data->blksz * data->blocks;
+	hc15_mark("hc15-scan-read", HC15_READ_VARIANTS);
+	for (variant = 0; variant < HC15_READ_VARIANTS; variant++) {
+		if (variant)
+			hc15_recover_controller(host);
+		host->read_variant = variant;
+		hc15_run_command(host, cmd, data);
+		hc15_mark("hc15-read-var-ret", variant);
+		hc15_mark("hc15-read-var-cmderr", cmd->error);
+		hc15_mark("hc15-read-var-dataerr", data->error);
+		hc15_mark("hc15-read-var-bytes", data->bytes_xfered);
+		hc15_mark("hc15-read-var-sample", host->last_read_sample);
+
+		if (!cmd->error && !data->error && data->bytes_xfered == bytes) {
+			hc15_mark("hc15-read-lock", variant);
+			break;
+		}
+	}
+	host->read_variant = saved_variant;
+	return true;
 }
 
 static void hc15_send_internal_app(struct hc15_mmc *host)
@@ -678,6 +728,9 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	}
 
 	if (hc15_request_scan_scr(host, cmd, data))
+		goto done;
+
+	if (hc15_request_scan_read(host, cmd, data))
 		goto done;
 
 	hc15_run_command(host, cmd, data);
