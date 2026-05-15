@@ -54,7 +54,7 @@
 #define HC15_INPUT_CLOCK	198000000
 #define HC15_CMD_TIMEOUT_MS	200
 #define HC15_SD_APP_SEND_SCR	51
-#define HC15_DATA_VARIANTS	16
+#define HC15_DATA_VARIANTS	64
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -261,6 +261,21 @@ static bool hc15_data_wait_before_pio(struct hc15_mmc *host)
 	return host->data_variant_active & 0x02;
 }
 
+static u8 hc15_data_fifo_off(struct hc15_mmc *host)
+{
+	static const u8 fifo_off[] = { HC15_REG_FIFO, HC15_REG_PIO,
+				       HC15_REG_FIFO + 1, HC15_REG_RESP0 };
+
+	return fifo_off[(host->data_variant_active >> 4) & 0x03];
+}
+
+static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
+{
+	if (host->data_variant_active & 0x20)
+		return !(pio & 0x0002);
+	return pio & 0x0002;
+}
+
 static void hc15_start_command(struct hc15_mmc *host)
 {
 	u8 value = readb(host->base + HC15_REG_CMDCTL);
@@ -398,9 +413,12 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 	u32 remaining = data->blksz * data->blocks;
 	u32 done = 0;
 	u32 sample = 0;
+	u8 fifo_off = hc15_data_fifo_off(host);
 	int ret = 0;
 
 	host->last_read_sample = 0;
+	hc15_mark("hc15-pio-fifo-off", fifo_off);
+	hc15_mark("hc15-pio-stat0", readw(host->base + HC15_REG_PIO));
 	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_TO_SG);
 	while (remaining && sg_miter_next(&miter)) {
 		u8 *buf = miter.addr;
@@ -412,13 +430,14 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 			u16 pio;
 
 			ret = readw_poll_timeout(host->base + HC15_REG_PIO,
-						 pio, pio & 0x0002,
+						 pio,
+						 hc15_data_wait_ready(host, pio),
 						 1, 1000000);
 			if (ret) {
 				hc15_mark("hc15-pio-read-timeout", pio);
 				goto out;
 			}
-			value = readw(host->base + HC15_REG_FIFO);
+			value = readw(host->base + fifo_off);
 			if (done < 8)
 				hc15_mark("hc15-pio-rword", value);
 			if (done < 4)
@@ -436,6 +455,7 @@ out:
 	data->bytes_xfered = done;
 	if (ret)
 		data->error = -ETIMEDOUT;
+	hc15_mark("hc15-pio-stat1", readw(host->base + HC15_REG_PIO));
 	hc15_mark("hc15-pio-read", done);
 	hc15_mark("hc15-pio-rsample", sample);
 	hc15_mark("hc15-pio-rerr", data->error);
@@ -574,6 +594,7 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
 		if (!cmd->error && !data->error && data->bytes_xfered == bytes) {
 			data->error = -EILSEQ;
 			hc15_mark("hc15-data-zero-scr", variant);
+			continue;
 		}
 		hc15_recover_controller(host);
 	}
@@ -604,7 +625,8 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 			host->data_variant_active = host->data_variant_locked;
 		else
 			host->data_variant_active =
-				host->data_variant_next++ & (HC15_DATA_VARIANTS - 1);
+				host->data_variant_next++ &
+				(HC15_DATA_VARIANTS - 1);
 		hc15_mark("hc15-data-variant", host->data_variant_active);
 	} else {
 		host->data_variant_active = 0;
@@ -703,7 +725,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0192);
+	hc15_mark("hc15-probe", 0x0193);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
