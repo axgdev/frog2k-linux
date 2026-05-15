@@ -132,9 +132,12 @@ void sf2000_gen_exception_asm_mark(unsigned long cause, unsigned long epc,
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 		return;
 
-	if (count >= 64)
-		return;
 	count++;
+	if (count > 8) {
+		if (count == 64)
+			sf2000_progress_mark("genex-asm-suppressed", 12, count);
+		return;
+	}
 
 	sf2000_progress_mark("genex-asm-cause", 12, (unsigned int)cause);
 	sf2000_progress_mark("genex-asm-epc", 12, (unsigned int)epc);

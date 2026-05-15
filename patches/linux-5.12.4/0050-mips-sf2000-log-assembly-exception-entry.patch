@@ -41,7 +41,7 @@ diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
 index 679917c21543..d42753c093e9 100644
 --- a/arch/mips/kernel/traps.c
 +++ b/arch/mips/kernel/traps.c
-@@ -125,6 +125,27 @@ static void sf2000_exception_mark(const char *name, unsigned long value)
+@@ -125,6 +125,30 @@ static void sf2000_exception_mark(const char *name, unsigned long value)
  		sf2000_progress_mark(name, 11, (unsigned int)value);
  }
  
@@ -53,9 +53,12 @@ index 679917c21543..d42753c093e9 100644
 +	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 +		return;
 +
-+	if (count >= 64)
-+		return;
 +	count++;
++	if (count > 8) {
++		if (count == 64)
++			sf2000_progress_mark("genex-asm-suppressed", 12, count);
++		return;
++	}
 +
 +	sf2000_progress_mark("genex-asm-cause", 12, (unsigned int)cause);
 +	sf2000_progress_mark("genex-asm-epc", 12, (unsigned int)epc);

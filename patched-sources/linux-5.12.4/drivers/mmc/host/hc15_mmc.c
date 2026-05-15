@@ -56,6 +56,7 @@
 #define HC15_SD_APP_SEND_SCR	51
 #define HC15_DATA_VARIANTS	128
 #define HC15_TRACE_VERBOSE	0
+#define HC15_PROBE_TAG		0x0209
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -275,6 +276,19 @@ static u8 hc15_data_fifo_off(struct hc15_mmc *host)
 	return fifo_off[(host->data_variant_active >> 4) & 0x03];
 }
 
+static u16 hc15_fifo_read16(struct hc15_mmc *host, u8 fifo_off)
+{
+	u16 lo;
+	u16 hi;
+
+	if (!(fifo_off & 1))
+		return readw(host->base + fifo_off);
+
+	lo = readb(host->base + fifo_off);
+	hi = readb(host->base + fifo_off);
+	return lo | (hi << 8);
+}
+
 static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
 {
 	if (host->data_variant_active & 0x40)
@@ -445,7 +459,7 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 				hc15_mark("hc15-pio-read-timeout", pio);
 				goto out;
 			}
-			value = readw(host->base + fifo_off);
+			value = hc15_fifo_read16(host, fifo_off);
 			if (HC15_TRACE_VERBOSE && done < 8)
 				hc15_mark("hc15-pio-rword", value);
 			buf[pos] = value & 0xff;
@@ -784,7 +798,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0208);
+	hc15_mark("hc15-probe", HC15_PROBE_TAG);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

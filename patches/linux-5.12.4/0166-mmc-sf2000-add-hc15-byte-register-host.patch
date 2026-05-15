@@ -28,7 +28,7 @@
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.004000000 +0000
 +++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 06:16:42.295595245 +0000
-@@ -0,0 +1,859 @@
+@@ -0,0 +1,873 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -87,6 +87,7 @@
 +#define HC15_SD_APP_SEND_SCR	51
 +#define HC15_DATA_VARIANTS	128
 +#define HC15_TRACE_VERBOSE	0
++#define HC15_PROBE_TAG		0x0209
 +
 +struct hc15_mmc {
 +	struct mmc_host *mmc;
@@ -306,6 +307,19 @@
 +	return fifo_off[(host->data_variant_active >> 4) & 0x03];
 +}
 +
++static u16 hc15_fifo_read16(struct hc15_mmc *host, u8 fifo_off)
++{
++	u16 lo;
++	u16 hi;
++
++	if (!(fifo_off & 1))
++		return readw(host->base + fifo_off);
++
++	lo = readb(host->base + fifo_off);
++	hi = readb(host->base + fifo_off);
++	return lo | (hi << 8);
++}
++
 +static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
 +{
 +	if (host->data_variant_active & 0x40)
@@ -476,7 +490,7 @@
 +				hc15_mark("hc15-pio-read-timeout", pio);
 +				goto out;
 +			}
-+			value = readw(host->base + fifo_off);
++			value = hc15_fifo_read16(host, fifo_off);
 +			if (HC15_TRACE_VERBOSE && done < 8)
 +				hc15_mark("hc15-pio-rword", value);
 +			buf[pos] = value & 0xff;
@@ -815,7 +829,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0208);
++	hc15_mark("hc15-probe", HC15_PROBE_TAG);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
