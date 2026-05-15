@@ -16,7 +16,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0201u
+#define STORAGE_TAG 0x0202u
 
 struct progress_entry {
 	uint32_t seq;
@@ -115,6 +115,8 @@ static void log_msgf(const char *fmt, ...)
 
 static void ensure_mounts(void)
 {
+	int ret;
+
 	mkdir("/proc", 0755);
 	mkdir("/sys", 0755);
 	mkdir("/dev", 0755);
@@ -122,27 +124,39 @@ static void ensure_mounts(void)
 	mkdir("/run", 0755);
 	mkdir("/mnt", 0755);
 	mkdir("/mnt/sd", 0755);
-	(void)mount("proc", "/proc", "proc", 0, "");
-	progress_mark("stor-mount-proc", 0x3au, (uint32_t)errno);
-	(void)mount("sysfs", "/sys", "sysfs", 0, "");
-	progress_mark("stor-mount-sys", 0x3au, (uint32_t)errno);
-	(void)mount("devtmpfs", "/dev", "devtmpfs", 0, "");
-	progress_mark("stor-mount-dev", 0x3au, (uint32_t)errno);
-	(void)mount("devpts", "/dev/pts", "devpts", 0, "");
+	errno = 0;
+	ret = mount("proc", "/proc", "proc", 0, "");
+	progress_mark("stor-mount-proc-ret", 0x3au, (uint32_t)ret);
+	progress_mark("stor-mount-proc-err", 0x3au, (uint32_t)errno);
+	errno = 0;
+	ret = mount("sysfs", "/sys", "sysfs", 0, "");
+	progress_mark("stor-mount-sys-ret", 0x3au, (uint32_t)ret);
+	progress_mark("stor-mount-sys-err", 0x3au, (uint32_t)errno);
+	errno = 0;
+	ret = mount("devtmpfs", "/dev", "devtmpfs", 0, "");
+	progress_mark("stor-mount-dev-ret", 0x3au, (uint32_t)ret);
+	progress_mark("stor-mount-dev-err", 0x3au, (uint32_t)errno);
+	errno = 0;
+	ret = mount("devpts", "/dev/pts", "devpts", 0, "");
+	progress_mark("stor-mount-pts-ret", 0x3au, (uint32_t)ret);
+	progress_mark("stor-mount-pts-err", 0x3au, (uint32_t)errno);
 }
 
 static void log_dir(const char *label, const char *path)
 {
-	DIR *dir = opendir(path);
+	DIR *dir;
 	struct dirent *de;
 	unsigned count = 0;
 
+	progress_mark("stor-dir-begin", 0x3bu, hash_name(path));
+	dir = opendir(path);
 	if (!dir) {
 		log_msgf("sf2000_storage_probe: %s open failed errno=%d\n",
 			label, errno);
 		progress_mark(label, 0x3bu, (uint32_t)errno);
 		return;
 	}
+	progress_mark("stor-dir-open", 0x3bu, hash_name(label));
 	while ((de = readdir(dir)) != NULL && count < 24) {
 		if (strcmp(de->d_name, ".") == 0 ||
 		    strcmp(de->d_name, "..") == 0)
@@ -151,6 +165,7 @@ static void log_dir(const char *label, const char *path)
 		progress_mark("stor-dir-entry", 0x3bu, hash_name(de->d_name));
 		count++;
 	}
+	progress_mark("stor-dir-read-done", 0x3bu, count);
 	closedir(dir);
 	if (count == 0)
 		log_msgf("sf2000_storage_probe: %s empty\n", label);
@@ -161,15 +176,19 @@ static void log_file_head(const char *label, const char *path)
 {
 	char buf[256];
 	ssize_t got;
-	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	int fd;
 
+	progress_mark("stor-file-begin", 0x3cu, hash_name(path));
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: %s open failed errno=%d\n",
 			label, errno);
 		progress_mark(label, 0x3cu, (uint32_t)errno);
 		return;
 	}
+	progress_mark("stor-file-open", 0x3cu, hash_name(label));
 	got = read(fd, buf, sizeof(buf) - 1u);
+	progress_mark("stor-file-read-ret", 0x3cu, (uint32_t)got);
 	close(fd);
 	if (got < 0) {
 		log_msgf("sf2000_storage_probe: %s read failed errno=%d\n",
@@ -208,14 +227,14 @@ static int try_mount_write(const char *dev)
 	}
 	log_msgf("sf2000_storage_probe: mount ok %s\n", dev);
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0201.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0202.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0201\n";
+		const char msg[] = "sf2000 linux sd write test 0202\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);

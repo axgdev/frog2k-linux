@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0201UL
+#define INIT_TAG 0x0202UL
 
 struct timespec {
 	long tv_sec;
@@ -491,6 +491,19 @@ static void wait_for_screen_ready(void)
 	progress_mark("init-screen-timeout", 0x3eu, INIT_TAG);
 }
 
+static void settle_screen_before_storage(void)
+{
+	unsigned int i;
+
+	log_message("sf2000_buildroot: screen settle before storage\n");
+	progress_mark("init-screen-settle", 0x3eu, INIT_TAG);
+	for (i = 0; i < 24; i++) {
+		diagnostic_watchdog_pet();
+		sleep_ms(125);
+	}
+	progress_mark("init-screen-settle-done", 0x3eu, INIT_TAG);
+}
+
 static unsigned long service_stack_top(unsigned long *stack)
 {
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
@@ -576,7 +589,7 @@ void sf2000_init_main(void)
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
-	sleep_ms(200);
+	settle_screen_before_storage();
 	diagnostic_watchdog_pet();
 	progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
 	spawn_service("sf2000_buildroot: starting storage probe after screen\n",
