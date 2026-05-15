@@ -153,7 +153,8 @@
 @@ -205,13 +215,13 @@
  	if (len == -EAGAIN) {
  #ifdef CONFIG_MIPS_SF2000
- 		sf2000_namei_raw_mark(0x51510203, (unsigned int)filename);
+-		sf2000_namei_raw_mark(0x51510204, (unsigned int)filename);
++		sf2000_namei_raw_mark(0x51510204, (unsigned int)filename);
 -		sf2000_progress_mark("getname-before-usercopy", 13,
 +		sf2000_namei_progress_mark("getname-before-usercopy",
  				(unsigned int)filename);

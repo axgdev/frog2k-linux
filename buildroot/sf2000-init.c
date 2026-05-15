@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0203UL
+#define INIT_TAG 0x0204UL
 
 struct timespec {
 	long tv_sec;
@@ -566,7 +566,12 @@ void sf2000_init_main(void)
 	for (;;) {
 		reap_children();
 		if (!storage_started) {
-			if (path_exists("/run/sf2000-screen-ready")) {
+			if (path_exists("/run/sf2000-storage-started")) {
+				log_message("sf2000_buildroot: storage already started by screen\n");
+				progress_mark("init-storage-seen", 0x3eu,
+					screen_wait_ticks);
+				storage_started = 1;
+			} else if (path_exists("/run/sf2000-screen-ready")) {
 				log_message("sf2000_buildroot: screen ready\n");
 				progress_mark("init-screen-ready", 0x3eu,
 					screen_wait_ticks);

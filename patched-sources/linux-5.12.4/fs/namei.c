@@ -219,7 +219,7 @@ getname_flags(const char __user *filename, int flags, int *empty)
 	len = sf2000_getname_identity(kname, filename, EMBEDDED_NAME_MAX);
 	if (len == -EAGAIN) {
 #ifdef CONFIG_MIPS_SF2000
-		sf2000_namei_raw_mark(0x51510203, (unsigned int)filename);
+		sf2000_namei_raw_mark(0x51510204, (unsigned int)filename);
 		sf2000_namei_progress_mark("getname-before-usercopy",
 				(unsigned int)filename);
 #endif
