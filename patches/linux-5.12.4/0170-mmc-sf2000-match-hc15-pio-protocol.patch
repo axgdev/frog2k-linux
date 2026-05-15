@@ -1,0 +1,290 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux bringup <sf2000@example.invalid>
+Date: Fri, 15 May 2026 21:05:00 +0000
+Subject: [PATCH] mmc: sf2000: match HC15 PIO data protocol
+
+The hcRTOS HC15 host code does not program the PIO/status register before
+PIO transfers. It selects PIO direction with CMDIDX bit 7, waits for status
+bit 1 to clear, transfers 16-bit words through FIFO offset 0x0c, then pulses
+PIO bit 0 for cleanup.
+
+Stop writing variant test values into the PIO/status register and collapse the
+old blind SCR scan to the vendor-observed protocol.
+
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+index ef73cb0..5e22650 100644
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -54,9 +54,9 @@
+ #define HC15_INPUT_CLOCK	198000000
+ #define HC15_CMD_TIMEOUT_MS	200
+ #define HC15_SD_APP_SEND_SCR	51
+-#define HC15_DATA_VARIANTS	128
++#define HC15_DATA_VARIANTS	1
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0214
++#define HC15_PROBE_TAG		0x0215
+ 
+ struct hc15_mmc {
+ 	struct mmc_host *mmc;
+@@ -66,9 +66,6 @@ struct hc15_mmc {
+ 	u32 actual_clock;
+ 	u32 div;
+ 	u8 bus;
+-	u8 data_variant_next;
+-	u8 data_variant_active;
+-	int data_variant_locked;
+ 	u32 last_app_arg;
+ 	bool last_app_valid;
+ 	u32 last_read_sample;
+@@ -233,14 +230,13 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	u8 cmdctl = hc15_cmd_type(cmd, data);
+ 	u8 oldctl = readb(host->base + HC15_REG_CMDCTL);
+ 	bool read_data = data && (data->flags & MMC_DATA_READ);
+-	u8 variant = host->data_variant_active;
+ 
+ 	if (oldctl & 0x01)
+ 		hc15_recover_controller(host);
+ 	writel(cmd->arg, host->base + HC15_REG_CMDARG);
+ 
+ 	cmdidx |= cmd->opcode & 0x3f;
+-	if (!read_data || (variant & 0x01))
++	if (!read_data)
+ 		cmdidx |= 0x80;
+ 	writeb(cmdidx, host->base + HC15_REG_CMDIDX);
+ 	writeb(cmdctl, host->base + HC15_REG_CMDCTL);
+@@ -252,44 +248,25 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	hc15_mark("hc15-cmdidx", cmdidx);
+ }
+ 
+-static u8 hc15_data_pioctl(struct hc15_mmc *host)
++static u16 hc15_fifo_read16(struct hc15_mmc *host)
+ {
+-	static const u8 pioctl[] = { 0x04, 0x00, 0x06, 0x02 };
+-
+-	return pioctl[(host->data_variant_active >> 2) & 0x03];
++	return readw(host->base + HC15_REG_FIFO);
+ }
+ 
+-static bool hc15_data_wait_before_pio(struct hc15_mmc *host)
+-{
+-	return host->data_variant_active & 0x02;
+-}
+-
+-static u8 hc15_data_fifo_off(struct hc15_mmc *host)
++static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
+ {
+-	static const u8 fifo_off[] = { HC15_REG_FIFO, HC15_REG_PIO,
+-				       HC15_REG_FIFO + 1, HC15_REG_RESP0 };
+-
+-	return fifo_off[(host->data_variant_active >> 4) & 0x03];
++	return !(pio & 0x0002);
+ }
+ 
+-static u16 hc15_fifo_read16(struct hc15_mmc *host, u8 fifo_off)
++static void hc15_pio_cleanup(struct hc15_mmc *host)
+ {
+-	u16 lo;
+-	u16 hi;
+-
+-	if (!(fifo_off & 1))
+-		return readw(host->base + fifo_off);
++	u8 pio;
+ 
+-	lo = readb(host->base + fifo_off);
+-	hi = readb(host->base + fifo_off);
+-	return lo | (hi << 8);
+-}
+-
+-static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
+-{
+-	if (host->data_variant_active & 0x40)
+-		return !(pio & 0x0002);
+-	return pio & 0x0002;
++	pio = readb(host->base + HC15_REG_PIO);
++	writeb(pio | 0x01, host->base + HC15_REG_PIO);
++	udelay(1);
++	pio = readb(host->base + HC15_REG_PIO);
++	writeb(pio & ~0x01, host->base + HC15_REG_PIO);
+ }
+ 
+ static void hc15_start_command(struct hc15_mmc *host)
+@@ -411,16 +388,14 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
+ 	u32 blocks = data->blocks ? data->blocks : 1;
+ 	u8 cnt_hi = (blocks - 1) >> 8;
+ 	u8 cnt_lo = (blocks - 1) & 0xff;
+-	u8 pio = hc15_data_pioctl(host);
+ 
+ 	writew(data->blksz, host->base + HC15_REG_BLKSIZ);
+ 	writeb(cnt_lo, host->base + HC15_REG_BLKCNT_LO);
+ 	writeb(cnt_hi, host->base + HC15_REG_BLKCNT_HI);
+-	writeb(pio, host->base + HC15_REG_PIO);
+ 
+ 	hc15_mark("hc15-data-blksz", data->blksz);
+ 	hc15_mark("hc15-data-blocks", blocks);
+-	hc15_mark("hc15-data-pioctl", pio);
++	hc15_mark("hc15-data-pioctl", readw(host->base + HC15_REG_PIO));
+ }
+ 
+ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
+@@ -430,12 +405,11 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
+ 	u32 done = 0;
+ 	u32 sample = 0;
+ 	u32 sample2 = 0;
+-	u8 fifo_off = hc15_data_fifo_off(host);
+ 	int ret = 0;
+ 
+ 	host->last_read_sample = 0;
+ 	host->last_read_sample2 = 0;
+-	hc15_mark("hc15-pio-fifo-off", fifo_off);
++	hc15_mark("hc15-pio-fifo-off", HC15_REG_FIFO);
+ 	hc15_mark("hc15-pio-stat0", readw(host->base + HC15_REG_PIO));
+ 	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_TO_SG);
+ 	while (remaining && sg_miter_next(&miter)) {
+@@ -455,7 +429,7 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
+ 				hc15_mark("hc15-pio-read-timeout", pio);
+ 				goto out;
+ 			}
+-			value = hc15_fifo_read16(host, fifo_off);
++			value = hc15_fifo_read16(host);
+ 			if (HC15_TRACE_VERBOSE && done < 8)
+ 				hc15_mark("hc15-pio-rword", value);
+ 			buf[pos] = value & 0xff;
+@@ -483,6 +457,7 @@ out:
+ 	data->bytes_xfered = done;
+ 	if (ret)
+ 		data->error = -ETIMEDOUT;
++	hc15_pio_cleanup(host);
+ 	hc15_mark("hc15-pio-stat1", readw(host->base + HC15_REG_PIO));
+ 	hc15_mark("hc15-pio-read", done);
+ 	hc15_mark("hc15-pio-rsample", sample);
+@@ -497,12 +472,9 @@ static bool hc15_scr_sample_plausible(struct hc15_mmc *host)
+ {
+ 	u32 a = host->last_read_sample;
+ 	u32 b = host->last_read_sample2;
+-	u8 fifo_off = hc15_data_fifo_off(host);
+ 
+ 	if (!a && !b)
+ 		return false;
+-	if (fifo_off == HC15_REG_PIO)
+-		return false;
+ 	if ((u16)a == (u16)(a >> 16) && a == b)
+ 		return false;
+ 	if (a == 0xffffffff && b == 0xffffffff)
+@@ -551,6 +523,7 @@ out:
+ 	data->bytes_xfered = done;
+ 	if (ret)
+ 		data->error = -ETIMEDOUT;
++	hc15_pio_cleanup(host);
+ 	hc15_mark("hc15-pio-write", done);
+ 	hc15_mark("hc15-pio-werr", data->error);
+ 	return ret;
+@@ -560,7 +533,6 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 			     struct mmc_data *data)
+ {
+ 	bool data_read = data && (data->flags & MMC_DATA_READ);
+-	bool wait_before_pio = data_read && hc15_data_wait_before_pio(host);
+ 
+ 	cmd->error = 0;
+ 	if (data) {
+@@ -574,7 +546,7 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	hc15_set_command(host, cmd, data);
+ 	hc15_start_command(host);
+ 
+-	if (data_read && !wait_before_pio)
++	if (data_read)
+ 		hc15_pio_read(host, data);
+ 	else if (data && (data->flags & MMC_DATA_WRITE))
+ 		hc15_pio_write(host, data);
+@@ -582,9 +554,6 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	hc15_wait_irq(host, cmd, data);
+ 	hc15_get_response(host, cmd);
+ 
+-	if (data_read && wait_before_pio && !cmd->error)
+-		hc15_pio_read(host, data);
+-
+ 	if (data) {
+ 		hc15_mark("hc15-data-error", data->error);
+ 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
+@@ -603,7 +572,6 @@ static void hc15_send_internal_app(struct hc15_mmc *host)
+ 	if (!host->last_app_valid)
+ 		return;
+ 
+-	host->data_variant_active = 0;
+ 	if (HC15_TRACE_VERBOSE)
+ 		hc15_mark("hc15-scan-appcmd", app.arg);
+ 	hc15_run_command(host, &app, NULL);
+@@ -618,8 +586,7 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
+ 	u32 bytes;
+ 
+ 	if (!data || !(data->flags & MMC_DATA_READ) ||
+-	    cmd->opcode != HC15_SD_APP_SEND_SCR ||
+-	    host->data_variant_locked >= 0)
++	    cmd->opcode != HC15_SD_APP_SEND_SCR)
+ 		return false;
+ 
+ 	bytes = data->blksz * data->blocks;
+@@ -628,7 +595,6 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
+ 		if (variant)
+ 			hc15_send_internal_app(host);
+ 
+-		host->data_variant_active = variant;
+ 		if (HC15_TRACE_VERBOSE)
+ 			hc15_mark("hc15-data-variant", variant);
+ 		hc15_run_command(host, cmd, data);
+@@ -643,8 +609,7 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
+ 		if (!cmd->error && !data->error &&
+ 		    data->bytes_xfered == bytes &&
+ 		    hc15_scr_sample_plausible(host)) {
+-			host->data_variant_locked = variant;
+-			hc15_mark("hc15-data-lock", host->data_variant_locked);
++			hc15_mark("hc15-data-lock", variant);
+ 			return true;
+ 		}
+ 
+@@ -680,34 +645,18 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
+ 	if (hc15_request_scan_scr(host, cmd, data))
+ 		goto done;
+ 
+-	if (data_read) {
+-		if (host->data_variant_locked >= 0)
+-			host->data_variant_active = host->data_variant_locked;
+-		else
+-			host->data_variant_active =
+-				host->data_variant_next++ &
+-				(HC15_DATA_VARIANTS - 1);
+-		if (HC15_TRACE_VERBOSE)
+-			hc15_mark("hc15-data-variant", host->data_variant_active);
+-	} else {
+-		host->data_variant_active = 0;
+-	}
+-
+ 	hc15_run_command(host, cmd, data);
+ 
+ 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
+ 	    !data->error && data->bytes_xfered == data->blksz * data->blocks) {
+ 		if (hc15_scr_sample_plausible(host)) {
+-			host->data_variant_locked = host->data_variant_active;
+-			hc15_mark("hc15-data-lock", host->data_variant_locked);
++			hc15_mark("hc15-data-lock", 0);
+ 		} else {
+ 			data->error = -EILSEQ;
+ 			if (host->last_read_sample || host->last_read_sample2)
+-				hc15_mark("hc15-data-bad-scr",
+-					  host->data_variant_active);
++				hc15_mark("hc15-data-bad-scr", 0);
+ 			else
+-				hc15_mark("hc15-data-zero-scr",
+-					  host->data_variant_active);
++				hc15_mark("hc15-data-zero-scr", 0);
+ 		}
+ 	}
+ 
+@@ -804,7 +753,6 @@ static int hc15_mmc_probe(struct platform_device *pdev)
+ 	host = mmc_priv(mmc);
+ 	host->mmc = mmc;
+ 	host->dev = &pdev->dev;
+-	host->data_variant_locked = -1;
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	host->base = devm_ioremap_resource(&pdev->dev, res);
+ 	if (IS_ERR(host->base)) {
