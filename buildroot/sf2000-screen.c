@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/input.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include <sys/mman.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -34,6 +36,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
+#define SCREEN_TAG 0x0205u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -606,7 +609,7 @@ static void watchdog_restart_now(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
-	progress_mark("diag-watchdog-now", 0x30u, 0x0204u);
+	progress_mark("diag-watchdog-now", 0x30u, SCREEN_TAG);
 	if (sysio)
 		backlight_set(1);
 	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
@@ -768,7 +771,7 @@ static void progress_mark_mmc_snapshot(const char *suffix)
 	progress_mark("diag-hc15-resp0", 0x32u, direct_read32(MMC_PHYS + HC15_RESP0));
 	progress_mark("diag-hc15-irqsts", 0x32u, direct_read8(MMC_PHYS + HC15_IRQSTS));
 	progress_mark("diag-hc15-timing", 0x32u, direct_read8(MMC_PHYS + HC15_TIMING));
-	progress_mark(suffix, 0x32u, 0x0204u);
+	progress_mark(suffix, 0x32u, SCREEN_TAG);
 }
 
 static void progress_mark_reset_snapshot_full(void)
@@ -776,7 +779,7 @@ static void progress_mark_reset_snapshot_full(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-reset-begin", 0x30u, 0x0204u);
+	progress_mark("diag-reset-begin", 0x30u, SCREEN_TAG);
 	progress_mark_mmc_snapshot("diag-mmc-early-done");
 
 	mkdir("/proc", 0755);
@@ -823,7 +826,7 @@ static void progress_mark_reset_snapshot_full(void)
 
 	progress_mark_mmc_snapshot("diag-mmc-late-done");
 
-	progress_mark("diag-reset-done", 0x30u, 0x0204u);
+	progress_mark("diag-reset-done", 0x30u, SCREEN_TAG);
 }
 
 static void progress_mark_reset_snapshot_fast(void)
@@ -831,7 +834,7 @@ static void progress_mark_reset_snapshot_fast(void)
 	uint32_t pins = 0;
 	unsigned i;
 
-	progress_mark("diag-fast-reset-begin", 0x30u, 0x0204u);
+	progress_mark("diag-fast-reset-begin", 0x30u, SCREEN_TAG);
 	progress_mark_mmc_snapshot("diag-fast-mmc-done");
 	progress_mark("diag-fast-wdt-count", 0x31u,
 		direct_read32(WDT_BASE_PHYS + WDT_REG_OFF + WDT_COUNT_OFF));
@@ -847,7 +850,7 @@ static void progress_mark_reset_snapshot_fast(void)
 		pins |= (uint32_t)(direct_read8(SYSIO_PHYS + PINMUX_L_OFF + i) & 0xfu)
 			<< ((i - 16u) * 4u);
 	progress_mark("diag-fast-pin-l16-22", 0x31u, pins);
-	progress_mark("diag-fast-reset-done", 0x30u, 0x0204u);
+	progress_mark("diag-fast-reset-done", 0x30u, SCREEN_TAG);
 }
 
 static void sleep_ms(unsigned msec)
@@ -926,44 +929,204 @@ static int publish_marker(const char *path, const char *text)
 	return 0;
 }
 
-static void spawn_storage_probe_once(const char *source)
+static uint32_t storage_hash_name(const char *text)
+{
+	uint32_t hash = 2166136261u;
+
+	while (*text) {
+		hash ^= (uint8_t)*text++;
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
+static void storage_log_msgf(const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	log_line(line);
+	append_file_log(line);
+}
+
+static void storage_mount_once(const char *src, const char *target,
+	const char *type, const char *ret_name, const char *err_name)
+{
+	int ret;
+
+	errno = 0;
+	ret = mount(src, target, type, 0, "");
+	progress_mark(ret_name, 0x3au, (uint32_t)ret);
+	progress_mark(err_name, 0x3au, (uint32_t)errno);
+}
+
+static void storage_ensure_mounts(void)
+{
+	mkdir("/proc", 0755);
+	mkdir("/sys", 0755);
+	mkdir("/dev", 0755);
+	mkdir("/dev/pts", 0755);
+	mkdir("/run", 0755);
+	mkdir("/mnt", 0755);
+	mkdir("/mnt/sd", 0755);
+	storage_mount_once("proc", "/proc", "proc",
+		"stor-mount-proc-ret", "stor-mount-proc-err");
+	storage_mount_once("sysfs", "/sys", "sysfs",
+		"stor-mount-sys-ret", "stor-mount-sys-err");
+	storage_mount_once("devtmpfs", "/dev", "devtmpfs",
+		"stor-mount-dev-ret", "stor-mount-dev-err");
+	storage_mount_once("devpts", "/dev/pts", "devpts",
+		"stor-mount-pts-ret", "stor-mount-pts-err");
+}
+
+static void storage_mknod_block(const char *path, unsigned minor,
+	const char *ret_name, const char *err_name)
+{
+	int ret;
+
+	errno = 0;
+	ret = mknod(path, S_IFBLK | 0660, makedev(179, minor));
+	progress_mark(ret_name, 0x3du, (uint32_t)ret);
+	progress_mark(err_name, 0x3du, (uint32_t)errno);
+}
+
+static void storage_ensure_block_nodes(void)
+{
+	storage_mknod_block("/dev/mmcblk0", 0,
+		"stor-mknod-mmc0-ret", "stor-mknod-mmc0-err");
+	storage_mknod_block("/dev/mmcblk0p1", 1,
+		"stor-mknod-mmc0p1-ret", "stor-mknod-mmc0p1-err");
+	storage_mknod_block("/dev/mmcblk0p2", 2,
+		"stor-mknod-mmc0p2-ret", "stor-mknod-mmc0p2-err");
+}
+
+static void storage_log_block_head(const char *dev)
+{
+	unsigned char buf[512];
+	ssize_t got;
+	int fd;
+
+	progress_mark("stor-blk-open-begin", 0x3du, storage_hash_name(dev));
+	fd = open(dev, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		storage_log_msgf("sf2000_storage_inline: block open failed %s errno=%d\n",
+			dev, errno);
+		progress_mark("stor-blk-open-fail", 0x3du, (uint32_t)errno);
+		return;
+	}
+	progress_mark("stor-blk-open-ok", 0x3du, storage_hash_name(dev));
+	got = read(fd, buf, sizeof(buf));
+	progress_mark("stor-blk-read-ret", 0x3du, (uint32_t)got);
+	if (got >= 4)
+		progress_mark("stor-blk-head0", 0x3du,
+			(uint32_t)buf[0] |
+			((uint32_t)buf[1] << 8) |
+			((uint32_t)buf[2] << 16) |
+			((uint32_t)buf[3] << 24));
+	if (got >= 512)
+		progress_mark("stor-blk-sig", 0x3du,
+			(uint32_t)buf[510] | ((uint32_t)buf[511] << 8));
+	close(fd);
+}
+
+static int storage_try_mount_write_type(const char *dev, const char *fstype)
+{
+	int fd;
+
+	progress_mark("stor-try", 0x3du, storage_hash_name(dev));
+	if (access(dev, R_OK) != 0) {
+		storage_log_msgf("sf2000_storage_inline: missing %s errno=%d\n",
+			dev, errno);
+		progress_mark("stor-missing", 0x3du, (uint32_t)errno);
+		return -1;
+	}
+	storage_log_msgf("sf2000_storage_inline: mount try %s type=%s\n",
+		dev, fstype);
+	progress_mark("stor-mount-type", 0x3du, storage_hash_name(fstype));
+	errno = 0;
+	if (mount(dev, "/mnt/sd", fstype, MS_SYNCHRONOUS, "") != 0) {
+		storage_log_msgf("sf2000_storage_inline: mount failed %s type=%s errno=%d\n",
+			dev, fstype, errno);
+		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
+		return -1;
+	}
+	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
+		dev, fstype);
+	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
+	fd = open("/mnt/sd/sf2000-linux-rw-0205.txt",
+		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
+			errno);
+		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
+	} else {
+		const char msg[] = "sf2000 linux sd write test 0205 inline\n";
+		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
+
+		close(fd);
+		storage_log_msgf("sf2000_storage_inline: write ret=%d errno=%d\n",
+			(int)wrote, errno);
+		progress_mark("stor-write-ret", 0x3du, (uint32_t)wrote);
+		progress_mark("stor-write-errno", 0x3du, (uint32_t)errno);
+	}
+	sync();
+	if (umount("/mnt/sd") != 0) {
+		storage_log_msgf("sf2000_storage_inline: umount failed errno=%d\n",
+			errno);
+		progress_mark("stor-umount-fail", 0x3du, (uint32_t)errno);
+	} else {
+		storage_log_msgf("sf2000_storage_inline: umount ok\n");
+		progress_mark("stor-umount-ok", 0x3du, 0);
+	}
+	return 0;
+}
+
+static int storage_try_mount_write(const char *dev)
+{
+	if (storage_try_mount_write_type(dev, "vfat") == 0)
+		return 0;
+	if (storage_try_mount_write_type(dev, "msdos") == 0)
+		return 0;
+	return -1;
+}
+
+static void run_inline_storage_probe_once(const char *source)
 {
 	static int storage_started;
-	char *const argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
-	char *const envp[] = {
-		"PATH=/sbin:/bin:/usr/sbin:/usr/bin",
-		"HOME=/",
-		0
-	};
-	pid_t pid;
 
 	if (storage_started)
 		return;
 	storage_started = 1;
-	progress_mark("diag-storage-spawn", 0x34u, 0x0204u);
+	progress_mark("stor-start", 0x3au, SCREEN_TAG);
 	progress_mark_text("diag-storage-src", source);
-
-	pid = vfork();
-	if (pid < 0) {
-		storage_started = 0;
-		progress_mark("diag-storage-vfork-fail", 0x34u,
-			(uint32_t)errno);
-		return;
-	}
-	if (pid == 0) {
-		execve(argv[0], argv, envp);
-		progress_mark("diag-storage-exec-fail", 0x34u,
-			(uint32_t)errno);
-		_exit(127);
-	}
 	publish_marker("/run/sf2000-storage-started", source);
-	progress_mark("diag-storage-pid", 0x34u, (uint32_t)pid);
+	storage_log_msgf("sf2000_storage_inline: start %s", source);
+	storage_ensure_mounts();
+	storage_ensure_block_nodes();
+	progress_mark_dir_count("stor-sys-block", "/sys/block");
+	progress_mark_dir_count("stor-mmc-host", "/sys/class/mmc_host");
+	progress_mark_dir_count("stor-platform", "/sys/bus/platform/devices");
+	progress_mark_dir_count("stor-dev-root", "/dev");
+	progress_mark_file_head("stor-proc-part", "/proc/partitions");
+	progress_mark_file_head("stor-proc-dev", "/proc/devices");
+	progress_mark_file_head("stor-proc-int", "/proc/interrupts");
+	storage_log_block_head("/dev/mmcblk0");
+	storage_log_block_head("/dev/mmcblk0p1");
+	storage_log_block_head("/dev/mmcblk0p2");
+	if (storage_try_mount_write("/dev/mmcblk0p1") != 0 &&
+	    storage_try_mount_write("/dev/mmcblk0p2") != 0)
+		(void)storage_try_mount_write("/dev/mmcblk0");
+	storage_log_msgf("sf2000_storage_inline: done\n");
+	progress_mark("stor-done", 0x3au, SCREEN_TAG);
 }
 
 static void publish_screen_ready_and_storage(const char *source)
 {
 	publish_marker("/run/sf2000-screen-ready", "ready\n");
-	spawn_storage_probe_once(source);
+	run_inline_storage_probe_once(source);
 }
 
 static uint32_t gpio_base_for_pad(unsigned pad)
