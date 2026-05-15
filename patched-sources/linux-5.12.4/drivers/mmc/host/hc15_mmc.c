@@ -53,6 +53,7 @@
 #define HC15_MIN_CLOCK		100000
 #define HC15_INPUT_CLOCK	198000000
 #define HC15_CMD_TIMEOUT_MS	200
+#define HC15_SD_APP_SEND_SCR	51
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -62,6 +63,10 @@ struct hc15_mmc {
 	u32 actual_clock;
 	u32 div;
 	u8 bus;
+	u8 data_variant_next;
+	u8 data_variant_active;
+	int data_variant_locked;
+	u32 last_read_sample;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -221,13 +226,15 @@ static void hc15_set_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	u8 cmdidx = 0x40;
 	u8 cmdctl = hc15_cmd_type(cmd, data);
 	u8 oldctl = readb(host->base + HC15_REG_CMDCTL);
+	bool read_data = data && (data->flags & MMC_DATA_READ);
+	u8 variant = host->data_variant_active;
 
 	if (oldctl & 0x01)
 		hc15_recover_controller(host);
 	writel(cmd->arg, host->base + HC15_REG_CMDARG);
 
 	cmdidx |= cmd->opcode & 0x3f;
-	if (!data || !(data->flags & MMC_DATA_READ))
+	if (!read_data || (variant & 0x01))
 		cmdidx |= 0x80;
 	writeb(cmdidx, host->base + HC15_REG_CMDIDX);
 	writeb(cmdctl, host->base + HC15_REG_CMDCTL);
@@ -359,11 +366,23 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
 	u8 cnt_hi = (blocks - 1) >> 8;
 	u8 cnt_lo = (blocks - 1) & 0xff;
 	u8 cmdidx = readb(host->base + HC15_REG_CMDIDX);
+	u8 pio = 0x04;
 
 	writew(data->blksz, host->base + HC15_REG_BLKSIZ);
 	writeb(cnt_lo, host->base + HC15_REG_BLKCNT_LO);
 	writeb(cnt_hi, host->base + HC15_REG_BLKCNT_HI);
-	writeb(0x04, host->base + HC15_REG_PIO);
+	switch ((host->data_variant_active >> 1) & 0x03) {
+	case 2:
+		pio = 0x00;
+		break;
+	case 3:
+		pio = 0x06;
+		break;
+	default:
+		pio = 0x04;
+		break;
+	}
+	writeb(pio, host->base + HC15_REG_PIO);
 
 	if (data->blksz == 256)
 		cmdidx |= 0x80;
@@ -373,6 +392,7 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
 
 	hc15_mark("hc15-data-blksz", data->blksz);
 	hc15_mark("hc15-data-blocks", blocks);
+	hc15_mark("hc15-data-pioctl", pio);
 }
 
 static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
@@ -383,6 +403,7 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 	u32 sample = 0;
 	int ret = 0;
 
+	host->last_read_sample = 0;
 	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_TO_SG);
 	while (remaining && sg_miter_next(&miter)) {
 		u8 *buf = miter.addr;
@@ -421,6 +442,7 @@ out:
 	hc15_mark("hc15-pio-read", done);
 	hc15_mark("hc15-pio-rsample", sample);
 	hc15_mark("hc15-pio-rerr", data->error);
+	host->last_read_sample = sample;
 	return ret;
 }
 
@@ -473,6 +495,19 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	struct hc15_mmc *host = mmc_priv(mmc);
 	struct mmc_command *cmd = mrq->cmd;
 	struct mmc_data *data = mrq->data;
+	bool data_read = data && (data->flags & MMC_DATA_READ);
+	bool wait_before_pio = false;
+
+	if (data_read) {
+		if (host->data_variant_locked >= 0)
+			host->data_variant_active = host->data_variant_locked;
+		else
+			host->data_variant_active = host->data_variant_next++ & 0x07;
+		wait_before_pio = host->data_variant_active & 0x02;
+		hc15_mark("hc15-data-variant", host->data_variant_active);
+	} else {
+		host->data_variant_active = 0;
+	}
 
 	if (data)
 		hc15_setup_data(host, data);
@@ -480,13 +515,27 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
 
-	if (data && (data->flags & MMC_DATA_READ))
+	if (data_read && !wait_before_pio)
 		hc15_pio_read(host, data);
 	else if (data && (data->flags & MMC_DATA_WRITE))
 		hc15_pio_write(host, data);
 
 	hc15_wait_irq(host, cmd, data);
 	hc15_get_response(host, cmd);
+
+	if (data_read && wait_before_pio && !cmd->error)
+		hc15_pio_read(host, data);
+
+	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
+	    !data->error && data->bytes_xfered == data->blksz * data->blocks) {
+		if (host->last_read_sample) {
+			host->data_variant_locked = host->data_variant_active;
+			hc15_mark("hc15-data-lock", host->data_variant_locked);
+		} else {
+			data->error = -EILSEQ;
+			hc15_mark("hc15-data-zero-scr", host->data_variant_active);
+		}
+	}
 
 	if (data) {
 		hc15_mark("hc15-data-error", data->error);
@@ -573,7 +622,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0190);
+	hc15_mark("hc15-probe", 0x0191);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
@@ -583,6 +632,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
 	host->dev = &pdev->dev;
+	host->data_variant_locked = -1;
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	host->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(host->base)) {
