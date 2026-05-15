@@ -54,7 +54,7 @@
 #define HC15_INPUT_CLOCK	198000000
 #define HC15_CMD_TIMEOUT_MS	200
 #define HC15_SD_APP_SEND_SCR	51
-#define HC15_DATA_VARIANTS	64
+#define HC15_DATA_VARIANTS	128
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -70,6 +70,7 @@ struct hc15_mmc {
 	u32 last_app_arg;
 	bool last_app_valid;
 	u32 last_read_sample;
+	u32 last_read_sample2;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -271,7 +272,7 @@ static u8 hc15_data_fifo_off(struct hc15_mmc *host)
 
 static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
 {
-	if (host->data_variant_active & 0x20)
+	if (host->data_variant_active & 0x40)
 		return !(pio & 0x0002);
 	return pio & 0x0002;
 }
@@ -413,10 +414,12 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 	u32 remaining = data->blksz * data->blocks;
 	u32 done = 0;
 	u32 sample = 0;
+	u32 sample2 = 0;
 	u8 fifo_off = hc15_data_fifo_off(host);
 	int ret = 0;
 
 	host->last_read_sample = 0;
+	host->last_read_sample2 = 0;
 	hc15_mark("hc15-pio-fifo-off", fifo_off);
 	hc15_mark("hc15-pio-stat0", readw(host->base + HC15_REG_PIO));
 	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_TO_SG);
@@ -440,11 +443,21 @@ static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
 			value = readw(host->base + fifo_off);
 			if (done < 8)
 				hc15_mark("hc15-pio-rword", value);
-			if (done < 4)
-				sample |= (u32)value << (done * 8);
 			buf[pos] = value & 0xff;
+			if (done < 4)
+				sample |= (u32)buf[pos] << (done * 8);
+			else if (done < 8)
+				sample2 |= (u32)buf[pos] << ((done - 4) * 8);
 			if (pos + 1 < len)
 				buf[pos + 1] = value >> 8;
+			if (pos + 1 < len) {
+				if (done + 1 < 4)
+					sample |= (u32)buf[pos + 1] <<
+						  ((done + 1) * 8);
+				else if (done + 1 < 8)
+					sample2 |= (u32)buf[pos + 1] <<
+						   ((done + 1 - 4) * 8);
+			}
 			done += min_t(u32, 2, remaining);
 			remaining -= min_t(u32, 2, remaining);
 		}
@@ -458,9 +471,30 @@ out:
 	hc15_mark("hc15-pio-stat1", readw(host->base + HC15_REG_PIO));
 	hc15_mark("hc15-pio-read", done);
 	hc15_mark("hc15-pio-rsample", sample);
+	hc15_mark("hc15-pio-rsample2", sample2);
 	hc15_mark("hc15-pio-rerr", data->error);
 	host->last_read_sample = sample;
+	host->last_read_sample2 = sample2;
 	return ret;
+}
+
+static bool hc15_scr_sample_plausible(struct hc15_mmc *host)
+{
+	u32 a = host->last_read_sample;
+	u32 b = host->last_read_sample2;
+	u8 fifo_off = hc15_data_fifo_off(host);
+
+	if (!a && !b)
+		return false;
+	if (fifo_off == HC15_REG_PIO)
+		return false;
+	if ((u16)a == (u16)(a >> 16) && a == b)
+		return false;
+	if (a == 0xffffffff && b == 0xffffffff)
+		return false;
+	if ((a & 0x00ff00ff) == 0x00060006 && a == b)
+		return false;
+	return true;
 }
 
 static int hc15_pio_write(struct hc15_mmc *host, struct mmc_data *data)
@@ -518,6 +552,7 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 		data->error = 0;
 		data->bytes_xfered = 0;
 		host->last_read_sample = 0;
+		host->last_read_sample2 = 0;
 		hc15_setup_data(host, data);
 	}
 
@@ -580,12 +615,14 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
 		hc15_mark("hc15-data-variant", variant);
 		hc15_run_command(host, cmd, data);
 		hc15_mark("hc15-scan-sample", host->last_read_sample);
+		hc15_mark("hc15-scan-sample2", host->last_read_sample2);
 		hc15_mark("hc15-scan-cmderr", cmd->error);
 		hc15_mark("hc15-scan-dataerr", data->error);
 		hc15_mark("hc15-scan-bytes", data->bytes_xfered);
 
 		if (!cmd->error && !data->error &&
-		    data->bytes_xfered == bytes && host->last_read_sample) {
+		    data->bytes_xfered == bytes &&
+		    hc15_scr_sample_plausible(host)) {
 			host->data_variant_locked = variant;
 			hc15_mark("hc15-data-lock", host->data_variant_locked);
 			return true;
@@ -593,7 +630,10 @@ static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd
 
 		if (!cmd->error && !data->error && data->bytes_xfered == bytes) {
 			data->error = -EILSEQ;
-			hc15_mark("hc15-data-zero-scr", variant);
+			if (host->last_read_sample || host->last_read_sample2)
+				hc15_mark("hc15-data-bad-scr", variant);
+			else
+				hc15_mark("hc15-data-zero-scr", variant);
 			continue;
 		}
 		hc15_recover_controller(host);
@@ -636,12 +676,17 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
 	    !data->error && data->bytes_xfered == data->blksz * data->blocks) {
-		if (host->last_read_sample) {
+		if (hc15_scr_sample_plausible(host)) {
 			host->data_variant_locked = host->data_variant_active;
 			hc15_mark("hc15-data-lock", host->data_variant_locked);
 		} else {
 			data->error = -EILSEQ;
-			hc15_mark("hc15-data-zero-scr", host->data_variant_active);
+			if (host->last_read_sample || host->last_read_sample2)
+				hc15_mark("hc15-data-bad-scr",
+					  host->data_variant_active);
+			else
+				hc15_mark("hc15-data-zero-scr",
+					  host->data_variant_active);
 		}
 	}
 
@@ -725,7 +770,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0193);
+	hc15_mark("hc15-probe", 0x0194);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
