@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0205UL
+#define INIT_TAG 0x0206UL
 
 struct timespec {
 	long tv_sec;
@@ -533,6 +533,7 @@ void sf2000_init_main(void)
 {
 	unsigned int storage_started = 0;
 	unsigned int screen_wait_ticks = 0;
+	unsigned int spawn_storage = 0;
 
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
@@ -566,6 +567,7 @@ void sf2000_init_main(void)
 	for (;;) {
 		reap_children();
 		if (!storage_started) {
+			spawn_storage = 0;
 			if (path_exists("/run/sf2000-storage-started")) {
 				log_message("sf2000_buildroot: storage already started by screen\n");
 				progress_mark("init-storage-seen", 0x3eu,
@@ -581,10 +583,11 @@ void sf2000_init_main(void)
 				progress_mark("init-screen-timeout", 0x3eu,
 					screen_wait_ticks);
 				storage_started = 1;
+				spawn_storage = 1;
 			} else {
 				screen_wait_ticks++;
 			}
-			if (storage_started) {
+			if (spawn_storage) {
 				progress_mark("init-storage-spawn", 0x3eu,
 					INIT_TAG);
 				spawn_service("sf2000_buildroot: starting storage probe after screen\n",
