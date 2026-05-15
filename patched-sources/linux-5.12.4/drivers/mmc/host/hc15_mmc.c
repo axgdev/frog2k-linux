@@ -80,6 +80,10 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void hc15_mark(const char *name, u32 value)
 {
+	static unsigned int mark_count;
+
+	if (mark_count++ >= 192)
+		return;
 	sf2000_progress_mark(name, 0x35, value);
 }
 #else
@@ -780,7 +784,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0207);
+	hc15_mark("hc15-probe", 0x0208);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

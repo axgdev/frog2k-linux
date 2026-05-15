@@ -53,6 +53,10 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_mmc_core_mark(const char *name, unsigned int value)
 {
+	static unsigned int mark_count;
+
+	if (mark_count++ >= 32)
+		return;
 	sf2000_progress_mark(name, 0x38, value);
 }
 #else

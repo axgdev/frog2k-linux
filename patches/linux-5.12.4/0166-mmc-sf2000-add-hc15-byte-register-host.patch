@@ -28,7 +28,7 @@
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.004000000 +0000
 +++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 06:16:42.295595245 +0000
-@@ -0,0 +1,855 @@
+@@ -0,0 +1,859 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -111,6 +111,10 @@
 +
 +static void hc15_mark(const char *name, u32 value)
 +{
++	static unsigned int mark_count;
++
++	if (mark_count++ >= 192)
++		return;
 +	sf2000_progress_mark(name, 0x35, value);
 +}
 +#else
@@ -811,7 +815,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0207);
++	hc15_mark("hc15-probe", 0x0208);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

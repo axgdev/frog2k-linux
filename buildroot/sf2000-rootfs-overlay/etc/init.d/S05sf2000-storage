@@ -52,9 +52,9 @@ case "$1" in
 				ls /mnt/sd 2>/dev/null | sed 's/^/ls /' | while IFS= read -r line; do
 					log "$line"
 				done
-				printf 'sf2000 linux sd write test 0207\n' > /mnt/sd/sf2000-linux-rw-0207.txt &&
-					log "write ok /sf2000-linux-rw-0207.txt" ||
-					log "write failed /sf2000-linux-rw-0207.txt"
+				printf 'sf2000 linux sd write test 0208\n' > /mnt/sd/sf2000-linux-rw-0208.txt &&
+					log "write ok /sf2000-linux-rw-0208.txt" ||
+					log "write failed /sf2000-linux-rw-0208.txt"
 				sync
 				umount /mnt/sd && log "umount ok" || log "umount failed"
 				break

@@ -80,6 +80,10 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void sf2000_mmc_blk_mark(const char *name, unsigned int value)
 {
+	static unsigned int mark_count;
+
+	if (mark_count++ >= 96)
+		return;
 	sf2000_progress_mark(name, 0x39, value);
 }
 #else

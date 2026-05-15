@@ -36,7 +36,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0207u
+#define SCREEN_TAG 0x0208u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -232,6 +232,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define CONSOLE_REPEAT_DELAY_TICKS 5u
 #define CONSOLE_REPEAT_INTERVAL_TICKS 1u
 #define CONSOLE_INPUT_REOPEN_TICKS 100u
+#define CONSOLE_KMSG_READS_PER_FRAME 8u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -1172,14 +1173,14 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0207.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0208.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0207 inline\n";
+		const char msg[] = "sf2000 linux sd write test 0208 inline\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
@@ -1270,8 +1271,10 @@ static void run_inline_storage_probe_once(const char *source)
 
 static void publish_screen_ready_and_storage(const char *source)
 {
+	progress_mark("screen-publish-ready", 0x3fu, SCREEN_TAG);
 	publish_marker("/run/sf2000-screen-ready", "ready\n");
 	publish_marker("/run/sf2000-screen-source", source);
+	progress_mark("screen-ready-done", 0x3fu, SCREEN_TAG);
 }
 
 static uint32_t gpio_base_for_pad(unsigned pad)
@@ -2668,6 +2671,7 @@ static void run_direct_console(unsigned *frame)
 	while (!stopping) {
 		ssize_t got = -1;
 		int changed = 0;
+		unsigned kmsg_reads = 0;
 
 		if (fd >= 0) {
 			do {
@@ -2677,8 +2681,9 @@ static void run_direct_console(unsigned *frame)
 					console_add_kmsg_record(buf, (size_t)got);
 					changed = 1;
 					watchdog_pet();
+					kmsg_reads++;
 				}
-			} while (got > 0);
+			} while (got > 0 && kmsg_reads < CONSOLE_KMSG_READS_PER_FRAME);
 		}
 
 		if (console_input_has_fd(input_fds)) {

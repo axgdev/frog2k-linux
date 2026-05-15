@@ -45,7 +45,7 @@
  }
 --- a/drivers/mmc/core/core.c	2021-05-14 08:53:07.000000000 +0000
 +++ b/drivers/mmc/core/core.c	2026-05-15 05:54:47.007450999 +0000
-@@ -47,6 +47,18 @@
+@@ -47,6 +47,22 @@
  #include "sd_ops.h"
  #include "sdio_ops.h"
  
@@ -55,6 +55,10 @@
 +
 +static void sf2000_mmc_core_mark(const char *name, unsigned int value)
 +{
++	static unsigned int mark_count;
++
++	if (mark_count++ >= 32)
++		return;
 +	sf2000_progress_mark(name, 0x38, value);
 +}
 +#else
@@ -142,7 +146,7 @@
  
 --- a/drivers/mmc/core/block.c	2021-05-14 08:53:07.000000000 +0000
 +++ b/drivers/mmc/core/block.c	2026-05-15 05:55:27.947447734 +0000
-@@ -74,6 +74,18 @@
+@@ -74,6 +74,22 @@
  #define MMC_EXTRACT_INDEX_FROM_ARG(x) ((x & 0x00FF0000) >> 16)
  #define MMC_EXTRACT_VALUE_FROM_ARG(x) ((x & 0x0000FF00) >> 8)
  
@@ -152,6 +156,10 @@
 +
 +static void sf2000_mmc_blk_mark(const char *name, unsigned int value)
 +{
++	static unsigned int mark_count;
++
++	if (mark_count++ >= 96)
++		return;
 +	sf2000_progress_mark(name, 0x39, value);
 +}
 +#else
