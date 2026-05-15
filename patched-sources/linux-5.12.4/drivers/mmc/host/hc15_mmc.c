@@ -56,7 +56,7 @@
 #define HC15_SD_APP_SEND_SCR	51
 #define HC15_DATA_VARIANTS	128
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0212
+#define HC15_PROBE_TAG		0x0213
 
 struct hc15_mmc {
 	struct mmc_host *mmc;

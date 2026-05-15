@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/cachectl.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/mman.h>
 #include <sys/reboot.h>
@@ -36,7 +37,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0212u
+#define SCREEN_TAG 0x0213u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -1149,8 +1150,29 @@ static void storage_log_block_head(const char *dev)
 	close(fd);
 }
 
+static void storage_set_readahead_zero(const char *dev)
+{
+	unsigned long value = 0;
+	int fd;
+	int ret;
+
+	progress_mark("stor-ra-path", 0x3du, storage_hash_name(dev));
+	fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) {
+		progress_mark("stor-ra-open-fail", 0x3du, (uint32_t)errno);
+		return;
+	}
+	errno = 0;
+	ret = ioctl(fd, BLKRASET, value);
+	progress_mark("stor-ra-ret", 0x3du, (uint32_t)ret);
+	progress_mark("stor-ra-err", 0x3du, (uint32_t)errno);
+	close(fd);
+}
+
 static int storage_try_mount_write_type(const char *dev, const char *fstype)
 {
+	ssize_t wrote = -1;
+	int saved_errno = 0;
 	int fd;
 
 	progress_mark("stor-try", 0x3du, storage_hash_name(dev));
@@ -1164,7 +1186,7 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 		dev, fstype);
 	progress_mark("stor-mount-type", 0x3du, storage_hash_name(fstype));
 	errno = 0;
-	if (mount(dev, "/mnt/sd", fstype, MS_SYNCHRONOUS, "") != 0) {
+	if (mount(dev, "/mnt/sd", fstype, MS_NOATIME, "") != 0) {
 		storage_log_msgf("sf2000_storage_inline: mount failed %s type=%s errno=%d\n",
 			dev, fstype, errno);
 		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
@@ -1173,23 +1195,34 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0212.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0213.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0212 inline\n";
-		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
+		const char msg[] = "sf2000 linux sd write test 0213 inline\n";
 
+		errno = 0;
+		wrote = write(fd, msg, sizeof(msg) - 1u);
+		saved_errno = errno;
+		progress_mark("stor-before-fsync", 0x3du, (uint32_t)wrote);
+		if (wrote == (ssize_t)(sizeof(msg) - 1u)) {
+			errno = 0;
+			progress_mark("stor-fsync-ret", 0x3du,
+				(uint32_t)fsync(fd));
+			progress_mark("stor-fsync-err", 0x3du, (uint32_t)errno);
+		}
 		close(fd);
 		storage_log_msgf("sf2000_storage_inline: write ret=%d errno=%d\n",
-			(int)wrote, errno);
+			(int)wrote, saved_errno);
 		progress_mark("stor-write-ret", 0x3du, (uint32_t)wrote);
-		progress_mark("stor-write-errno", 0x3du, (uint32_t)errno);
+		progress_mark("stor-write-errno", 0x3du, (uint32_t)saved_errno);
 	}
+	progress_mark("stor-before-sync", 0x3du, (uint32_t)wrote);
 	sync();
+	progress_mark("stor-after-sync", 0x3du, (uint32_t)wrote);
 	if (umount("/mnt/sd") != 0) {
 		storage_log_msgf("sf2000_storage_inline: umount failed errno=%d\n",
 			errno);
@@ -1198,7 +1231,7 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 		storage_log_msgf("sf2000_storage_inline: umount ok\n");
 		progress_mark("stor-umount-ok", 0x3du, 0);
 	}
-	return 0;
+	return wrote > 0 ? 0 : -1;
 }
 
 static int storage_try_mount_write(const char *dev)
@@ -1213,6 +1246,7 @@ static int storage_try_mount_write(const char *dev)
 static void run_inline_storage_probe_once(const char *source)
 {
 	static int storage_started;
+	int mounted = -1;
 
 	if (storage_started)
 		return;
@@ -1250,20 +1284,34 @@ static void run_inline_storage_probe_once(const char *source)
 	storage_stat_node("/dev/mmcblk0class");
 	storage_stat_node("/dev/mmcblk0p1sys");
 	storage_stat_node("/dev/mmcblk0p2sys");
-	storage_log_block_head("/dev/mmcblk0");
-	storage_log_block_head("/dev/mmcblk0p1");
-	storage_log_block_head("/dev/mmcblk0p2");
-	storage_log_block_head("/dev/mmcblk0sys");
-	storage_log_block_head("/dev/mmcblk0class");
+	storage_set_readahead_zero("/dev/mmcblk0");
+	storage_set_readahead_zero("/dev/mmcblk0p1");
+	storage_set_readahead_zero("/dev/mmcblk0p2");
+	storage_set_readahead_zero("/dev/mmcblk0sys");
+	storage_set_readahead_zero("/dev/mmcblk0class");
+	storage_set_readahead_zero("/dev/mmcblk0p1sys");
+	storage_set_readahead_zero("/dev/mmcblk0p2sys");
+	if (storage_try_mount_write("/dev/mmcblk0p1sys") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0p2sys") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0p1") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0p2") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0sys") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0class") == 0 ||
+	    storage_try_mount_write("/dev/mmcblk0") == 0)
+		mounted = 0;
+	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
+	if (mounted == 0) {
+		storage_log_msgf("sf2000_storage_inline: fast storage path ok\n");
+		progress_mark("stor-done", 0x3au, SCREEN_TAG);
+		return;
+	}
 	storage_log_block_head("/dev/mmcblk0p1sys");
 	storage_log_block_head("/dev/mmcblk0p2sys");
-	if (storage_try_mount_write("/dev/mmcblk0p1sys") != 0 &&
-	    storage_try_mount_write("/dev/mmcblk0p2sys") != 0 &&
-	    storage_try_mount_write("/dev/mmcblk0p1") != 0 &&
-	    storage_try_mount_write("/dev/mmcblk0p2") != 0 &&
-	    storage_try_mount_write("/dev/mmcblk0sys") != 0 &&
-	    storage_try_mount_write("/dev/mmcblk0class") != 0)
-		(void)storage_try_mount_write("/dev/mmcblk0");
+	storage_log_block_head("/dev/mmcblk0p1");
+	storage_log_block_head("/dev/mmcblk0p2");
+	storage_log_block_head("/dev/mmcblk0");
+	storage_log_block_head("/dev/mmcblk0sys");
+	storage_log_block_head("/dev/mmcblk0class");
 	storage_log_msgf("sf2000_storage_inline: done\n");
 	progress_mark("stor-done", 0x3au, SCREEN_TAG);
 }
