@@ -1,0 +1,326 @@
+--- a/drivers/mmc/core/bus.c	2021-05-14 08:53:07.000000000 +0000
++++ b/drivers/mmc/core/bus.c	2026-05-15 05:54:07.657241732 +0000
+@@ -25,6 +25,18 @@
+ #include "sdio_cis.h"
+ #include "bus.h"
+ 
++#ifdef CONFIG_MIPS_SF2000
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++				 unsigned int value);
++
++static void sf2000_mmc_bus_mark(const char *name, unsigned int value)
++{
++	sf2000_progress_mark(name, 0x37, value);
++}
++#else
++static void sf2000_mmc_bus_mark(const char *name, unsigned int value) { }
++#endif
++
+ #define to_mmc_driver(d)	container_of(d, struct mmc_driver, drv)
+ 
+ static ssize_t type_show(struct device *dev,
+@@ -322,6 +334,10 @@
+ 
+ 
+ 	dev_set_name(&card->dev, "%s:%04x", mmc_hostname(card->host), card->rca);
++	sf2000_mmc_bus_mark("mmc-add-card-entry", card->type);
++	sf2000_mmc_bus_mark("mmc-add-card-rca", card->rca);
++	sf2000_mmc_bus_mark("mmc-add-card-caps", card->host->caps);
++	sf2000_mmc_bus_mark("mmc-add-card-caps2", card->host->caps2);
+ 
+ 	switch (card->type) {
+ 	case MMC_TYPE_MMC:
+@@ -379,10 +395,12 @@
+ 	device_enable_async_suspend(&card->dev);
+ 
+ 	ret = device_add(&card->dev);
++	sf2000_mmc_bus_mark("mmc-add-card-devadd", ret);
+ 	if (ret)
+ 		return ret;
+ 
+ 	mmc_card_set_present(card);
++	sf2000_mmc_bus_mark("mmc-add-card-present", card->rca);
+ 
+ 	return 0;
+ }
+--- a/drivers/mmc/core/core.c	2021-05-14 08:53:07.000000000 +0000
++++ b/drivers/mmc/core/core.c	2026-05-15 05:54:47.007450999 +0000
+@@ -47,6 +47,18 @@
+ #include "sd_ops.h"
+ #include "sdio_ops.h"
+ 
++#ifdef CONFIG_MIPS_SF2000
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++				 unsigned int value);
++
++static void sf2000_mmc_core_mark(const char *name, unsigned int value)
++{
++	sf2000_progress_mark(name, 0x38, value);
++}
++#else
++static void sf2000_mmc_core_mark(const char *name, unsigned int value) { }
++#endif
++
+ /* The max erase timeout, used when host->max_busy_timeout isn't specified */
+ #define MMC_ERASE_TIMEOUT_MS	(60 * 1000) /* 60 s */
+ #define SD_DISCARD_TIMEOUT_MS	(250)
+@@ -2127,6 +2139,7 @@
+ static int mmc_rescan_try_freq(struct mmc_host *host, unsigned freq)
+ {
+ 	host->f_init = freq;
++	sf2000_mmc_core_mark("mmc-rescan-try", freq);
+ 
+ 	pr_debug("%s: %s: trying to init card at %u Hz\n",
+ 		mmc_hostname(host), __func__, host->f_init);
+@@ -2159,18 +2172,25 @@
+ 
+ 	/* Order's important: probe SDIO, then SD, then MMC */
+ 	if (!(host->caps2 & MMC_CAP2_NO_SDIO))
+-		if (!mmc_attach_sdio(host))
++		if (!mmc_attach_sdio(host)) {
++			sf2000_mmc_core_mark("mmc-attach-sdio-ok", freq);
+ 			return 0;
++		}
+ 
+ 	if (!(host->caps2 & MMC_CAP2_NO_SD))
+-		if (!mmc_attach_sd(host))
++		if (!mmc_attach_sd(host)) {
++			sf2000_mmc_core_mark("mmc-attach-sd-ok", freq);
+ 			return 0;
++		}
+ 
+ 	if (!(host->caps2 & MMC_CAP2_NO_MMC))
+-		if (!mmc_attach_mmc(host))
++		if (!mmc_attach_mmc(host)) {
++			sf2000_mmc_core_mark("mmc-attach-mmc-ok", freq);
+ 			return 0;
++		}
+ 
+ out:
++	sf2000_mmc_core_mark("mmc-rescan-try-fail", freq);
+ 	mmc_power_off(host);
+ 	return -EIO;
+ }
+@@ -2248,6 +2268,7 @@
+ 		container_of(work, struct mmc_host, detect.work);
+ 	int i;
+ 
++	sf2000_mmc_core_mark("mmc-rescan-entry", host->rescan_disable);
+ 	if (host->rescan_disable)
+ 		return;
+ 
+@@ -2255,6 +2276,7 @@
+ 	if (!mmc_card_is_removable(host) && host->rescan_entered)
+ 		return;
+ 	host->rescan_entered = 1;
++	sf2000_mmc_core_mark("mmc-rescan-entered", host->caps);
+ 
+ 	if (host->trigger_card_event && host->ops->card_event) {
+ 		mmc_claim_host(host);
+@@ -2280,6 +2302,7 @@
+ 
+ 	/* if there still is a card present, stop here */
+ 	if (host->bus_ops != NULL) {
++		sf2000_mmc_core_mark("mmc-rescan-bus-present", host->caps);
+ 		mmc_bus_put(host);
+ 		goto out;
+ 	}
+@@ -2319,12 +2342,14 @@
+ 	mmc_release_host(host);
+ 
+  out:
++	sf2000_mmc_core_mark("mmc-rescan-out", host->bus_ops ? 1 : 0);
+ 	if (host->caps & MMC_CAP_NEEDS_POLL)
+ 		mmc_schedule_delayed_work(&host->detect, HZ);
+ }
+ 
+ void mmc_start_host(struct mmc_host *host)
+ {
++	sf2000_mmc_core_mark("mmc-start-host", host->f_max);
+ 	host->f_init = max(min(freqs[0], host->f_max), host->f_min);
+ 	host->rescan_disable = 0;
+ 
+--- a/drivers/mmc/core/block.c	2021-05-14 08:53:07.000000000 +0000
++++ b/drivers/mmc/core/block.c	2026-05-15 05:55:27.947447734 +0000
+@@ -74,6 +74,18 @@
+ #define MMC_EXTRACT_INDEX_FROM_ARG(x) ((x & 0x00FF0000) >> 16)
+ #define MMC_EXTRACT_VALUE_FROM_ARG(x) ((x & 0x0000FF00) >> 8)
+ 
++#ifdef CONFIG_MIPS_SF2000
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++				 unsigned int value);
++
++static void sf2000_mmc_blk_mark(const char *name, unsigned int value)
++{
++	sf2000_progress_mark(name, 0x39, value);
++}
++#else
++static void sf2000_mmc_blk_mark(const char *name, unsigned int value) { }
++#endif
++
+ #define mmc_req_rel_wr(req)	((req->cmd_flags & REQ_FUA) && \
+ 				  (rq_data_dir(req) == WRITE))
+ static DEFINE_MUTEX(block_mutex);
+@@ -2204,7 +2216,11 @@
+ 	struct mmc_host *host = card->host;
+ 	int ret;
+ 
++	sf2000_mmc_blk_mark("mmcblk-issue-op", req_op(req));
++	sf2000_mmc_blk_mark("mmcblk-issue-pos", (unsigned int)blk_rq_pos(req));
++	sf2000_mmc_blk_mark("mmcblk-issue-bytes", blk_rq_bytes(req));
+ 	ret = mmc_blk_part_switch(card, md->part_type);
++	sf2000_mmc_blk_mark("mmcblk-part-switch", ret);
+ 	if (ret)
+ 		return MMC_REQ_FAILED_TO_START;
+ 
+@@ -2248,6 +2264,7 @@
+ 				ret = mmc_blk_cqe_issue_rw_rq(mq, req);
+ 			else
+ 				ret = mmc_blk_mq_issue_rw_rq(mq, req);
++			sf2000_mmc_blk_mark("mmcblk-rw-ret", ret);
+ 			break;
+ 		default:
+ 			WARN_ON_ONCE(1);
+@@ -2279,6 +2296,7 @@
+ 	int devidx, ret;
+ 
+ 	devidx = ida_simple_get(&mmc_blk_ida, 0, max_devices, GFP_KERNEL);
++	sf2000_mmc_blk_mark("mmcblk-ida", devidx);
+ 	if (devidx < 0) {
+ 		/*
+ 		 * We get -ENOSPC because there are no more any available
+@@ -2297,6 +2315,7 @@
+ 	md = kzalloc(sizeof(struct mmc_blk_data), GFP_KERNEL);
+ 	if (!md) {
+ 		ret = -ENOMEM;
++		sf2000_mmc_blk_mark("mmcblk-alloc-md-fail", ret);
+ 		goto out;
+ 	}
+ 
+@@ -2311,6 +2330,7 @@
+ 	md->disk = alloc_disk(perdev_minors);
+ 	if (md->disk == NULL) {
+ 		ret = -ENOMEM;
++		sf2000_mmc_blk_mark("mmcblk-alloc-disk-fail", ret);
+ 		goto err_kfree;
+ 	}
+ 
+@@ -2319,6 +2339,7 @@
+ 	md->usage = 1;
+ 
+ 	ret = mmc_init_queue(&md->queue, card);
++	sf2000_mmc_blk_mark("mmcblk-init-queue", ret);
+ 	if (ret)
+ 		goto err_putdisk;
+ 
+@@ -2364,6 +2385,8 @@
+ 		 "mmcblk%u%s", card->host->index, subname ? subname : "");
+ 
+ 	set_capacity(md->disk, size);
++	sf2000_mmc_blk_mark("mmcblk-cap-lo", (unsigned int)size);
++	sf2000_mmc_blk_mark("mmcblk-cap-hi", (unsigned int)((u64)size >> 32));
+ 
+ 	if (mmc_host_cmd23(card->host)) {
+ 		if ((mmc_card_mmc(card) &&
+@@ -2686,13 +2709,16 @@
+ 	int ret;
+ 	struct mmc_card *card = md->queue.card;
+ 
++	sf2000_mmc_blk_mark("mmcblk-add-disk-entry", md->disk->first_minor);
+ 	device_add_disk(md->parent, md->disk, NULL);
++	sf2000_mmc_blk_mark("mmcblk-after-devadd", md->disk->flags);
+ 	md->force_ro.show = force_ro_show;
+ 	md->force_ro.store = force_ro_store;
+ 	sysfs_attr_init(&md->force_ro.attr);
+ 	md->force_ro.attr.name = "force_ro";
+ 	md->force_ro.attr.mode = S_IRUGO | S_IWUSR;
+ 	ret = device_create_file(disk_to_dev(md->disk), &md->force_ro);
++	sf2000_mmc_blk_mark("mmcblk-force-ro-file", ret);
+ 	if (ret)
+ 		goto force_ro_fail;
+ 
+@@ -2894,11 +2920,19 @@
+ 	struct mmc_blk_data *md, *part_md;
+ 	char cap_str[10];
+ 
++	sf2000_mmc_blk_mark("mmcblk-probe-entry", card->type);
++	sf2000_mmc_blk_mark("mmcblk-probe-cmdclass", card->csd.cmdclass);
++	sf2000_mmc_blk_mark("mmcblk-probe-cap-lo",
++			    (unsigned int)card->csd.capacity);
++	sf2000_mmc_blk_mark("mmcblk-probe-cap-hi",
++			    (unsigned int)((u64)card->csd.capacity >> 32));
+ 	/*
+ 	 * Check that the card supports the command class(es) we need.
+ 	 */
+-	if (!(card->csd.cmdclass & CCC_BLOCK_READ))
++	if (!(card->csd.cmdclass & CCC_BLOCK_READ)) {
++		sf2000_mmc_blk_mark("mmcblk-no-read-class", card->csd.cmdclass);
+ 		return -ENODEV;
++	}
+ 
+ 	mmc_fixup_device(card, mmc_blk_fixups);
+ 
+@@ -2906,12 +2940,15 @@
+ 					WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+ 	if (unlikely(!card->complete_wq)) {
+ 		pr_err("Failed to create mmc completion workqueue");
++		sf2000_mmc_blk_mark("mmcblk-wq-fail", -ENOMEM);
+ 		return -ENOMEM;
+ 	}
+ 
+ 	md = mmc_blk_alloc(card);
+-	if (IS_ERR(md))
++	if (IS_ERR(md)) {
++		sf2000_mmc_blk_mark("mmcblk-alloc-fail", PTR_ERR(md));
+ 		return PTR_ERR(md);
++	}
+ 
+ 	string_get_size((u64)get_capacity(md->disk), 512, STRING_UNITS_2,
+ 			cap_str, sizeof(cap_str));
+@@ -2919,17 +2956,26 @@
+ 		md->disk->disk_name, mmc_card_id(card), mmc_card_name(card),
+ 		cap_str, md->read_only ? "(ro)" : "");
+ 
+-	if (mmc_blk_alloc_parts(card, md))
++	if (mmc_blk_alloc_parts(card, md)) {
++		sf2000_mmc_blk_mark("mmcblk-alloc-parts-fail", 1);
+ 		goto out;
++	}
+ 
+ 	dev_set_drvdata(&card->dev, md);
++	sf2000_mmc_blk_mark("mmcblk-set-drvdata", 0);
+ 
+-	if (mmc_add_disk(md))
++	if (mmc_add_disk(md)) {
++		sf2000_mmc_blk_mark("mmcblk-add-disk-fail", 1);
+ 		goto out;
++	}
++	sf2000_mmc_blk_mark("mmcblk-add-disk-ok", md->disk->first_minor);
+ 
+ 	list_for_each_entry(part_md, &md->part, part) {
+-		if (mmc_add_disk(part_md))
++		if (mmc_add_disk(part_md)) {
++			sf2000_mmc_blk_mark("mmcblk-add-part-fail",
++					    part_md->disk->first_minor);
+ 			goto out;
++		}
+ 	}
+ 
+ 	/* Add two debugfs entries */
+@@ -2947,9 +2993,11 @@
+ 		pm_runtime_enable(&card->dev);
+ 	}
+ 
++	sf2000_mmc_blk_mark("mmcblk-probe-ok", md->disk->first_minor);
+ 	return 0;
+ 
+  out:
++	sf2000_mmc_blk_mark("mmcblk-probe-out", 0);
+ 	mmc_blk_remove_parts(card, md);
+ 	mmc_blk_remove_req(md);
+ 	return 0;
+@@ -3086,4 +3134,3 @@
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_DESCRIPTION("Multimedia Card (MMC) block device driver");
+-

@@ -27,8 +27,8 @@
  obj-$(CONFIG_MMC_DW_PCI)	+= dw_mmc-pci.o
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.004000000 +0000
-+++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 05:38:00.801616200 +0000
-@@ -0,0 +1,845 @@
++++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 05:55:33.772390267 +0000
+@@ -0,0 +1,848 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -723,10 +723,13 @@
 +
 +done:
 +	if (mrq->stop && !cmd->error && (!data || !data->error)) {
++		hc15_mark("hc15-stop-entry", mrq->stop->opcode);
 +		hc15_set_command(host, mrq->stop, NULL);
 +		hc15_start_command(host);
 +		hc15_wait_irq(host, mrq->stop, false);
 +		hc15_get_response(host, mrq->stop);
++		hc15_mark("hc15-stop-error", mrq->stop->error);
++		hc15_mark("hc15-stop-resp0", mrq->stop->resp[0]);
 +	}
 +
 +	mmc_request_done(mmc, mrq);
@@ -801,7 +804,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0195);
++	hc15_mark("hc15-probe", 0x0196);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);

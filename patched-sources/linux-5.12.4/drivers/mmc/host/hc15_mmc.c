@@ -692,10 +692,13 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 done:
 	if (mrq->stop && !cmd->error && (!data || !data->error)) {
+		hc15_mark("hc15-stop-entry", mrq->stop->opcode);
 		hc15_set_command(host, mrq->stop, NULL);
 		hc15_start_command(host);
 		hc15_wait_irq(host, mrq->stop, false);
 		hc15_get_response(host, mrq->stop);
+		hc15_mark("hc15-stop-error", mrq->stop->error);
+		hc15_mark("hc15-stop-resp0", mrq->stop->resp[0]);
 	}
 
 	mmc_request_done(mmc, mrq);
@@ -770,7 +773,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	hc15_mark("hc15-probe", 0x0195);
+	hc15_mark("hc15-probe", 0x0196);
 	hc15_prepare_soc();
 
 	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
