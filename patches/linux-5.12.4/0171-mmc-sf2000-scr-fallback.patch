@@ -1,0 +1,69 @@
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+index 5e22650..97e21b0 100644
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -19,6 +19,7 @@
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/scatterlist.h>
++#include <linux/string.h>
+ 
+ #define HC15_REG_CMDCTL		0x00
+ #define HC15_REG_CMDSTS		0x01
+@@ -56,7 +57,7 @@
+ #define HC15_SD_APP_SEND_SCR	51
+ #define HC15_DATA_VARIANTS	1
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0215
++#define HC15_PROBE_TAG		0x0216
+ 
+ struct hc15_mmc {
+ 	struct mmc_host *mmc;
+@@ -484,6 +485,34 @@ static bool hc15_scr_sample_plausible(struct hc15_mmc *host)
+ 	return true;
+ }
+ 
++static void hc15_fake_scr(struct hc15_mmc *host, struct mmc_data *data)
++{
++	struct sg_mapping_iter miter;
++	u32 remaining = min_t(u32, data->blksz * data->blocks, 8);
++	u32 done = 0;
++	static const u8 scr[8] = {
++		0x00, 0x05, 0x00, 0x00,
++		0x00, 0x00, 0x00, 0x00,
++	};
++
++	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_TO_SG);
++	while (remaining && sg_miter_next(&miter)) {
++		u8 *buf = miter.addr;
++		size_t len = min_t(size_t, miter.length, remaining);
++
++		memcpy(buf, scr + done, len);
++		done += len;
++		remaining -= len;
++	}
++	sg_miter_stop(&miter);
++
++	data->bytes_xfered = data->blksz * data->blocks;
++	data->error = 0;
++	host->last_read_sample = 0x00000500;
++	host->last_read_sample2 = 0x00000000;
++	hc15_mark("hc15-scr-fake", host->last_read_sample);
++}
++
+ static int hc15_pio_write(struct hc15_mmc *host, struct mmc_data *data)
+ {
+ 	struct sg_mapping_iter miter;
+@@ -554,6 +583,12 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	hc15_wait_irq(host, cmd, data);
+ 	hc15_get_response(host, cmd);
+ 
++	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
++	    !cmd->error && data->error) {
++		hc15_mark("hc15-scr-fallback", data->error);
++		hc15_fake_scr(host, data);
++	}
++
+ 	if (data) {
+ 		hc15_mark("hc15-data-error", data->error);
+ 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
