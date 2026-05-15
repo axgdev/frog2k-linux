@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0197UL
+#define INIT_TAG 0x0198UL
 
 struct timespec {
 	long tv_sec;
@@ -66,10 +66,10 @@ struct progress_entry {
 struct progress_log {
 	unsigned int magic;
 	unsigned int version;
+	unsigned int seq;
 	unsigned int write_index;
 	unsigned int wrapped;
-	unsigned int seq;
-	unsigned int reserved[11];
+	unsigned int reserved[3];
 	struct progress_entry entries[PROGRESS_ENTRIES];
 };
 
