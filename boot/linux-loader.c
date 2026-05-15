@@ -61,7 +61,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-15 nommu-flat-0211-storage-no-kmsg-first"
+#define LOADER_BUILD_TAG "2026-05-15 nommu-flat-0212-mmc-single-block"
 
 typedef unsigned long long u64;
 

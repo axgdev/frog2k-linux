@@ -25,8 +25,8 @@ BusyBox init now reaches real userspace. Add compact device-side breadcrumbs for
  		int max)
  {
 @@ -223,6 +233,12 @@
--		sf2000_namei_raw_mark(0x51510211, (unsigned int)len);
-+		sf2000_namei_raw_mark(0x51510211, (unsigned int)len);
+-		sf2000_namei_raw_mark(0x51510212, (unsigned int)len);
++		sf2000_namei_raw_mark(0x51510212, (unsigned int)len);
  		sf2000_namei_progress_mark("getname-after-usercopy",
  				(unsigned int)len);
 +		if (len > 0) {

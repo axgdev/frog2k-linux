@@ -56,7 +56,7 @@
 #define HC15_SD_APP_SEND_SCR	51
 #define HC15_DATA_VARIANTS	128
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0211
+#define HC15_PROBE_TAG		0x0212
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -81,10 +81,6 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void hc15_mark(const char *name, u32 value)
 {
-	static unsigned int mark_count;
-
-	if (mark_count++ >= 192)
-		return;
 	sf2000_progress_mark(name, 0x35, value);
 }
 #else
@@ -824,10 +820,10 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 		     MMC_CAP2_NO_WRITE_PROTECT;
 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 	mmc->max_blk_size = 512;
-	mmc->max_blk_count = 128;
+	mmc->max_blk_count = 1;
 	mmc->max_req_size = mmc->max_blk_size * mmc->max_blk_count;
 	mmc->max_seg_size = mmc->max_req_size;
-	mmc->max_segs = 16;
+	mmc->max_segs = 1;
 
 	platform_set_drvdata(pdev, mmc);
 	ret = mmc_add_host(mmc);
