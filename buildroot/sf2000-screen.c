@@ -36,7 +36,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0206u
+#define SCREEN_TAG 0x0207u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -970,6 +970,7 @@ static int publish_marker(const char *path, const char *text)
 	return 0;
 }
 
+#if 0
 static uint32_t storage_hash_name(const char *text)
 {
 	uint32_t hash = 2166136261u;
@@ -1171,14 +1172,14 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0206.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0207.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0206 inline\n";
+		const char msg[] = "sf2000 linux sd write test 0207 inline\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
@@ -1265,11 +1266,12 @@ static void run_inline_storage_probe_once(const char *source)
 	storage_log_msgf("sf2000_storage_inline: done\n");
 	progress_mark("stor-done", 0x3au, SCREEN_TAG);
 }
+#endif
 
 static void publish_screen_ready_and_storage(const char *source)
 {
 	publish_marker("/run/sf2000-screen-ready", "ready\n");
-	run_inline_storage_probe_once(source);
+	publish_marker("/run/sf2000-screen-source", source);
 }
 
 static uint32_t gpio_base_for_pad(unsigned pad)
@@ -2795,12 +2797,13 @@ int main(int argc, char **argv, char **envp)
 {
 	int fd;
 	unsigned frame = 0;
+	const struct panel_variant *first_variant = &panel_variants[0];
 
 	(void)argc;
 	(void)argv;
+	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	if (envp)
 		environ = envp;
-	const struct panel_variant *first_variant = &panel_variants[0];
 
 	if (env_is((const char *const *)envp, "SF2000_PANEL", "0"))
 		panel_enabled = 0;

@@ -17,7 +17,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0206u
+#define STORAGE_TAG 0x0207u
 
 struct progress_entry {
 	uint32_t seq;
@@ -208,6 +208,80 @@ static void log_file_head(const char *label, const char *path)
 			((uint32_t)(unsigned char)buf[3] << 24));
 }
 
+static int read_devt(const char *path, unsigned *major_out,
+	unsigned *minor_out)
+{
+	char buf[32];
+	unsigned major = 0;
+	unsigned minor = 0;
+	ssize_t got;
+	unsigned i = 0;
+	int fd;
+
+	progress_mark("stor-devt-path", 0x3du, hash_name(path));
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		progress_mark("stor-devt-open-fail", 0x3du, (uint32_t)errno);
+		return -1;
+	}
+	got = read(fd, buf, sizeof(buf) - 1u);
+	close(fd);
+	if (got <= 0) {
+		progress_mark("stor-devt-read-fail", 0x3du,
+			got < 0 ? (uint32_t)errno : 0);
+		return -1;
+	}
+	buf[got] = 0;
+	while (buf[i] >= '0' && buf[i] <= '9') {
+		major = major * 10u + (unsigned)(buf[i] - '0');
+		i++;
+	}
+	if (buf[i] != ':') {
+		progress_mark("stor-devt-bad", 0x3du, hash_name(buf));
+		return -1;
+	}
+	i++;
+	while (buf[i] >= '0' && buf[i] <= '9') {
+		minor = minor * 10u + (unsigned)(buf[i] - '0');
+		i++;
+	}
+	*major_out = major;
+	*minor_out = minor;
+	progress_mark("stor-devt-major", 0x3du, major);
+	progress_mark("stor-devt-minor", 0x3du, minor);
+	return 0;
+}
+
+static void mknod_from_devt(const char *sysdev, const char *node)
+{
+	unsigned major;
+	unsigned minor;
+	int ret;
+
+	if (read_devt(sysdev, &major, &minor) != 0)
+		return;
+	errno = 0;
+	unlink(node);
+	ret = mknod(node, S_IFBLK | 0660, makedev(major, minor));
+	progress_mark("stor-devt-mknod-ret", 0x3du, (uint32_t)ret);
+	progress_mark("stor-devt-mknod-err", 0x3du, (uint32_t)errno);
+}
+
+static void stat_node(const char *path)
+{
+	struct stat st;
+
+	progress_mark("stor-stat-path", 0x3du, hash_name(path));
+	errno = 0;
+	if (stat(path, &st) != 0) {
+		progress_mark("stor-stat-fail", 0x3du, (uint32_t)errno);
+		return;
+	}
+	progress_mark("stor-stat-mode", 0x3du, (uint32_t)st.st_mode);
+	progress_mark("stor-stat-major", 0x3du, (uint32_t)major(st.st_rdev));
+	progress_mark("stor-stat-minor", 0x3du, (uint32_t)minor(st.st_rdev));
+}
+
 static void ensure_block_nodes(void)
 {
 	int ret;
@@ -224,6 +298,10 @@ static void ensure_block_nodes(void)
 	ret = mknod("/dev/mmcblk0p2", S_IFBLK | 0660, makedev(179, 2));
 	progress_mark("stor-mknod-mmc0p2-ret", 0x3du, (uint32_t)ret);
 	progress_mark("stor-mknod-mmc0p2-err", 0x3du, (uint32_t)errno);
+	mknod_from_devt("/sys/block/mmcblk0/dev", "/dev/mmcblk0sys");
+	mknod_from_devt("/sys/class/block/mmcblk0/dev", "/dev/mmcblk0class");
+	mknod_from_devt("/sys/class/block/mmcblk0p1/dev", "/dev/mmcblk0p1sys");
+	mknod_from_devt("/sys/class/block/mmcblk0p2/dev", "/dev/mmcblk0p2sys");
 }
 
 static void log_block_head(const char *dev)
@@ -233,7 +311,7 @@ static void log_block_head(const char *dev)
 	int fd;
 
 	progress_mark("stor-blk-open-begin", 0x3du, hash_name(dev));
-	fd = open(dev, O_RDONLY | O_CLOEXEC);
+	fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: block open failed %s errno=%d\n",
 			dev, errno);
@@ -277,14 +355,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	}
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0206.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0207.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0206\n";
+		const char msg[] = "sf2000 linux sd write test 0207\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
@@ -320,6 +398,8 @@ int main(void)
 	ensure_mounts();
 	ensure_block_nodes();
 	log_dir("sys-block", "/sys/block");
+	log_dir("class-block", "/sys/class/block");
+	log_dir("dev-block", "/sys/dev/block");
 	log_dir("mmc-host", "/sys/class/mmc_host");
 	log_dir("platform-devices", "/sys/bus/platform/devices");
 	log_dir("platform-drivers", "/sys/bus/platform/drivers");
@@ -327,11 +407,31 @@ int main(void)
 	log_file_head("proc-partitions", "/proc/partitions");
 	log_file_head("proc-devices", "/proc/devices");
 	log_file_head("proc-interrupts", "/proc/interrupts");
+	log_file_head("sys-mmc0-dev", "/sys/block/mmcblk0/dev");
+	log_file_head("sys-mmc0-size", "/sys/block/mmcblk0/size");
+	log_file_head("cls-mmc0-dev", "/sys/class/block/mmcblk0/dev");
+	log_file_head("cls-mmc0p1-dev", "/sys/class/block/mmcblk0p1/dev");
+	log_file_head("cls-mmc0p2-dev", "/sys/class/block/mmcblk0p2/dev");
+	stat_node("/dev/mmcblk0");
+	stat_node("/dev/mmcblk0p1");
+	stat_node("/dev/mmcblk0p2");
+	stat_node("/dev/mmcblk0sys");
+	stat_node("/dev/mmcblk0class");
+	stat_node("/dev/mmcblk0p1sys");
+	stat_node("/dev/mmcblk0p2sys");
 	log_block_head("/dev/mmcblk0");
 	log_block_head("/dev/mmcblk0p1");
 	log_block_head("/dev/mmcblk0p2");
-	if (try_mount_write("/dev/mmcblk0p1") != 0 &&
-	    try_mount_write("/dev/mmcblk0p2") != 0)
+	log_block_head("/dev/mmcblk0sys");
+	log_block_head("/dev/mmcblk0class");
+	log_block_head("/dev/mmcblk0p1sys");
+	log_block_head("/dev/mmcblk0p2sys");
+	if (try_mount_write("/dev/mmcblk0p1sys") != 0 &&
+	    try_mount_write("/dev/mmcblk0p2sys") != 0 &&
+	    try_mount_write("/dev/mmcblk0p1") != 0 &&
+	    try_mount_write("/dev/mmcblk0p2") != 0 &&
+	    try_mount_write("/dev/mmcblk0sys") != 0 &&
+	    try_mount_write("/dev/mmcblk0class") != 0)
 		(void)try_mount_write("/dev/mmcblk0");
 	log_line("sf2000_storage_probe: done\n");
 	progress_mark("stor-done", 0x3au, STORAGE_TAG);
