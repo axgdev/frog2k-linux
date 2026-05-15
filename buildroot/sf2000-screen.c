@@ -36,7 +36,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0209u
+#define SCREEN_TAG 0x0210u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -1173,14 +1173,14 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0209.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0210.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0209 inline\n";
+		const char msg[] = "sf2000 linux sd write test 0210 inline\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);
