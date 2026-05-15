@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0199UL
+#define INIT_TAG 0x0200UL
 
 struct timespec {
 	long tv_sec;
@@ -478,7 +478,7 @@ static void wait_for_screen_ready(void)
 
 	log_message("sf2000_buildroot: waiting screen ready\n");
 	progress_mark("init-wait-screen", 0x3eu, INIT_TAG);
-	for (i = 0; i < 80; i++) {
+	for (i = 0; i < 16; i++) {
 		if (path_exists("/run/sf2000-screen-ready")) {
 			log_message("sf2000_buildroot: screen ready\n");
 			progress_mark("init-screen-ready", 0x3eu, i);
@@ -579,6 +579,7 @@ void sf2000_init_main(void)
 	sleep_ms(200);
 	diagnostic_watchdog_pet();
 	wait_for_screen_ready();
+	progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
 	spawn_service("sf2000_buildroot: starting storage probe after screen\n",
 		storage_argv, storage_late_stack);
 	diagnostic_watchdog_pet();

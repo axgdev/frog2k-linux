@@ -16,7 +16,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0199u
+#define STORAGE_TAG 0x0200u
 
 struct progress_entry {
 	uint32_t seq;
@@ -208,14 +208,14 @@ static int try_mount_write(const char *dev)
 	}
 	log_msgf("sf2000_storage_probe: mount ok %s\n", dev);
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0199.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0200.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0199\n";
+		const char msg[] = "sf2000 linux sd write test 0200\n";
 		ssize_t wrote = write(fd, msg, sizeof(msg) - 1u);
 
 		close(fd);

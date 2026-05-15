@@ -28,7 +28,7 @@
  obj-$(CONFIG_MMC_DW_ROCKCHIP)	+= dw_mmc-rockchip.o
 --- a/drivers/mmc/host/hc15_mmc.c	1970-01-01 00:00:00.004000000 +0000
 +++ b/drivers/mmc/host/hc15_mmc.c	2026-05-15 06:16:42.295595245 +0000
-@@ -0,0 +1,848 @@
+@@ -0,0 +1,855 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Hichip HC15xx SD/MMC host for SF2000.
@@ -86,6 +86,7 @@
 +#define HC15_CMD_TIMEOUT_MS	200
 +#define HC15_SD_APP_SEND_SCR	51
 +#define HC15_DATA_VARIANTS	128
++#define HC15_TRACE_VERBOSE	0
 +
 +struct hc15_mmc {
 +	struct mmc_host *mmc;
@@ -472,7 +473,7 @@
 +				goto out;
 +			}
 +			value = readw(host->base + fifo_off);
-+			if (done < 8)
++			if (HC15_TRACE_VERBOSE && done < 8)
 +				hc15_mark("hc15-pio-rword", value);
 +			buf[pos] = value & 0xff;
 +			if (done < 4)
@@ -547,7 +548,7 @@
 +
 +			if (pos + 1 < len)
 +				value |= (u16)buf[pos + 1] << 8;
-+			if (done < 8)
++			if (HC15_TRACE_VERBOSE && done < 8)
 +				hc15_mark("hc15-pio-wword", value);
 +			writew(value, host->base + HC15_REG_FIFO);
 +			ret = readw_poll_timeout(host->base + HC15_REG_PIO,
@@ -620,9 +621,11 @@
 +		return;
 +
 +	host->data_variant_active = 0;
-+	hc15_mark("hc15-scan-appcmd", app.arg);
++	if (HC15_TRACE_VERBOSE)
++		hc15_mark("hc15-scan-appcmd", app.arg);
 +	hc15_run_command(host, &app, NULL);
-+	hc15_mark("hc15-scan-appret", app.error);
++	if (HC15_TRACE_VERBOSE)
++		hc15_mark("hc15-scan-appret", app.error);
 +}
 +
 +static bool hc15_request_scan_scr(struct hc15_mmc *host, struct mmc_command *cmd,
@@ -643,13 +646,16 @@
 +			hc15_send_internal_app(host);
 +
 +		host->data_variant_active = variant;
-+		hc15_mark("hc15-data-variant", variant);
++		if (HC15_TRACE_VERBOSE)
++			hc15_mark("hc15-data-variant", variant);
 +		hc15_run_command(host, cmd, data);
-+		hc15_mark("hc15-scan-sample", host->last_read_sample);
-+		hc15_mark("hc15-scan-sample2", host->last_read_sample2);
-+		hc15_mark("hc15-scan-cmderr", cmd->error);
-+		hc15_mark("hc15-scan-dataerr", data->error);
-+		hc15_mark("hc15-scan-bytes", data->bytes_xfered);
++		if (HC15_TRACE_VERBOSE) {
++			hc15_mark("hc15-scan-sample", host->last_read_sample);
++			hc15_mark("hc15-scan-sample2", host->last_read_sample2);
++			hc15_mark("hc15-scan-cmderr", cmd->error);
++			hc15_mark("hc15-scan-dataerr", data->error);
++			hc15_mark("hc15-scan-bytes", data->bytes_xfered);
++		}
 +
 +		if (!cmd->error && !data->error &&
 +		    data->bytes_xfered == bytes &&
@@ -698,7 +704,8 @@
 +			host->data_variant_active =
 +				host->data_variant_next++ &
 +				(HC15_DATA_VARIANTS - 1);
-+		hc15_mark("hc15-data-variant", host->data_variant_active);
++		if (HC15_TRACE_VERBOSE)
++			hc15_mark("hc15-data-variant", host->data_variant_active);
 +	} else {
 +		host->data_variant_active = 0;
 +	}
@@ -804,7 +811,7 @@
 +	struct resource *res;
 +	int ret;
 +
-+	hc15_mark("hc15-probe", 0x0199);
++	hc15_mark("hc15-probe", 0x0200);
 +	hc15_prepare_soc();
 +
 +	mmc = mmc_alloc_host(sizeof(*host), &pdev->dev);
