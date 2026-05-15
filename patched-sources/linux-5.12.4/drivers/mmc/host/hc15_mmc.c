@@ -59,7 +59,7 @@
 #define HC15_DATA_VARIANTS	1
 #define HC15_READ_VARIANTS	8
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0217
+#define HC15_PROBE_TAG		0x0218
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -268,6 +268,8 @@ static void hc15_pio_cleanup(struct hc15_mmc *host)
 	u8 pio;
 
 	pio = readb(host->base + HC15_REG_PIO);
+	writeb(pio & ~0x04, host->base + HC15_REG_PIO);
+	pio = readb(host->base + HC15_REG_PIO);
 	writeb(pio | 0x01, host->base + HC15_REG_PIO);
 	udelay(1);
 	pio = readb(host->base + HC15_REG_PIO);
@@ -397,6 +399,7 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
 	writew(data->blksz, host->base + HC15_REG_BLKSIZ);
 	writeb(cnt_lo, host->base + HC15_REG_BLKCNT_LO);
 	writeb(cnt_hi, host->base + HC15_REG_BLKCNT_HI);
+	writeb(0x04, host->base + HC15_REG_PIO);
 
 	hc15_mark("hc15-data-blksz", data->blksz);
 	hc15_mark("hc15-data-blocks", blocks);
