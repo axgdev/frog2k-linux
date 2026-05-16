@@ -18,7 +18,8 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0223u
+#define STORAGE_TAG 0x0224u
+#define RAW_TEST_NAME "SF2L0224TXT"
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -120,6 +121,20 @@ static uint32_t get_le32(const unsigned char *buf, unsigned off)
 		((uint32_t)buf[off + 1u] << 8) |
 		((uint32_t)buf[off + 2u] << 16) |
 		((uint32_t)buf[off + 3u] << 24);
+}
+
+static void put_le16(unsigned char *buf, unsigned off, uint16_t value)
+{
+	buf[off] = (unsigned char)value;
+	buf[off + 1u] = (unsigned char)(value >> 8);
+}
+
+static void put_le32(unsigned char *buf, unsigned off, uint32_t value)
+{
+	buf[off] = (unsigned char)value;
+	buf[off + 1u] = (unsigned char)(value >> 8);
+	buf[off + 2u] = (unsigned char)(value >> 16);
+	buf[off + 3u] = (unsigned char)(value >> 24);
 }
 
 static void log_line(const char *line)
@@ -438,6 +453,40 @@ static int read_sector_lba(const char *dev, uint32_t lba, const char *label,
 	return 0;
 }
 
+static int write_sector_lba(const char *dev, uint32_t lba, const char *label,
+	const unsigned char *buf)
+{
+	ssize_t wrote;
+	off_t pos;
+	int fd;
+
+	progress_mark(label, 0x3cu, lba);
+	fd = open(dev, O_RDWR | O_SYNC | O_CLOEXEC);
+	if (fd < 0) {
+		progress_mark("stor-wsec-open-fail", 0x3cu, (uint32_t)errno);
+		return -1;
+	}
+	pos = lseek(fd, (off_t)lba * 512, SEEK_SET);
+	progress_mark("stor-wsec-seek", 0x3cu, (uint32_t)pos);
+	if (pos < 0) {
+		progress_mark("stor-wsec-seek-fail", 0x3cu, (uint32_t)errno);
+		close(fd);
+		return -1;
+	}
+	storage_watchdog_arm("stor-wdt-raw-write");
+	wrote = write(fd, buf, 512);
+	progress_mark("stor-wsec-write-ret", 0x3cu, (uint32_t)wrote);
+	fsync(fd);
+	storage_watchdog_release("stor-wdt-raw-write-done");
+	close(fd);
+	if (wrote != 512) {
+		progress_mark("stor-wsec-write-err", 0x3cu,
+			wrote < 0 ? (uint32_t)errno : (uint32_t)wrote);
+		return -1;
+	}
+	return 0;
+}
+
 static uint32_t read_fat32_entry(const char *dev, uint32_t fat_start,
 	uint32_t cluster)
 {
@@ -451,6 +500,146 @@ static uint32_t read_fat32_entry(const char *dev, uint32_t fat_start,
 	return get_le32(buf, off) & 0x0fffffffu;
 }
 
+static int write_fat32_entry(const char *dev, uint32_t first_fat,
+	uint32_t fat_size, uint32_t cluster, uint32_t value)
+{
+	unsigned char buf[512];
+	uint32_t fat_off = cluster * 4u;
+	uint32_t rel_lba = fat_off / 512u;
+	unsigned off = fat_off & 511u;
+
+	if (read_sector_lba(dev, first_fat + rel_lba, "fat-wr-sec1", buf) != 0)
+		return -1;
+	put_le32(buf, off, value);
+	if (write_sector_lba(dev, first_fat + rel_lba, "fat-write1", buf) != 0)
+		return -1;
+
+	if (read_sector_lba(dev, first_fat + fat_size + rel_lba,
+			"fat-wr-sec2", buf) != 0)
+		return -1;
+	put_le32(buf, off, value);
+	return write_sector_lba(dev, first_fat + fat_size + rel_lba,
+		"fat-write2", buf);
+}
+
+static uint32_t find_free_fat32_cluster(const char *dev, uint32_t first_fat,
+	uint32_t max_cluster)
+{
+	unsigned char buf[512];
+	uint32_t lba;
+	uint32_t cluster;
+	unsigned off;
+	unsigned i;
+
+	cluster = 2u;
+	for (i = 0; i < 512u; i++) {
+		lba = first_fat + (cluster * 4u) / 512u;
+		if (read_sector_lba(dev, lba, "fat-scan-sec", buf) != 0)
+			return 0;
+		for (off = (cluster * 4u) & 511u; off < 512u; off += 4u) {
+			if ((get_le32(buf, off) & 0x0fffffffu) == 0) {
+				progress_mark("fat-free-cluster", 0x3cu,
+					cluster);
+				return cluster;
+			}
+			cluster++;
+			if (cluster >= max_cluster || cluster >= 65536u)
+				return 0;
+		}
+	}
+	return 0;
+}
+
+static int find_root_dir_slot(const char *dev, uint32_t root_lba,
+	uint32_t root_sectors, uint32_t *slot_lba, unsigned *slot_off,
+	uint32_t *slot_cluster)
+{
+	unsigned char buf[512];
+	uint32_t i;
+	unsigned off;
+
+	for (i = 0; i < root_sectors && i < 128u; i++) {
+		if (read_sector_lba(dev, root_lba + i, "fat-dir-scan", buf) != 0)
+			return -1;
+		for (off = 0; off < 512u; off += 32u) {
+			if (memcmp(buf + off, RAW_TEST_NAME, 11) == 0) {
+				progress_mark("fat-dir-existing", 0x3cu,
+					root_lba + i);
+				*slot_lba = root_lba + i;
+				*slot_off = off;
+				*slot_cluster =
+					((get_le16(buf, off + 20u) << 16) |
+					get_le16(buf, off + 26u));
+				return 0;
+			}
+			if (buf[off] == 0x00 || buf[off] == 0xe5) {
+				progress_mark("fat-dir-free", 0x3cu,
+					root_lba + i);
+				*slot_lba = root_lba + i;
+				*slot_off = off;
+				*slot_cluster = 0;
+				return 0;
+			}
+		}
+	}
+	progress_mark("fat-dir-no-slot", 0x3cu, root_sectors);
+	return -1;
+}
+
+static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
+	uint32_t fat_size, uint32_t first_data, uint32_t total_sectors,
+	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
+{
+	static const char msg[] =
+		"sf2000 linux raw fat32 write test 0224\r\n";
+	unsigned char buf[512];
+	uint32_t max_cluster;
+	uint32_t cluster;
+	uint32_t data_lba;
+	uint32_t slot_lba;
+	uint32_t slot_cluster;
+	unsigned slot_off;
+
+	max_cluster = (total_sectors - first_data) / spc + 2u;
+	progress_mark("fat-raw-max-cluster", 0x3cu, max_cluster);
+	if (find_root_dir_slot(dev, root_lba, root_sectors,
+			&slot_lba, &slot_off, &slot_cluster) != 0)
+		return -1;
+	if (slot_cluster >= 2u && slot_cluster < max_cluster) {
+		cluster = slot_cluster;
+		progress_mark("fat-raw-reuse-cluster", 0x3cu, cluster);
+	} else {
+		cluster = find_free_fat32_cluster(dev, first_fat, max_cluster);
+		if (!cluster) {
+			progress_mark("fat-raw-no-cluster", 0x3cu, 0);
+			return -1;
+		}
+	}
+	data_lba = first_data + (cluster - 2u) * spc;
+	progress_mark("fat-raw-cluster", 0x3cu, cluster);
+	progress_mark("fat-raw-data-lba", 0x3cu, data_lba);
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, msg, sizeof(msg) - 1u);
+	if (write_sector_lba(dev, data_lba, "fat-write-data", buf) != 0)
+		return -1;
+	if (write_fat32_entry(dev, first_fat, fat_size, cluster,
+			0x0ffffff8u) != 0)
+		return -1;
+	if (read_sector_lba(dev, slot_lba, "fat-dir-read-slot", buf) != 0)
+		return -1;
+	memset(buf + slot_off, 0, 32);
+	memcpy(buf + slot_off, RAW_TEST_NAME, 11);
+	buf[slot_off + 11u] = 0x20;
+	put_le16(buf, slot_off + 20u, (uint16_t)(cluster >> 16));
+	put_le16(buf, slot_off + 26u, (uint16_t)cluster);
+	put_le32(buf, slot_off + 28u, (uint32_t)(sizeof(msg) - 1u));
+	if (write_sector_lba(dev, slot_lba, "fat-write-dir", buf) != 0)
+		return -1;
+	progress_mark("fat-raw-write-ok", 0x3cu, cluster);
+	return 0;
+}
+
 static void log_fat_geometry(const char *dev)
 {
 	unsigned char buf[512];
@@ -461,6 +650,7 @@ static void log_fat_geometry(const char *dev)
 	uint32_t first_data;
 	uint32_t root_cluster;
 	uint32_t root_lba;
+	uint32_t root_sectors;
 	uint32_t cluster;
 	uint32_t next;
 	unsigned bps;
@@ -491,6 +681,7 @@ static void log_fat_geometry(const char *dev)
 	first_fat = reserved;
 	first_data = reserved + (uint32_t)fats * fat_size + root_dir_sectors;
 	root_lba = first_data + (root_cluster - 2u) * spc;
+	root_sectors = spc;
 
 	progress_mark("fat-bps", 0x3cu, bps);
 	progress_mark("fat-spc", 0x3cu, spc);
@@ -503,6 +694,7 @@ static void log_fat_geometry(const char *dev)
 	progress_mark("fat-first-fat", 0x3cu, first_fat);
 	progress_mark("fat-first-data", 0x3cu, first_data);
 	progress_mark("fat-root-lba", 0x3cu, root_lba);
+	progress_mark("fat-root-sectors", 0x3cu, root_sectors);
 
 	if (fsinfo)
 		(void)read_sector_lba(dev, fsinfo, "fat-fsinfo-sec", buf);
@@ -520,6 +712,8 @@ static void log_fat_geometry(const char *dev)
 
 	for (i = 0; i < 8u; i++)
 		(void)read_sector_lba(dev, root_lba + i, "fat-root-sec", buf);
+	(void)raw_fat32_write_test(dev, first_fat, fat_size, first_data,
+		total_sectors, root_lba, root_sectors, spc);
 }
 
 static int try_mount_read_type(const char *dev, const char *fstype)
@@ -584,14 +778,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0223.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0224.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0223\n";
+		const char msg[] = "sf2000 linux sd write test 0224\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
