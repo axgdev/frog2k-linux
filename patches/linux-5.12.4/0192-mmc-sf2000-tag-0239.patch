@@ -1,0 +1,13 @@
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+index c74023f..5348df2 100644
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -62,7 +62,7 @@
+ #define HC15_WRITE_VARIANTS	8
+ #define HC15_WRITE_LOCK_VARIANT	2
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0236
++#define HC15_PROBE_TAG		0x0239
+ 
+ struct hc15_mmc {
+ 	struct mmc_host *mmc;
