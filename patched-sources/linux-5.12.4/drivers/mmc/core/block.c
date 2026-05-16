@@ -330,10 +330,15 @@ static int mmc_blk_open(struct block_device *bdev, fmode_t mode)
 	mutex_lock(&block_mutex);
 	if (md) {
 		ret = 0;
+#ifndef CONFIG_MIPS_SF2000
 		if ((mode & FMODE_WRITE) && md->read_only) {
 			mmc_blk_put(md);
 			ret = -EROFS;
 		}
+#else
+		if (mode & FMODE_WRITE)
+			sf2000_mmc_blk_mark("mmcblk-open-write", md->read_only);
+#endif
 	}
 	mutex_unlock(&block_mutex);
 
@@ -2372,6 +2377,11 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 	md->disk->private_data = md;
 	md->disk->queue = md->queue.queue;
 	md->parent = parent;
+#ifdef CONFIG_MIPS_SF2000
+	default_ro = false;
+	md->read_only = 0;
+	sf2000_mmc_blk_mark("mmcblk-clear-ro", area_type);
+#endif
 	set_disk_ro(md->disk, md->read_only || default_ro);
 	md->disk->flags = GENHD_FL_EXT_DEVT;
 	if (area_type & (MMC_BLK_DATA_AREA_RPMB | MMC_BLK_DATA_AREA_BOOT))

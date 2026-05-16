@@ -59,7 +59,7 @@
 #define HC15_DATA_VARIANTS	1
 #define HC15_READ_VARIANTS	1
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0226
+#define HC15_PROBE_TAG		0x0227
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
