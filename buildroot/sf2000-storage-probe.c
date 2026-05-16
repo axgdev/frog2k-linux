@@ -171,6 +171,12 @@ static void log_line(const char *line)
 {
 	int fd;
 
+	fd = open("/dev/console", O_WRONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		(void)write(fd, line, strlen(line));
+		close(fd);
+		return;
+	}
 	fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
 	if (fd >= 0) {
 		(void)write(fd, line, strlen(line));

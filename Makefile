@@ -122,7 +122,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
-	smoke-linux-buildroot-asd run-linux-buildroot-rom \
+	smoke-linux-buildroot-asd run-linux-buildroot-storage \
+	smoke-linux-buildroot-storage run-linux-buildroot-rom \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-display run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
@@ -726,6 +727,7 @@ smoke-linux: run-linux
 run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
+		-append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-asd.log \
 		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
@@ -787,6 +789,19 @@ run-linux-buildroot-asd:
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
+
+run-linux-buildroot-storage:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init' \
+		run-linux-asd
+
+smoke-linux-buildroot-storage:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init' \
+		run-linux-buildroot-storage
+	grep -q 'sf2000_storage_probe: start 0239 guarded write diagnostics' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_storage_probe: readonly FAT diagnostics done, starting guarded write' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -Eq 'fat-known-write-ok|stor-fast-result' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
