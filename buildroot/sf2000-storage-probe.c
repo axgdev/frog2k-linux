@@ -18,8 +18,8 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0232u
-#define RAW_TEST_NAME "SF2L0232TXT"
+#define STORAGE_TAG 0x0233u
+#define RAW_TEST_NAME "SF2L0233TXT"
 #define RAW_FIXED_CLUSTER 5u
 #define RAW_FIXED_DIR_SECTOR 6u
 #define RAW_FIXED_DIR_SLOT 2u
@@ -736,7 +736,7 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux raw fat32 write test 0232\r\n";
+		"sf2000 linux raw fat32 write test 0233\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -790,7 +790,7 @@ static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux fixed fat32 write test 0232\r\n";
+		"sf2000 linux fixed fat32 write test 0233\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -850,7 +850,7 @@ static int raw_fat32_ioctl_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux ioctl fat32 write test 0232\r\n";
+		"sf2000 linux ioctl fat32 write test 0233\r\n";
 	unsigned char buf[512];
 	uint32_t cluster;
 	uint32_t data_lba;
@@ -915,7 +915,7 @@ static int raw_fat32_ioctl_known_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux known cluster ioctl fat32 write test 0232\r\n";
+		"sf2000 linux known cluster ioctl fat32 write test 0233\r\n";
 	unsigned char buf[512];
 	uint32_t cluster = RAW_FIXED_CLUSTER;
 	uint32_t data_lba;
@@ -1128,14 +1128,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0232.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0233.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0232\n";
+		const char msg[] = "sf2000 linux sd write test 0233\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);

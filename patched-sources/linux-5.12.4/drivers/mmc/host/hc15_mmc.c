@@ -59,8 +59,9 @@
 #define HC15_DATA_VARIANTS	1
 #define HC15_READ_VARIANTS	1
 #define HC15_WRITE_WAIT_BEFORE_PIO 1
+#define HC15_WRITE_VARIANTS	8
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0232
+#define HC15_PROBE_TAG		0x0233
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -75,6 +76,7 @@ struct hc15_mmc {
 	u32 last_read_sample;
 	u32 last_read_sample2;
 	u8 read_variant;
+	u8 write_variant;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -280,6 +282,13 @@ static u16 hc15_fifo_read16(struct hc15_mmc *host)
 static bool hc15_data_wait_ready(struct hc15_mmc *host, u16 pio)
 {
 	return !(pio & 0x0002);
+}
+
+static bool hc15_data_write_ready(struct hc15_mmc *host, u16 pio)
+{
+	if (host->write_variant & 0x02)
+		return !!(pio & 0x0002);
+	return hc15_data_wait_ready(host, pio);
 }
 
 static u8 hc15_cmd_status(struct hc15_mmc *host)
@@ -566,9 +575,19 @@ static int hc15_pio_write(struct hc15_mmc *host, struct mmc_data *data)
 				value |= (u16)buf[pos + 1] << 8;
 			if (HC15_TRACE_VERBOSE && done < 8)
 				hc15_mark("hc15-pio-wword", value);
+			if (host->write_variant & 0x04) {
+				ret = readw_poll_timeout(host->base + HC15_REG_PIO,
+							 pio,
+							 hc15_data_write_ready(host, pio),
+							 1, HC15_PIO_TIMEOUT_US);
+				if (ret) {
+					hc15_mark("hc15-pio-wpre-timeout", pio);
+					goto out;
+				}
+			}
 			writew(value, host->base + HC15_REG_FIFO);
 			ret = readw_poll_timeout(host->base + HC15_REG_PIO, pio,
-						 hc15_data_wait_ready(host, pio) ||
+						 hc15_data_write_ready(host, pio) ||
 						 (hc15_cmd_status(host) & 0x02),
 						 1, HC15_PIO_TIMEOUT_US);
 			status = hc15_cmd_status(host);
@@ -602,6 +621,8 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	bool data_write = data && (data->flags & MMC_DATA_WRITE);
 	bool read_after_wait = data_read && (host->read_variant & 0x01);
 	bool read_preclean = data_read && (host->read_variant & 0x04);
+	bool write_wait_first = data_write &&
+		HC15_WRITE_WAIT_BEFORE_PIO && !(host->write_variant & 0x01);
 
 	cmd->error = 0;
 	if (data) {
@@ -627,10 +648,12 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 
 	if (data_read)
 		hc15_mark("hc15-read-variant", host->read_variant);
+	if (data_write)
+		hc15_rw_mark("hc15-write-variant", host->write_variant);
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
 
-	if (data_write && HC15_WRITE_WAIT_BEFORE_PIO) {
+	if (write_wait_first) {
 		hc15_rw_mark("hc15-write-wait-first", cmd->opcode);
 		hc15_wait_irq(host, cmd, true);
 		hc15_get_response(host, cmd);
@@ -641,7 +664,7 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	else if (data && (data->flags & MMC_DATA_WRITE))
 		hc15_pio_write(host, data);
 
-	if (!data_write || !HC15_WRITE_WAIT_BEFORE_PIO) {
+	if (!data_write || !write_wait_first) {
 		hc15_wait_irq(host, cmd, data != NULL);
 		hc15_get_response(host, cmd);
 	}
@@ -668,6 +691,36 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
 	}
 	hc15_mark("hc15-cmd-error", cmd->error);
+}
+
+static bool hc15_request_scan_write(struct hc15_mmc *host,
+				    struct mmc_command *cmd,
+				    struct mmc_data *data)
+{
+	u8 saved_variant = host->write_variant;
+	unsigned int variant;
+
+	if (!data || !(data->flags & MMC_DATA_WRITE))
+		return false;
+	if (cmd->opcode != MMC_WRITE_BLOCK)
+		return false;
+	if (data->blksz != 512 || data->blocks != 1)
+		return false;
+
+	hc15_mark("hc15-scan-write", HC15_WRITE_VARIANTS);
+	for (variant = 0; variant < HC15_WRITE_VARIANTS; variant++) {
+		if (variant)
+			hc15_recover_controller(host);
+		host->write_variant = variant;
+		hc15_rw_mark("hc15-write-try", variant);
+		hc15_run_command(host, cmd, data);
+		if (!cmd->error && !data->error && data->bytes_xfered == 512) {
+			hc15_rw_mark("hc15-write-selected", variant);
+			return true;
+		}
+	}
+	host->write_variant = saved_variant;
+	return false;
 }
 
 static bool hc15_request_scan_read(struct hc15_mmc *host,
@@ -791,6 +844,9 @@ static void hc15_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		goto done;
 
 	if (hc15_request_scan_read(host, cmd, data))
+		goto done;
+
+	if (hc15_request_scan_write(host, cmd, data))
 		goto done;
 
 	hc15_run_command(host, cmd, data);

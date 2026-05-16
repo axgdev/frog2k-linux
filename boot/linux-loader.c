@@ -61,7 +61,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-16 nommu-flat-0232-ioctl-first-sd"
+#define LOADER_BUILD_TAG "2026-05-16 nommu-flat-0233-hc15-write-scan"
 
 typedef unsigned long long u64;
 
