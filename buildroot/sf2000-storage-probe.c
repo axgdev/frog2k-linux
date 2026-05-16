@@ -18,8 +18,8 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0229u
-#define RAW_TEST_NAME "SF2L0229TXT"
+#define STORAGE_TAG 0x0230u
+#define RAW_TEST_NAME "SF2L0230TXT"
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -30,6 +30,29 @@
 #ifndef O_DIRECT
 #define O_DIRECT 00040000
 #endif
+#define MMC_BLOCK_MAJOR 179
+#define MMC_IOC_CMD _IOWR(MMC_BLOCK_MAJOR, 0, struct mmc_ioc_cmd)
+#define MMC_READ_SINGLE_BLOCK 17u
+#define MMC_WRITE_BLOCK 24u
+#define MMC_RSP_R1 0x15u
+#define MMC_CMD_ADTC 0x20u
+
+struct mmc_ioc_cmd {
+	int write_flag;
+	int is_acmd;
+	uint32_t opcode;
+	uint32_t arg;
+	uint32_t response[4];
+	unsigned int flags;
+	unsigned int blksz;
+	unsigned int blocks;
+	unsigned int postsleep_min_us;
+	unsigned int postsleep_max_us;
+	unsigned int data_timeout_ns;
+	unsigned int cmd_timeout_ms;
+	uint32_t __pad;
+	uint64_t data_ptr;
+};
 
 struct progress_entry {
 	uint32_t seq;
@@ -509,6 +532,68 @@ static int write_sector_lba_flags(const char *dev, uint32_t lba,
 	return 0;
 }
 
+static int ioctl_sector_lba(const char *dev, uint32_t lba, const char *label,
+	unsigned char *buf, int write_flag)
+{
+	struct mmc_ioc_cmd cmd;
+	int saved_errno;
+	int ret;
+	int fd;
+
+	progress_mark(label, 0x3bu, lba);
+	if (write_flag)
+		memcpy(direct_write_buf, buf, sizeof(direct_write_buf));
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.write_flag = write_flag ? 1 : 0;
+	cmd.opcode = write_flag ? MMC_WRITE_BLOCK : MMC_READ_SINGLE_BLOCK;
+	cmd.arg = lba;
+	cmd.flags = MMC_RSP_R1 | MMC_CMD_ADTC;
+	cmd.blksz = 512;
+	cmd.blocks = 1;
+	cmd.data_timeout_ns = 1000000000u;
+	cmd.cmd_timeout_ms = 1000;
+	cmd.data_ptr = (uint64_t)(uintptr_t)(write_flag ? direct_write_buf : buf);
+
+	fd = open(dev, (write_flag ? O_RDWR : O_RDONLY) | O_CLOEXEC);
+	if (fd < 0) {
+		progress_mark("stor-ioctl-open-fail", 0x3bu, (uint32_t)errno);
+		return -1;
+	}
+
+	progress_mark("stor-ioctl-op", 0x3bu, cmd.opcode);
+	progress_mark("stor-ioctl-arg", 0x3bu, cmd.arg);
+	if (write_flag)
+		storage_watchdog_arm("stor-wdt-ioctl-write");
+	errno = 0;
+	ret = ioctl(fd, MMC_IOC_CMD, &cmd);
+	saved_errno = errno;
+	progress_mark("stor-ioctl-ret", 0x3bu, (uint32_t)ret);
+	progress_mark("stor-ioctl-errno", 0x3bu, (uint32_t)saved_errno);
+	progress_mark("stor-ioctl-r0", 0x3bu, cmd.response[0]);
+	if (write_flag)
+		storage_watchdog_release("stor-wdt-ioctl-write-done");
+	close(fd);
+	if (ret != 0)
+		return -1;
+	if (!write_flag) {
+		progress_mark("stor-ioctl-head0", 0x3bu, get_le32(buf, 0));
+		progress_mark("stor-ioctl-sig", 0x3bu, get_le16(buf, 510));
+	}
+	return 0;
+}
+
+static int write_sector_lba_ioctl(const char *dev, uint32_t lba,
+	const char *label, unsigned char *buf)
+{
+	return ioctl_sector_lba(dev, lba, label, buf, 1);
+}
+
+static int read_sector_lba_ioctl(const char *dev, uint32_t lba,
+	const char *label, unsigned char *buf)
+{
+	return ioctl_sector_lba(dev, lba, label, buf, 0);
+}
+
 static int write_sector_lba(const char *dev, uint32_t lba, const char *label,
 	const unsigned char *buf)
 {
@@ -619,7 +704,7 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux raw fat32 write test 0229\r\n";
+		"sf2000 linux raw fat32 write test 0230\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -673,7 +758,7 @@ static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux fixed fat32 write test 0229\r\n";
+		"sf2000 linux fixed fat32 write test 0230\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -725,6 +810,71 @@ static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
 	progress_mark("fat-fixed-after-sync", 0x3cu, cluster);
 	storage_watchdog_release("stor-wdt-raw-sync-done");
 	progress_mark("fat-fixed-write-ok", 0x3cu, cluster);
+	return 0;
+}
+
+static int raw_fat32_ioctl_fixed_write_test(const char *dev, uint32_t first_fat,
+	uint32_t fat_size, uint32_t first_data, uint32_t total_sectors,
+	uint32_t root_lba, unsigned spc)
+{
+	static const char msg[] =
+		"sf2000 linux ioctl fat32 write test 0230\r\n";
+	unsigned char buf[512];
+	uint32_t cluster;
+	uint32_t data_lba;
+	uint32_t fat_off;
+	uint32_t fat_lba;
+	uint32_t fat_lba2;
+	uint32_t slot_lba;
+	unsigned fat_ent_off;
+	unsigned slot_off = 32;
+
+	cluster = find_free_fat32_cluster(dev, first_fat,
+		(total_sectors - first_data) / spc + 2u);
+	if (!cluster) {
+		progress_mark("fat-ioctl-no-cluster", 0x3bu, 0);
+		return -1;
+	}
+
+	data_lba = first_data + (cluster - 2u) * spc;
+	slot_lba = root_lba + 6u;
+	progress_mark("fat-ioctl-cluster", 0x3bu, cluster);
+	progress_mark("fat-ioctl-data-lba", 0x3bu, data_lba);
+	progress_mark("fat-ioctl-slot-lba", 0x3bu, slot_lba);
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, msg, sizeof(msg) - 1u);
+	if (write_sector_lba_ioctl(dev, data_lba, "fat-ioctl-data", buf) != 0)
+		return -1;
+	if (read_sector_lba_ioctl(dev, data_lba, "fat-ioctl-rb", buf) != 0)
+		return -1;
+
+	fat_off = cluster * 4u;
+	fat_lba = first_fat + fat_off / 512u;
+	fat_lba2 = first_fat + fat_size + fat_off / 512u;
+	fat_ent_off = fat_off & 511u;
+	if (read_sector_lba(dev, fat_lba, "fat-ioctl-fat-rd1", buf) != 0)
+		return -1;
+	put_le32(buf, fat_ent_off, 0x0ffffff8u);
+	if (write_sector_lba_ioctl(dev, fat_lba, "fat-ioctl-fat1", buf) != 0)
+		return -1;
+	if (read_sector_lba(dev, fat_lba2, "fat-ioctl-fat-rd2", buf) != 0)
+		return -1;
+	put_le32(buf, fat_ent_off, 0x0ffffff8u);
+	if (write_sector_lba_ioctl(dev, fat_lba2, "fat-ioctl-fat2", buf) != 0)
+		return -1;
+
+	if (read_sector_lba(dev, slot_lba, "fat-ioctl-dir-rd", buf) != 0)
+		return -1;
+	memset(buf + slot_off, 0, 32);
+	memcpy(buf + slot_off, RAW_TEST_NAME, 11);
+	buf[slot_off + 11u] = 0x20;
+	put_le16(buf, slot_off + 20u, (uint16_t)(cluster >> 16));
+	put_le16(buf, slot_off + 26u, (uint16_t)cluster);
+	put_le32(buf, slot_off + 28u, (uint32_t)(sizeof(msg) - 1u));
+	if (write_sector_lba_ioctl(dev, slot_lba, "fat-ioctl-dir", buf) != 0)
+		return -1;
+	progress_mark("fat-ioctl-write-ok", 0x3bu, cluster);
 	return 0;
 }
 
@@ -787,6 +937,8 @@ static void log_fat_geometry(const char *dev)
 	if (fsinfo)
 		(void)read_sector_lba(dev, fsinfo, "fat-fsinfo-sec", buf);
 	(void)read_sector_lba(dev, first_fat, "fat-first-fat-sec", buf);
+	(void)raw_fat32_ioctl_fixed_write_test(dev, first_fat, fat_size,
+		first_data, total_sectors, root_lba, spc);
 	(void)raw_fat32_fixed_write_test(dev, first_fat, fat_size, first_data,
 		total_sectors, root_lba, spc);
 
@@ -866,14 +1018,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0229.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0230.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0229\n";
+		const char msg[] = "sf2000 linux sd write test 0230\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);

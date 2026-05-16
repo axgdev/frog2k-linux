@@ -1,0 +1,22 @@
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+index 713dc68..51ca778 100644
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -60,7 +60,7 @@
+ #define HC15_READ_VARIANTS	1
+ #define HC15_WRITE_WAIT_BEFORE_PIO 1
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0229
++#define HC15_PROBE_TAG		0x0230
+ 
+ struct hc15_mmc {
+ 	struct mmc_host *mmc;
+@@ -98,7 +98,7 @@ static void hc15_rw_mark(const char *name, u32 value)
+ {
+ 	static unsigned int count;
+ 
+-	if (count++ >= 96)
++	if (count++ >= 256)
+ 		return;
+ 	sf2000_progress_mark(name, 0x36, value);
+ }
