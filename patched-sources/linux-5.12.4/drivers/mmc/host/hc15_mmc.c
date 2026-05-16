@@ -9,6 +9,7 @@
 
 #include <linux/bitops.h>
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/jiffies.h>
@@ -31,6 +32,10 @@
 #define HC15_REG_FIFO		0x0c
 #define HC15_REG_PIO		0x0e
 #define HC15_REG_RESP0		0x10
+#define HC15_REG_DMA_RD_ADDR	0x20
+#define HC15_REG_DMA_WR_ADDR	0x24
+#define HC15_REG_DMA_RD_LEN	0x28
+#define HC15_REG_DMA_WR_LEN	0x2c
 #define HC15_REG_IRQSTS		0x30
 #define HC15_REG_CLKDIV_HI	0x34
 #define HC15_REG_BLKCNT_HI	0x36
@@ -64,6 +69,10 @@
 #define HC15_TRACE_VERBOSE	0
 #define HC15_PROBE_TAG		0x0239
 
+static bool use_dma = true;
+module_param(use_dma, bool, 0644);
+MODULE_PARM_DESC(use_dma, "Use the HC15 DMA transfer path for data requests");
+
 struct hc15_mmc {
 	struct mmc_host *mmc;
 	void __iomem *base;
@@ -78,6 +87,7 @@ struct hc15_mmc {
 	u32 last_read_sample2;
 	u8 read_variant;
 	u8 write_variant;
+	bool dma_ok;
 };
 
 #ifdef CONFIG_MIPS_SF2000
@@ -424,7 +434,7 @@ static void hc15_get_response(struct hc15_mmc *host, struct mmc_command *cmd)
 	hc15_mark("hc15-resp0", cmd->resp[0]);
 }
 
-static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
+static void hc15_setup_blocks(struct hc15_mmc *host, struct mmc_data *data)
 {
 	u32 blocks = data->blocks ? data->blocks : 1;
 	u8 cnt_hi = (blocks - 1) >> 8;
@@ -433,11 +443,74 @@ static void hc15_setup_data(struct hc15_mmc *host, struct mmc_data *data)
 	writew(data->blksz, host->base + HC15_REG_BLKSIZ);
 	writeb(cnt_lo, host->base + HC15_REG_BLKCNT_LO);
 	writeb(cnt_hi, host->base + HC15_REG_BLKCNT_HI);
-	writeb(0x04, host->base + HC15_REG_PIO);
 
 	hc15_mark("hc15-data-blksz", data->blksz);
 	hc15_mark("hc15-data-blocks", blocks);
+}
+
+static void hc15_setup_pio(struct hc15_mmc *host, struct mmc_data *data)
+{
+	hc15_setup_blocks(host, data);
+	writeb(0x04, host->base + HC15_REG_PIO);
 	hc15_mark("hc15-data-pioctl", readw(host->base + HC15_REG_PIO));
+}
+
+static bool hc15_can_dma(struct hc15_mmc *host, struct mmc_data *data)
+{
+	u32 len;
+
+	if (!use_dma || !host->dma_ok || !data)
+		return false;
+
+	len = data->blksz * data->blocks;
+	return data->sg_len == 1 && len;
+}
+
+static void hc15_setup_dma_regs(struct hc15_mmc *host, struct mmc_data *data)
+{
+	u32 len = data->blksz * data->blocks;
+	dma_addr_t addr = sg_dma_address(data->sg);
+
+	if (data->flags & MMC_DATA_READ) {
+		writel(addr, host->base + HC15_REG_DMA_RD_ADDR);
+		writel(len, host->base + HC15_REG_DMA_RD_LEN);
+	} else {
+		writel(addr, host->base + HC15_REG_DMA_WR_ADDR);
+		writel(len, host->base + HC15_REG_DMA_WR_LEN);
+	}
+
+	/*
+	 * hcRTOS programs this register with 3 after address/length setup.  The
+	 * stock traces also show bit 0 as the DMA start/busy latch.
+	 */
+	writel(0x03, host->base + HC15_REG_IRQSTS);
+
+	hc15_rw_mark("hc15-dma-dir", data->flags & MMC_DATA_READ ? 0 : 1);
+	hc15_rw_mark("hc15-dma-addr", lower_32_bits(addr));
+	hc15_rw_mark("hc15-dma-len", len);
+	hc15_rw_mark("hc15-dma-ctl0", readl(host->base + HC15_REG_IRQSTS));
+}
+
+static int hc15_wait_dma(struct hc15_mmc *host, struct mmc_data *data)
+{
+	u32 ctl = 0;
+	int ret;
+
+	ret = readl_poll_timeout(host->base + HC15_REG_IRQSTS, ctl,
+				 (ctl & 0x0c) == 0x0c || !(ctl & 0x01),
+				 10, HC15_PIO_TIMEOUT_US);
+
+	hc15_rw_mark("hc15-dma-ctl1", ctl);
+	if (ret) {
+		data->error = -ETIMEDOUT;
+		hc15_rw_mark("hc15-dma-timeout", ctl);
+		return ret;
+	}
+
+	writel(0x40, host->base + HC15_REG_IRQSTS);
+	data->bytes_xfered = data->blksz * data->blocks;
+	data->error = 0;
+	return 0;
 }
 
 static int hc15_pio_read(struct hc15_mmc *host, struct mmc_data *data)
@@ -554,6 +627,37 @@ static void hc15_fake_scr(struct hc15_mmc *host, struct mmc_data *data)
 	hc15_mark("hc15-scr-fake", host->last_read_sample);
 }
 
+static void hc15_sample_read_data(struct hc15_mmc *host, struct mmc_data *data)
+{
+	struct sg_mapping_iter miter;
+	u32 remaining = min_t(u32, data->blksz * data->blocks, 8);
+	u32 done = 0;
+	u32 sample = 0;
+	u32 sample2 = 0;
+
+	sg_miter_start(&miter, data->sg, data->sg_len, SG_MITER_FROM_SG);
+	while (remaining && sg_miter_next(&miter)) {
+		u8 *buf = miter.addr;
+		size_t len = min_t(size_t, miter.length, remaining);
+		size_t pos;
+
+		for (pos = 0; pos < len; pos++) {
+			if (done < 4)
+				sample |= (u32)buf[pos] << (done * 8);
+			else
+				sample2 |= (u32)buf[pos] << ((done - 4) * 8);
+			done++;
+			remaining--;
+		}
+	}
+	sg_miter_stop(&miter);
+
+	host->last_read_sample = sample;
+	host->last_read_sample2 = sample2;
+	hc15_rw_mark("hc15-dma-rsample", sample);
+	hc15_rw_mark("hc15-dma-rsample2", sample2);
+}
+
 static int hc15_pio_write(struct hc15_mmc *host, struct mmc_data *data)
 {
 	struct sg_mapping_iter miter;
@@ -620,6 +724,8 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 {
 	bool data_read = data && (data->flags & MMC_DATA_READ);
 	bool data_write = data && (data->flags & MMC_DATA_WRITE);
+	bool dma_xfer = false;
+	enum dma_data_direction dma_dir = DMA_NONE;
 	bool read_after_wait = data_read && (host->read_variant & 0x01);
 	bool read_preclean = data_read && (host->read_variant & 0x04);
 	bool write_wait_first = data_write &&
@@ -641,7 +747,20 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 			hc15_rw_mark("hc15-rw-blksz", data->blksz);
 			hc15_rw_mark("hc15-rw-blocks", data->blocks);
 		}
-		hc15_setup_data(host, data);
+		if (hc15_can_dma(host, data)) {
+			dma_dir = data_read ? DMA_FROM_DEVICE : DMA_TO_DEVICE;
+			if (dma_map_sg(host->dev, data->sg, data->sg_len,
+				       dma_dir) == 1) {
+				dma_xfer = true;
+				read_after_wait = false;
+				read_preclean = false;
+				write_wait_first = false;
+				hc15_setup_blocks(host, data);
+				hc15_setup_dma_regs(host, data);
+			}
+		}
+		if (!dma_xfer)
+			hc15_setup_pio(host, data);
 	}
 
 	if (read_preclean)
@@ -654,7 +773,12 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	hc15_set_command(host, cmd, data);
 	hc15_start_command(host);
 
-	if (write_wait_first) {
+	if (dma_xfer) {
+		hc15_wait_irq(host, cmd, true);
+		hc15_get_response(host, cmd);
+		if (!cmd->error)
+			hc15_wait_dma(host, data);
+	} else if (write_wait_first) {
 		hc15_rw_mark("hc15-write-wait-first", cmd->opcode);
 		hc15_wait_irq(host, cmd, true);
 		hc15_get_response(host, cmd);
@@ -672,6 +796,12 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 
 	if (data_read && read_after_wait && !cmd->error)
 		hc15_pio_read(host, data);
+
+	if (dma_xfer) {
+		dma_unmap_sg(host->dev, data->sg, data->sg_len, dma_dir);
+		if (data_read && !cmd->error && !data->error)
+			hc15_sample_read_data(host, data);
+	}
 
 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
 	    !cmd->error && data->error) {
@@ -967,6 +1097,9 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 		ret = PTR_ERR(host->base);
 		goto err_free;
 	}
+	host->dma_ok = !dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (use_dma && !host->dma_ok)
+		dev_warn(&pdev->dev, "DMA mask setup failed, using PIO transfers\n");
 
 	mmc->ops = &hc15_ops;
 	mmc->f_min = HC15_MIN_CLOCK;
@@ -976,7 +1109,7 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 		     MMC_CAP2_NO_WRITE_PROTECT;
 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 	mmc->max_blk_size = 512;
-	mmc->max_blk_count = 1;
+	mmc->max_blk_count = 128;
 	mmc->max_req_size = mmc->max_blk_size * mmc->max_blk_count;
 	mmc->max_seg_size = mmc->max_req_size;
 	mmc->max_segs = 1;
@@ -987,8 +1120,8 @@ static int hc15_mmc_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_free;
 
-	dev_info(&pdev->dev, "HC15 SD/MMC host registered, 1-bit max %u Hz\n",
-		 HC15_MAX_CLOCK);
+	dev_info(&pdev->dev, "HC15 SD/MMC host registered, 1-bit max %u Hz, %s\n",
+		 HC15_MAX_CLOCK, use_dma && host->dma_ok ? "DMA" : "PIO");
 	return 0;
 
 err_free:
