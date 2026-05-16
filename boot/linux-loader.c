@@ -61,7 +61,8 @@ typedef unsigned long uintptr;
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-16 nommu-flat-0235-safe-fat-write"
+#define LOADER_BUILD_TAG "2026-05-16 nommu-flat-0236-readonly-sd-diag"
+#define BOOTLOG_SD_WRITE 0
 
 typedef unsigned long long u64;
 
@@ -697,6 +698,9 @@ static void bootlog_init(void)
 	if (log_tried)
 		return;
 	log_tried = 1;
+
+	if (!BOOTLOG_SD_WRITE)
+		return;
 
 	if (!rom_call_present(ROM_F_MOUNT_ADDR) ||
 	    !rom_call_present(ROM_F_OPEN_ADDR) ||
