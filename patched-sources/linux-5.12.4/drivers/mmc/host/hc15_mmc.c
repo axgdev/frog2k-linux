@@ -59,7 +59,7 @@
 #define HC15_DATA_VARIANTS	1
 #define HC15_READ_VARIANTS	1
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0222
+#define HC15_PROBE_TAG		0x0223
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -82,6 +82,14 @@ extern void sf2000_progress_mark(const char *name, unsigned int kind,
 
 static void hc15_mark(const char *name, u32 value)
 {
+	if (!HC15_TRACE_VERBOSE &&
+	    strcmp(name, "hc15-probe") &&
+	    strcmp(name, "hc15-add-host") &&
+	    !strstr(name, "fail") &&
+	    !strstr(name, "error") &&
+	    !strstr(name, "timeout") &&
+	    !strstr(name, "recover"))
+		return;
 	sf2000_progress_mark(name, 0x35, value);
 }
 #else

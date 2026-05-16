@@ -18,7 +18,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0222u
+#define STORAGE_TAG 0x0223u
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -107,6 +107,19 @@ static uint32_t hash_name(const char *text)
 		hash *= 16777619u;
 	}
 	return hash;
+}
+
+static uint16_t get_le16(const unsigned char *buf, unsigned off)
+{
+	return (uint16_t)buf[off] | ((uint16_t)buf[off + 1u] << 8);
+}
+
+static uint32_t get_le32(const unsigned char *buf, unsigned off)
+{
+	return (uint32_t)buf[off] |
+		((uint32_t)buf[off + 1u] << 8) |
+		((uint32_t)buf[off + 2u] << 16) |
+		((uint32_t)buf[off + 3u] << 24);
 }
 
 static void log_line(const char *line)
@@ -392,6 +405,123 @@ static void set_readahead_zero(const char *dev)
 	close(fd);
 }
 
+static int read_sector_lba(const char *dev, uint32_t lba, const char *label,
+	unsigned char *buf)
+{
+	ssize_t got;
+	off_t pos;
+	int fd;
+
+	progress_mark(label, 0x3cu, lba);
+	fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) {
+		progress_mark("stor-sec-open-fail", 0x3cu, (uint32_t)errno);
+		return -1;
+	}
+	pos = lseek(fd, (off_t)lba * 512, SEEK_SET);
+	progress_mark("stor-sec-seek", 0x3cu, (uint32_t)pos);
+	if (pos < 0) {
+		progress_mark("stor-sec-seek-fail", 0x3cu, (uint32_t)errno);
+		close(fd);
+		return -1;
+	}
+	got = read(fd, buf, 512);
+	progress_mark("stor-sec-read-ret", 0x3cu, (uint32_t)got);
+	close(fd);
+	if (got != 512) {
+		progress_mark("stor-sec-read-err", 0x3cu,
+			got < 0 ? (uint32_t)errno : (uint32_t)got);
+		return -1;
+	}
+	progress_mark("stor-sec-head0", 0x3cu, get_le32(buf, 0));
+	progress_mark("stor-sec-sig", 0x3cu, get_le16(buf, 510));
+	return 0;
+}
+
+static uint32_t read_fat32_entry(const char *dev, uint32_t fat_start,
+	uint32_t cluster)
+{
+	unsigned char buf[512];
+	uint32_t fat_off = cluster * 4u;
+	uint32_t lba = fat_start + fat_off / 512u;
+	unsigned off = fat_off & 511u;
+
+	if (read_sector_lba(dev, lba, "fat-entry-sec", buf) != 0)
+		return 0xffffffffu;
+	return get_le32(buf, off) & 0x0fffffffu;
+}
+
+static void log_fat_geometry(const char *dev)
+{
+	unsigned char buf[512];
+	uint32_t total_sectors;
+	uint32_t fat_size;
+	uint32_t root_dir_sectors;
+	uint32_t first_fat;
+	uint32_t first_data;
+	uint32_t root_cluster;
+	uint32_t root_lba;
+	uint32_t cluster;
+	uint32_t next;
+	unsigned bps;
+	unsigned spc;
+	unsigned reserved;
+	unsigned fats;
+	unsigned root_entries;
+	unsigned fsinfo;
+	unsigned i;
+
+	if (read_sector_lba(dev, 0, "fat-bpb", buf) != 0)
+		return;
+
+	bps = get_le16(buf, 11);
+	spc = buf[13];
+	reserved = get_le16(buf, 14);
+	fats = buf[16];
+	root_entries = get_le16(buf, 17);
+	total_sectors = get_le16(buf, 19);
+	if (!total_sectors)
+		total_sectors = get_le32(buf, 32);
+	fat_size = get_le16(buf, 22);
+	if (!fat_size)
+		fat_size = get_le32(buf, 36);
+	root_cluster = get_le32(buf, 44);
+	fsinfo = get_le16(buf, 48);
+	root_dir_sectors = ((uint32_t)root_entries * 32u + bps - 1u) / bps;
+	first_fat = reserved;
+	first_data = reserved + (uint32_t)fats * fat_size + root_dir_sectors;
+	root_lba = first_data + (root_cluster - 2u) * spc;
+
+	progress_mark("fat-bps", 0x3cu, bps);
+	progress_mark("fat-spc", 0x3cu, spc);
+	progress_mark("fat-reserved", 0x3cu, reserved);
+	progress_mark("fat-count", 0x3cu, fats);
+	progress_mark("fat-size", 0x3cu, fat_size);
+	progress_mark("fat-total", 0x3cu, total_sectors);
+	progress_mark("fat-root-cluster", 0x3cu, root_cluster);
+	progress_mark("fat-fsinfo", 0x3cu, fsinfo);
+	progress_mark("fat-first-fat", 0x3cu, first_fat);
+	progress_mark("fat-first-data", 0x3cu, first_data);
+	progress_mark("fat-root-lba", 0x3cu, root_lba);
+
+	if (fsinfo)
+		(void)read_sector_lba(dev, fsinfo, "fat-fsinfo-sec", buf);
+	(void)read_sector_lba(dev, first_fat, "fat-first-fat-sec", buf);
+
+	cluster = root_cluster;
+	for (i = 0; i < 24u; i++) {
+		progress_mark("fat-chain-cluster", 0x3cu, cluster);
+		next = read_fat32_entry(dev, first_fat, cluster);
+		progress_mark("fat-chain-next", 0x3cu, next);
+		if (next >= 0x0ffffff8u || next < 2u)
+			break;
+		cluster = next;
+	}
+
+	for (i = 0; i < 8u; i++)
+		(void)read_sector_lba(dev, root_lba + i, "fat-root-sec", buf);
+}
+
 static int try_mount_read_type(const char *dev, const char *fstype)
 {
 	int saved_errno;
@@ -454,14 +584,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0222.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0223.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0222\n";
+		const char msg[] = "sf2000 linux sd write test 0223\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -536,6 +666,7 @@ int main(void)
 	set_readahead_zero("/dev/mmcblk0class");
 	log_block_head("/dev/mmcblk0");
 	log_block_head("/dev/mmcblk0sys");
+	log_fat_geometry("/dev/mmcblk0");
 	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
 	if (try_mount_write("/dev/mmcblk0") == 0 ||
 	    try_mount_write("/dev/mmcblk0p1") == 0 ||

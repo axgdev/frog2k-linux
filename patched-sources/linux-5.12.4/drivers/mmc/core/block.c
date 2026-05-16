@@ -82,7 +82,7 @@ static void sf2000_mmc_blk_mark(const char *name, unsigned int value)
 {
 	static unsigned int mark_count;
 
-	if (mark_count++ >= 96)
+	if (mark_count++ >= 16)
 		return;
 	sf2000_progress_mark(name, 0x39, value);
 }
