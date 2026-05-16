@@ -37,7 +37,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define SCREEN_TAG 0x0219u
+#define SCREEN_TAG 0x0220u
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -972,7 +972,7 @@ static int publish_marker(const char *path, const char *text)
 	return 0;
 }
 
-#if 1
+#if 0
 static uint32_t storage_hash_name(const char *text)
 {
 	uint32_t hash = 2166136261u;
@@ -1189,14 +1189,14 @@ static int storage_try_mount_write_type(const char *dev, const char *fstype)
 	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
 		dev, fstype);
 	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0219.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0220.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
 			errno);
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0219 inline\n";
+		const char msg[] = "sf2000 linux sd write test 0220 inline\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -1311,7 +1311,6 @@ static void publish_screen_ready_and_storage(const char *source)
 	publish_marker("/run/sf2000-screen-ready", "ready\n");
 	publish_marker("/run/sf2000-screen-source", source);
 	progress_mark("screen-ready-done", 0x3fu, SCREEN_TAG);
-	run_inline_storage_probe_once(source);
 }
 
 static uint32_t gpio_base_for_pad(unsigned pad)
@@ -2846,6 +2845,7 @@ int main(int argc, char **argv, char **envp)
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	if (envp)
 		environ = envp;
+	progress_mark("screen-after-env", 0x3fu, SCREEN_TAG);
 
 	if (env_is((const char *const *)envp, "SF2000_PANEL", "0"))
 		panel_enabled = 0;
@@ -2853,25 +2853,34 @@ int main(int argc, char **argv, char **envp)
 		led_enabled = 0;
 	if (env_is((const char *const *)envp, "SF2000_FAST_PANEL", "1"))
 		slow_panel_bus = 0;
+	progress_mark("screen-after-env-checks", 0x3fu, SCREEN_TAG);
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+	progress_mark("screen-devmem-fd", 0x3fu, (uint32_t)fd);
 	if (fd < 0) {
 		map_regions_direct();
+		progress_mark("screen-map-direct", 0x3fu, SCREEN_TAG);
 	} else {
 		if (map_region(fd, &gma_ram, GMA_RAM_PHYS, GMA_RAM_SIZE, "gma-ram") != 0 ||
 				map_region(fd, &gma, GMA_MMIO_PHYS, GMA_MMIO_SIZE, "gma") != 0 ||
 				map_region(fd, &sysio, SYSIO_PHYS, SYSIO_SIZE, "sysio") != 0) {
 			close(fd);
 			map_regions_direct();
+			progress_mark("screen-map-fallback", 0x3fu, SCREEN_TAG);
 		} else {
 			close(fd);
+			progress_mark("screen-map-devmem-ok", 0x3fu, SCREEN_TAG);
 		}
 	}
 
+	progress_mark("screen-before-owner", 0x3fu, SCREEN_TAG);
 	publish_marker("/run/sf2000-screen-own-backlight", "owned\n");
+	progress_mark("screen-before-backlight", 0x3fu, SCREEN_TAG);
 	startup_backlight_diagnostic();
+	progress_mark("screen-after-backlight", 0x3fu, SCREEN_TAG);
 
 	build_gma_descriptor();
+	progress_mark("screen-after-gma-desc", 0x3fu, SCREEN_TAG);
 	if (env_is((const char *const *)envp, "SF2000_RGB_DIAG", "1"))
 		run_rgb_only_diag(&frame);
 	else

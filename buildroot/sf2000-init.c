@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define PROGRESS_VERSION 1UL
 #define PROGRESS_ENTRIES 1024UL
 #define PROGRESS_NAME_LEN 32UL
-#define INIT_TAG 0x0219UL
+#define INIT_TAG 0x0220UL
 
 struct timespec {
 	long tv_sec;
@@ -561,6 +561,12 @@ void sf2000_init_main(void)
 	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
 		screen_stack);
 	diagnostic_watchdog_pet();
+	sleep_ms(100);
+	progress_mark("init-storage-spawn-early", 0x3eu, INIT_TAG);
+	spawn_service("sf2000_buildroot: starting storage probe early\n",
+		storage_argv, storage_late_stack);
+	storage_started = 1;
+	log_message("sf2000_buildroot: early storage probe started\n");
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
