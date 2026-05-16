@@ -18,7 +18,7 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0221u
+#define STORAGE_TAG 0x0222u
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -392,6 +392,44 @@ static void set_readahead_zero(const char *dev)
 	close(fd);
 }
 
+static int try_mount_read_type(const char *dev, const char *fstype)
+{
+	int saved_errno;
+	DIR *dir;
+
+	progress_mark("stor-ro-try", 0x3du, hash_name(dev));
+	progress_mark("stor-ro-type", 0x3du, hash_name(fstype));
+	storage_watchdog_arm("stor-wdt-ro-mount");
+	errno = 0;
+	if (mount(dev, "/mnt/sd", fstype, MS_RDONLY | MS_NOATIME, "") != 0) {
+		saved_errno = errno;
+		storage_watchdog_release("stor-wdt-ro-fail");
+		progress_mark("stor-ro-mount-fail", 0x3du,
+			(uint32_t)saved_errno);
+		return -1;
+	}
+	progress_mark("stor-ro-mount-ok", 0x3du, hash_name(dev));
+	errno = 0;
+	dir = opendir("/mnt/sd");
+	if (dir) {
+		progress_mark("stor-ro-opendir-ok", 0x3du, 0);
+		closedir(dir);
+	} else {
+		progress_mark("stor-ro-opendir-fail", 0x3du, (uint32_t)errno);
+	}
+	errno = 0;
+	if (umount("/mnt/sd") != 0) {
+		saved_errno = errno;
+		storage_watchdog_release("stor-wdt-ro-umount-fail");
+		progress_mark("stor-ro-umount-fail", 0x3du,
+			(uint32_t)saved_errno);
+		return -1;
+	}
+	progress_mark("stor-ro-umount-ok", 0x3du, 0);
+	storage_watchdog_release("stor-wdt-ro-ok");
+	return 0;
+}
+
 static int try_mount_write_type(const char *dev, const char *fstype)
 {
 	ssize_t wrote = -1;
@@ -406,23 +444,24 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_arm("stor-wdt-mount");
 	errno = 0;
 	if (mount(dev, "/mnt/sd", fstype, MS_NOATIME, "") != 0) {
+		saved_errno = errno;
 		storage_watchdog_release("stor-wdt-mount-fail");
-		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
+		progress_mark("stor-mount-fail", 0x3du, (uint32_t)saved_errno);
 		log_msgf("sf2000_storage_probe: mount failed %s type=%s errno=%d\n",
-			dev, fstype, errno);
+			dev, fstype, saved_errno);
 		return -1;
 	}
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0221.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0222.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0221\n";
+		const char msg[] = "sf2000 linux sd write test 0222\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -430,9 +469,11 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 		progress_mark("stor-before-fsync", 0x3du, (uint32_t)wrote);
 		if (wrote == (ssize_t)(sizeof(msg) - 1u)) {
 			errno = 0;
+			storage_watchdog_arm("stor-wdt-fsync");
 			progress_mark("stor-fsync-ret", 0x3du,
 				(uint32_t)fsync(fd));
 			progress_mark("stor-fsync-err", 0x3du, (uint32_t)errno);
+			storage_watchdog_release("stor-wdt-fsync-done");
 		}
 		close(fd);
 		progress_mark("stor-write-ret", 0x3du, (uint32_t)wrote);
@@ -441,12 +482,20 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 			(int)wrote, saved_errno);
 	}
 	progress_mark("stor-before-sync", 0x3du, (uint32_t)wrote);
+	storage_watchdog_arm("stor-wdt-sync");
 	sync();
+	storage_watchdog_release("stor-wdt-sync-done");
 	progress_mark("stor-after-sync", 0x3du, (uint32_t)wrote);
+	storage_watchdog_arm("stor-wdt-umount");
 	if (umount("/mnt/sd") != 0) {
-		progress_mark("stor-umount-fail", 0x3du, (uint32_t)errno);
-		log_msgf("sf2000_storage_probe: umount failed errno=%d\n", errno);
+		saved_errno = errno;
+		storage_watchdog_release("stor-wdt-umount-fail");
+		progress_mark("stor-umount-fail", 0x3du,
+			(uint32_t)saved_errno);
+		log_msgf("sf2000_storage_probe: umount failed errno=%d\n",
+			saved_errno);
 	} else {
+		storage_watchdog_release("stor-wdt-umount-ok");
 		progress_mark("stor-umount-ok", 0x3du, 0);
 		log_msgf("sf2000_storage_probe: umount ok\n");
 	}
@@ -455,8 +504,10 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 
 static int try_mount_write(const char *dev)
 {
+	(void)try_mount_read_type(dev, "vfat");
 	if (try_mount_write_type(dev, "vfat") == 0)
 		return 0;
+	(void)try_mount_read_type(dev, "msdos");
 	if (try_mount_write_type(dev, "msdos") == 0)
 		return 0;
 	return -1;
@@ -485,8 +536,6 @@ int main(void)
 	set_readahead_zero("/dev/mmcblk0class");
 	log_block_head("/dev/mmcblk0");
 	log_block_head("/dev/mmcblk0sys");
-	log_file_head("proc-partitions-pre", "/proc/partitions");
-	log_file_head("sys-mmc0-size-pre", "/sys/block/mmcblk0/size");
 	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
 	if (try_mount_write("/dev/mmcblk0") == 0 ||
 	    try_mount_write("/dev/mmcblk0p1") == 0 ||
