@@ -18,11 +18,9 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0234u
-#define RAW_TEST_NAME "SF2L0234TXT"
-#define RAW_FIXED_CLUSTER 5u
-#define RAW_FIXED_DIR_SECTOR 6u
-#define RAW_FIXED_DIR_SLOT 2u
+#define STORAGE_TAG 0x0235u
+#define RAW_TEST_NAME "SF2L0235TXT"
+#define RAW_MIN_CLUSTER 128u
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -675,7 +673,7 @@ static uint32_t find_free_fat32_cluster_ioctl(const char *dev,
 	unsigned off;
 	unsigned i;
 
-	cluster = 2u;
+	cluster = RAW_MIN_CLUSTER;
 	for (i = 0; i < 64u; i++) {
 		lba = first_fat + (cluster * 4u) / 512u;
 		if (read_sector_lba_ioctl(dev, lba, "fat-iscan-sec", buf) != 0)
@@ -693,6 +691,34 @@ static uint32_t find_free_fat32_cluster_ioctl(const char *dev,
 	}
 	progress_mark("fat-iscan-limit", 0x3bu, cluster);
 	return 0;
+}
+
+static int find_root_dir_slot_ioctl(const char *dev, uint32_t root_lba,
+	uint32_t root_sectors, uint32_t *slot_lba, unsigned *slot_off)
+{
+	unsigned char buf[512];
+	uint32_t i;
+	unsigned off;
+
+	for (i = 0; i < root_sectors && i < 64u; i++) {
+		if (read_sector_lba_ioctl(dev, root_lba + i,
+				"fat-idir-scan", buf) != 0)
+			return -1;
+		for (off = 0; off < 512u; off += 32u) {
+			if (memcmp(buf + off, RAW_TEST_NAME, 11) == 0 ||
+			    buf[off] == 0x00 || buf[off] == 0xe5) {
+				progress_mark("fat-idir-slot-lba", 0x3bu,
+					root_lba + i);
+				progress_mark("fat-idir-slot-off", 0x3bu,
+					off);
+				*slot_lba = root_lba + i;
+				*slot_off = off;
+				return 0;
+			}
+		}
+	}
+	progress_mark("fat-idir-no-slot", 0x3bu, root_sectors);
+	return -1;
 }
 
 static int find_root_dir_slot(const char *dev, uint32_t root_lba,
@@ -736,7 +762,7 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux raw fat32 write test 0234\r\n";
+		"sf2000 linux raw fat32 write test 0235\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -790,7 +816,7 @@ static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux fixed fat32 write test 0234\r\n";
+		"sf2000 linux fixed fat32 write test 0235\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -850,7 +876,7 @@ static int raw_fat32_ioctl_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux ioctl fat32 write test 0234\r\n";
+		"sf2000 linux ioctl fat32 write test 0235\r\n";
 	unsigned char buf[512];
 	uint32_t cluster;
 	uint32_t data_lba;
@@ -859,7 +885,7 @@ static int raw_fat32_ioctl_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t fat_lba2;
 	uint32_t slot_lba;
 	unsigned fat_ent_off;
-	unsigned slot_off = 32;
+	unsigned slot_off;
 
 	cluster = find_free_fat32_cluster_ioctl(dev, first_fat,
 		(total_sectors - first_data) / spc + 2u);
@@ -869,10 +895,13 @@ static int raw_fat32_ioctl_fixed_write_test(const char *dev, uint32_t first_fat,
 	}
 
 	data_lba = first_data + (cluster - 2u) * spc;
-	slot_lba = root_lba + 6u;
+	if (find_root_dir_slot_ioctl(dev, root_lba, spc, &slot_lba,
+			&slot_off) != 0)
+		return -1;
 	progress_mark("fat-ioctl-cluster", 0x3bu, cluster);
 	progress_mark("fat-ioctl-data-lba", 0x3bu, data_lba);
 	progress_mark("fat-ioctl-slot-lba", 0x3bu, slot_lba);
+	progress_mark("fat-ioctl-slot-off", 0x3bu, slot_off);
 
 	memset(buf, 0, sizeof(buf));
 	memcpy(buf, msg, sizeof(msg) - 1u);
@@ -917,26 +946,33 @@ static int raw_fat32_ioctl_known_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux known cluster ioctl fat32 write test 0234\r\n";
+		"sf2000 linux known cluster ioctl fat32 write test 0235\r\n";
 	unsigned char buf[512];
-	uint32_t cluster = RAW_FIXED_CLUSTER;
+	uint32_t cluster;
 	uint32_t data_lba;
 	uint32_t fat_off;
 	uint32_t fat_lba;
 	uint32_t fat_lba2;
 	uint32_t slot_lba;
 	unsigned fat_ent_off;
-	unsigned slot_off = RAW_FIXED_DIR_SLOT * 32u;
+	unsigned slot_off;
 
 	progress_mark("fat-known-entry", 0x3bu, STORAGE_TAG);
-	if (spc == 0 || cluster < 2u ||
-	    cluster >= (total_sectors - first_data) / spc + 2u) {
-		progress_mark("fat-known-bad-geom", 0x3bu, cluster);
+	if (spc == 0) {
+		progress_mark("fat-known-bad-geom", 0x3bu, spc);
 		return -1;
 	}
+	cluster = find_free_fat32_cluster_ioctl(dev, first_fat,
+		(total_sectors - first_data) / spc + 2u);
+	if (!cluster) {
+		progress_mark("fat-known-no-cluster", 0x3bu, 0);
+		return -1;
+	}
+	if (find_root_dir_slot_ioctl(dev, root_lba, spc, &slot_lba,
+			&slot_off) != 0)
+		return -1;
 
 	data_lba = first_data + (cluster - 2u) * spc;
-	slot_lba = root_lba + RAW_FIXED_DIR_SECTOR;
 	progress_mark("fat-known-cluster", 0x3bu, cluster);
 	progress_mark("fat-known-data-lba", 0x3bu, data_lba);
 	progress_mark("fat-known-slot-lba", 0x3bu, slot_lba);
@@ -989,7 +1025,7 @@ static int raw_fat32_ioctl_known_write_test(const char *dev, uint32_t first_fat,
 	return 0;
 }
 
-static void log_fat_geometry(const char *dev)
+static int log_fat_geometry(const char *dev)
 {
 	unsigned char buf[512];
 	uint32_t total_sectors;
@@ -1009,9 +1045,10 @@ static void log_fat_geometry(const char *dev)
 	unsigned root_entries;
 	unsigned fsinfo;
 	unsigned i;
+	int ret;
 
 	if (read_sector_lba_ioctl(dev, 0, "fat-bpb-ioctl", buf) != 0)
-		return;
+		return -1;
 
 	bps = get_le16(buf, 11);
 	spc = buf[13];
@@ -1045,8 +1082,10 @@ static void log_fat_geometry(const char *dev)
 	progress_mark("fat-root-lba", 0x3cu, root_lba);
 	progress_mark("fat-root-sectors", 0x3cu, root_sectors);
 
-	(void)raw_fat32_ioctl_known_write_test(dev, first_fat, fat_size,
+	ret = raw_fat32_ioctl_known_write_test(dev, first_fat, fat_size,
 		first_data, total_sectors, root_lba, spc);
+	progress_mark("fat-known-result", 0x3bu, (uint32_t)ret);
+#if 0
 	if (fsinfo)
 		(void)read_sector_lba_ioctl(dev, fsinfo, "fat-fsinfo-ioc", buf);
 	(void)read_sector_lba_ioctl(dev, first_fat, "fat-first-fat-ioc", buf);
@@ -1067,6 +1106,8 @@ static void log_fat_geometry(const char *dev)
 
 	(void)raw_fat32_write_test(dev, first_fat, fat_size, first_data,
 		total_sectors, root_lba, root_sectors, spc);
+#endif
+	return ret;
 }
 
 static int try_mount_read_type(const char *dev, const char *fstype)
@@ -1131,14 +1172,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0234.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0235.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0234\n";
+		const char msg[] = "sf2000 linux sd write test 0235\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -1211,14 +1252,17 @@ int main(void)
 	set_readahead_zero("/dev/mmcblk0p2");
 	set_readahead_zero("/dev/mmcblk0sys");
 	set_readahead_zero("/dev/mmcblk0class");
-	log_fat_geometry("/dev/mmcblk0");
+	if (log_fat_geometry("/dev/mmcblk0") == 0)
+		mounted = 0;
 	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
+#if 0
 	if (try_mount_write("/dev/mmcblk0") == 0 ||
 	    try_mount_write("/dev/mmcblk0p1") == 0 ||
 	    try_mount_write("/dev/mmcblk0p2") == 0 ||
 	    try_mount_write("/dev/mmcblk0sys") == 0 ||
 	    try_mount_write("/dev/mmcblk0class") == 0)
 		mounted = 0;
+#endif
 	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
 	progress_mark("stor-fast-done", 0x3au, STORAGE_TAG);
 	if (mounted == 0) {
