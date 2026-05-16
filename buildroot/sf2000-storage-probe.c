@@ -18,8 +18,8 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0224u
-#define RAW_TEST_NAME "SF2L0224TXT"
+#define STORAGE_TAG 0x0225u
+#define RAW_TEST_NAME "SF2L0225TXT"
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -453,15 +453,17 @@ static int read_sector_lba(const char *dev, uint32_t lba, const char *label,
 	return 0;
 }
 
-static int write_sector_lba(const char *dev, uint32_t lba, const char *label,
-	const unsigned char *buf)
+static int write_sector_lba_flags(const char *dev, uint32_t lba,
+	const char *label, const unsigned char *buf, int flags, int do_fsync)
 {
 	ssize_t wrote;
+	int saved_errno = 0;
+	int fsret = 0;
 	off_t pos;
 	int fd;
 
 	progress_mark(label, 0x3cu, lba);
-	fd = open(dev, O_RDWR | O_SYNC | O_CLOEXEC);
+	fd = open(dev, O_RDWR | O_CLOEXEC | flags);
 	if (fd < 0) {
 		progress_mark("stor-wsec-open-fail", 0x3cu, (uint32_t)errno);
 		return -1;
@@ -474,17 +476,33 @@ static int write_sector_lba(const char *dev, uint32_t lba, const char *label,
 		return -1;
 	}
 	storage_watchdog_arm("stor-wdt-raw-write");
+	errno = 0;
 	wrote = write(fd, buf, 512);
+	saved_errno = errno;
 	progress_mark("stor-wsec-write-ret", 0x3cu, (uint32_t)wrote);
-	fsync(fd);
+	progress_mark("stor-wsec-write-errn", 0x3cu, (uint32_t)saved_errno);
+	if (do_fsync) {
+		errno = 0;
+		fsret = fsync(fd);
+		progress_mark("stor-wsec-fsync-ret", 0x3cu,
+			(uint32_t)fsret);
+		progress_mark("stor-wsec-fsync-err", 0x3cu,
+			(uint32_t)errno);
+	}
 	storage_watchdog_release("stor-wdt-raw-write-done");
 	close(fd);
 	if (wrote != 512) {
 		progress_mark("stor-wsec-write-err", 0x3cu,
-			wrote < 0 ? (uint32_t)errno : (uint32_t)wrote);
+			wrote < 0 ? (uint32_t)saved_errno : (uint32_t)wrote);
 		return -1;
 	}
 	return 0;
+}
+
+static int write_sector_lba(const char *dev, uint32_t lba, const char *label,
+	const unsigned char *buf)
+{
+	return write_sector_lba_flags(dev, lba, label, buf, 0, 0);
 }
 
 static uint32_t read_fat32_entry(const char *dev, uint32_t fat_start,
@@ -591,7 +609,7 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux raw fat32 write test 0224\r\n";
+		"sf2000 linux raw fat32 write test 0225\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -637,6 +655,66 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	if (write_sector_lba(dev, slot_lba, "fat-write-dir", buf) != 0)
 		return -1;
 	progress_mark("fat-raw-write-ok", 0x3cu, cluster);
+	return 0;
+}
+
+static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
+	uint32_t fat_size, uint32_t first_data, uint32_t total_sectors,
+	uint32_t root_lba, unsigned spc)
+{
+	static const char msg[] =
+		"sf2000 linux fixed fat32 write test 0225\r\n";
+	unsigned char buf[512];
+	uint32_t max_cluster;
+	uint32_t cluster;
+	uint32_t data_lba;
+	uint32_t slot_lba;
+	unsigned slot_off = 0;
+
+	max_cluster = (total_sectors - first_data) / spc + 2u;
+	progress_mark("fat-fixed-max-cluster", 0x3cu, max_cluster);
+	cluster = find_free_fat32_cluster(dev, first_fat, max_cluster);
+	if (!cluster) {
+		progress_mark("fat-fixed-no-cluster", 0x3cu, 0);
+		return -1;
+	}
+
+	data_lba = first_data + (cluster - 2u) * spc;
+	slot_lba = root_lba + 6u;
+	progress_mark("fat-fixed-cluster", 0x3cu, cluster);
+	progress_mark("fat-fixed-data-lba", 0x3cu, data_lba);
+	progress_mark("fat-fixed-slot-lba", 0x3cu, slot_lba);
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, msg, sizeof(msg) - 1u);
+	if (write_sector_lba(dev, data_lba, "fat-fixed-data", buf) != 0)
+		return -1;
+	if (read_sector_lba(dev, data_lba, "fat-fixed-readback", buf) != 0)
+		return -1;
+	progress_mark("fat-fixed-rb-head", 0x3cu, get_le32(buf, 0));
+
+	if (write_fat32_entry(dev, first_fat, fat_size, cluster,
+			0x0ffffff8u) != 0)
+		return -1;
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf + slot_off, RAW_TEST_NAME, 11);
+	buf[slot_off + 11u] = 0x20;
+	put_le16(buf, slot_off + 20u, (uint16_t)(cluster >> 16));
+	put_le16(buf, slot_off + 26u, (uint16_t)cluster);
+	put_le32(buf, slot_off + 28u, (uint32_t)(sizeof(msg) - 1u));
+	if (write_sector_lba(dev, slot_lba, "fat-fixed-dir", buf) != 0)
+		return -1;
+	if (read_sector_lba(dev, slot_lba, "fat-fixed-dir-rb", buf) != 0)
+		return -1;
+	progress_mark("fat-fixed-dir-head", 0x3cu, get_le32(buf, 0));
+
+	storage_watchdog_arm("stor-wdt-raw-sync");
+	progress_mark("fat-fixed-before-sync", 0x3cu, cluster);
+	sync();
+	progress_mark("fat-fixed-after-sync", 0x3cu, cluster);
+	storage_watchdog_release("stor-wdt-raw-sync-done");
+	progress_mark("fat-fixed-write-ok", 0x3cu, cluster);
 	return 0;
 }
 
@@ -699,6 +777,8 @@ static void log_fat_geometry(const char *dev)
 	if (fsinfo)
 		(void)read_sector_lba(dev, fsinfo, "fat-fsinfo-sec", buf);
 	(void)read_sector_lba(dev, first_fat, "fat-first-fat-sec", buf);
+	(void)raw_fat32_fixed_write_test(dev, first_fat, fat_size, first_data,
+		total_sectors, root_lba, spc);
 
 	cluster = root_cluster;
 	for (i = 0; i < 24u; i++) {
@@ -710,8 +790,6 @@ static void log_fat_geometry(const char *dev)
 		cluster = next;
 	}
 
-	for (i = 0; i < 8u; i++)
-		(void)read_sector_lba(dev, root_lba + i, "fat-root-sec", buf);
 	(void)raw_fat32_write_test(dev, first_fat, fat_size, first_data,
 		total_sectors, root_lba, root_sectors, spc);
 }
@@ -778,14 +856,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0224.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0225.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0224\n";
+		const char msg[] = "sf2000 linux sd write test 0225\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
