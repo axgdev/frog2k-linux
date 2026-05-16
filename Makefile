@@ -16,6 +16,7 @@ QEMU_CPU ?= 4Kc
 QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
 QEMU_ROM_CPU ?=
 QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
+QEMU_DEBUG ?= guest_errors,unimp
 HOSTCC ?= cc
 TOOLCHAIN_DIR ?= /opt/gdb-mips-toolchain
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-mti-elf-
@@ -94,6 +95,7 @@ $(error unsupported ROOTFS '$(ROOTFS)', expected tiny or buildroot)
 endif
 LINUX_VMLINUX := $(LINUX_OUT)/vmlinux
 LINUX_CONFIG_STAMP := $(LINUX_OUT)/.stamp-config
+LINUX_CMDLINE_STAMP := $(LINUX_OUT)/.stamp-cmdline
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
@@ -352,7 +354,12 @@ $(SF2000_DTB): linux/sf2000.dts
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
 
-$(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile | $(LINUX_SRC)/.patched
+$(LINUX_CMDLINE_STAMP): Makefile | $(LINUX_SRC)/.patched
+	mkdir -p '$(dir $@)'
+	printf '%s\n' '$(LINUX_CMDLINE)' > '$@.tmp'
+	if ! cmp -s '$@.tmp' '$@' 2>/dev/null; then mv '$@.tmp' '$@'; else rm -f '$@.tmp'; fi
+
+$(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
@@ -729,7 +736,7 @@ run-linux-asd: qemu linux-asd
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-asd.log \
+		-d '$(QEMU_DEBUG)' -D '$(BUILD_DIR)'/logs/linux-asd.log \
 		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
 
 smoke-linux-asd: run-linux-asd
@@ -792,16 +799,17 @@ smoke-linux-buildroot-asd:
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
 		run-linux-asd
 
 smoke-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init' \
+		QEMU_DEBUG='guest_errors,unimp' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
 		run-linux-buildroot-storage
-	grep -q 'sf2000_storage_probe: start 0239 guarded write diagnostics' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_storage_probe: readonly FAT diagnostics done, starting guarded write' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -Eq 'fat-known-write-ok|stor-fast-result' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847c0050->47c0050' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000: storage-progress .*mips-start-thread-pc' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \

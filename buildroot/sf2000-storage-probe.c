@@ -12,7 +12,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define KSEG1ADDR(x) ((volatile void *)(uintptr_t)((uint32_t)(x) | 0xa0000000u))
+/*
+ * The probe is a NOMMU flat binary, so it talks to the emulated machine using
+ * direct physical addresses instead of kernel kseg1 aliases.
+ */
+#define KSEG1ADDR(x) ((volatile void *)(uintptr_t)(uint32_t)(x))
 #define PROGRESS_PHYS 0x013f0000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
@@ -93,9 +97,11 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value)
 	uint32_t seq;
 
 	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
-		memset((void *)log, 0, sizeof(*log));
 		log->magic = PROGRESS_MAGIC;
 		log->version = PROGRESS_VERSION;
+		log->seq = 0;
+		log->write_index = 0;
+		log->wrapped = 0;
 	}
 
 	seq = log->seq + 1u;
@@ -121,9 +127,11 @@ static void progress_reset(const char *name)
 	volatile struct progress_log *log =
 		(volatile struct progress_log *)KSEG1ADDR(PROGRESS_PHYS);
 
-	memset((void *)log, 0, sizeof(*log));
 	log->magic = PROGRESS_MAGIC;
 	log->version = PROGRESS_VERSION;
+	log->seq = 0;
+	log->write_index = 0;
+	log->wrapped = 0;
 	progress_mark(name, 0x3au, STORAGE_TAG);
 }
 
@@ -1557,9 +1565,9 @@ int main(void)
 {
 	int mounted = -1;
 
+	log_line("sf2000_storage_probe: start 0239 guarded write diagnostics\n");
 	progress_reset("stor-ring-reset");
 	progress_mark("stor-start", 0x3au, STORAGE_TAG);
-	log_line("sf2000_storage_probe: start " STORAGE_TAG_TEXT " guarded write diagnostics\n");
 	ensure_mounts();
 	ensure_block_nodes();
 	stat_node("/dev/mmcblk0");
