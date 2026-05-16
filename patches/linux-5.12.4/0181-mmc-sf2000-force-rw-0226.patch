@@ -1,0 +1,31 @@
+diff --git a/drivers/mmc/core/block.c b/drivers/mmc/core/block.c
+index 875612c..c4680ee 100644
+--- a/drivers/mmc/core/block.c
++++ b/drivers/mmc/core/block.c
+@@ -2285,8 +2285,13 @@ enum mmc_issued mmc_blk_mq_issue_rq(struct mmc_queue *mq, struct request *req)
+ 
+ static inline int mmc_blk_readonly(struct mmc_card *card)
+ {
++#ifdef CONFIG_MIPS_SF2000
++	sf2000_mmc_blk_mark("mmcblk-force-rw", card->csd.cmdclass);
++	return 0;
++#else
+ 	return mmc_card_readonly(card) ||
+ 	       !(card->csd.cmdclass & CCC_BLOCK_WRITE);
++#endif
+ }
+ 
+ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+index 5fb2180..697c13c 100644
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -59,7 +59,7 @@
+ #define HC15_DATA_VARIANTS	1
+ #define HC15_READ_VARIANTS	1
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0225
++#define HC15_PROBE_TAG		0x0226
+ 
+ struct hc15_mmc {
+ 	struct mmc_host *mmc;
