@@ -18,7 +18,14 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0220u
+#define STORAGE_TAG 0x0221u
+#define WDT_BASE_PHYS 0x18818000u
+#define WDT_REG_OFF 0x500u
+#define WDT_COUNT_OFF 0x00u
+#define WDT_CONF_OFF 0x04u
+#define WDT_STORAGE_COUNT 0xffe64035u
+#define WDT_STORAGE_CONF 0x26u
+#define STORAGE_WDT_CLAIM "/run/sf2000-storage-watchdog-owned"
 
 struct progress_entry {
 	uint32_t seq;
@@ -116,6 +123,34 @@ static void log_msgf(const char *fmt, ...)
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
 	log_line(line);
+}
+
+static void storage_watchdog_arm(const char *name)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+	int fd;
+
+	progress_mark(name, 0x3du, STORAGE_TAG);
+	fd = open(STORAGE_WDT_CLAIM, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC,
+		0644);
+	if (fd >= 0)
+		close(fd);
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
+	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
+		WDT_STORAGE_COUNT;
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) =
+		WDT_STORAGE_CONF;
+	progress_mark("stor-wdt-armed", 0x3du, WDT_STORAGE_CONF);
+}
+
+static void storage_watchdog_release(const char *name)
+{
+	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
+
+	progress_mark(name, 0x3du, STORAGE_TAG);
+	unlink(STORAGE_WDT_CLAIM);
+	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
+	progress_mark("stor-wdt-released", 0x3du, 0);
 }
 
 static void ensure_mounts(void)
@@ -364,25 +399,30 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	int fd;
 
 	progress_mark("stor-try", 0x3du, hash_name(dev));
-	log_msgf("sf2000_storage_probe: mount try %s type=%s\n", dev, fstype);
 	progress_mark("stor-mount-type", 0x3du, hash_name(fstype));
+	progress_mark("stor-before-mount-log", 0x3du, hash_name(dev));
+	log_msgf("sf2000_storage_probe: mount try %s type=%s\n", dev, fstype);
+	progress_mark("stor-before-mount-call", 0x3du, hash_name(dev));
+	storage_watchdog_arm("stor-wdt-mount");
 	errno = 0;
 	if (mount(dev, "/mnt/sd", fstype, MS_NOATIME, "") != 0) {
+		storage_watchdog_release("stor-wdt-mount-fail");
 		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: mount failed %s type=%s errno=%d\n",
 			dev, fstype, errno);
 		return -1;
 	}
+	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0220.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0221.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0220\n";
+		const char msg[] = "sf2000 linux sd write test 0221\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);
@@ -443,6 +483,10 @@ int main(void)
 	set_readahead_zero("/dev/mmcblk0p2");
 	set_readahead_zero("/dev/mmcblk0sys");
 	set_readahead_zero("/dev/mmcblk0class");
+	log_block_head("/dev/mmcblk0");
+	log_block_head("/dev/mmcblk0sys");
+	log_file_head("proc-partitions-pre", "/proc/partitions");
+	log_file_head("sys-mmc0-size-pre", "/sys/block/mmcblk0/size");
 	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
 	if (try_mount_write("/dev/mmcblk0") == 0 ||
 	    try_mount_write("/dev/mmcblk0p1") == 0 ||
