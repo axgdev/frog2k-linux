@@ -18,8 +18,8 @@
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define STORAGE_TAG 0x0227u
-#define RAW_TEST_NAME "SF2L0227TXT"
+#define STORAGE_TAG 0x0228u
+#define RAW_TEST_NAME "SF2L0228TXT"
 #define WDT_BASE_PHYS 0x18818000u
 #define WDT_REG_OFF 0x500u
 #define WDT_COUNT_OFF 0x00u
@@ -27,6 +27,9 @@
 #define WDT_STORAGE_COUNT 0xffe64035u
 #define WDT_STORAGE_CONF 0x26u
 #define STORAGE_WDT_CLAIM "/run/sf2000-storage-watchdog-owned"
+#ifndef O_DIRECT
+#define O_DIRECT 00040000
+#endif
 
 struct progress_entry {
 	uint32_t seq;
@@ -98,6 +101,8 @@ static void progress_reset(const char *name)
 	log->version = PROGRESS_VERSION;
 	progress_mark(name, 0x3au, STORAGE_TAG);
 }
+
+static unsigned char direct_write_buf[512] __attribute__((aligned(512)));
 
 static uint32_t hash_name(const char *text)
 {
@@ -459,11 +464,15 @@ static int write_sector_lba_flags(const char *dev, uint32_t lba,
 	ssize_t wrote;
 	int saved_errno = 0;
 	int fsret = 0;
+	int open_flags;
 	off_t pos;
 	int fd;
 
 	progress_mark(label, 0x3cu, lba);
-	fd = open(dev, O_RDWR | O_CLOEXEC | flags);
+	memcpy(direct_write_buf, buf, sizeof(direct_write_buf));
+	open_flags = O_RDWR | O_CLOEXEC | O_DIRECT | flags;
+	progress_mark("stor-wsec-flags", 0x3cu, (uint32_t)open_flags);
+	fd = open(dev, open_flags);
 	if (fd < 0) {
 		progress_mark("stor-wsec-open-fail", 0x3cu, (uint32_t)errno);
 		return -1;
@@ -477,7 +486,8 @@ static int write_sector_lba_flags(const char *dev, uint32_t lba,
 	}
 	storage_watchdog_arm("stor-wdt-raw-write");
 	errno = 0;
-	wrote = write(fd, buf, 512);
+	progress_mark("stor-wsec-direct", 0x3cu, lba);
+	wrote = write(fd, direct_write_buf, sizeof(direct_write_buf));
 	saved_errno = errno;
 	progress_mark("stor-wsec-write-ret", 0x3cu, (uint32_t)wrote);
 	progress_mark("stor-wsec-write-errn", 0x3cu, (uint32_t)saved_errno);
@@ -609,7 +619,7 @@ static int raw_fat32_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, uint32_t root_sectors, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux raw fat32 write test 0227\r\n";
+		"sf2000 linux raw fat32 write test 0228\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -663,7 +673,7 @@ static int raw_fat32_fixed_write_test(const char *dev, uint32_t first_fat,
 	uint32_t root_lba, unsigned spc)
 {
 	static const char msg[] =
-		"sf2000 linux fixed fat32 write test 0227\r\n";
+		"sf2000 linux fixed fat32 write test 0228\r\n";
 	unsigned char buf[512];
 	uint32_t max_cluster;
 	uint32_t cluster;
@@ -856,14 +866,14 @@ static int try_mount_write_type(const char *dev, const char *fstype)
 	storage_watchdog_release("stor-wdt-mount-ok");
 	progress_mark("stor-mount-ok", 0x3du, hash_name(dev));
 	log_msgf("sf2000_storage_probe: mount ok %s type=%s\n", dev, fstype);
-	fd = open("/mnt/sd/sf2000-linux-rw-0227.txt",
+	fd = open("/mnt/sd/sf2000-linux-rw-0228.txt",
 		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
 		log_msgf("sf2000_storage_probe: write open failed errno=%d\n",
 			errno);
 	} else {
-		const char msg[] = "sf2000 linux sd write test 0227\n";
+		const char msg[] = "sf2000 linux sd write test 0228\n";
 
 		errno = 0;
 		wrote = write(fd, msg, sizeof(msg) - 1u);

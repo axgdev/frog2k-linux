@@ -59,7 +59,7 @@
 #define HC15_DATA_VARIANTS	1
 #define HC15_READ_VARIANTS	1
 #define HC15_TRACE_VERBOSE	0
-#define HC15_PROBE_TAG		0x0227
+#define HC15_PROBE_TAG		0x0228
 
 struct hc15_mmc {
 	struct mmc_host *mmc;
@@ -92,8 +92,18 @@ static void hc15_mark(const char *name, u32 value)
 		return;
 	sf2000_progress_mark(name, 0x35, value);
 }
+
+static void hc15_rw_mark(const char *name, u32 value)
+{
+	static unsigned int count;
+
+	if (count++ >= 96)
+		return;
+	sf2000_progress_mark(name, 0x36, value);
+}
 #else
 static void hc15_mark(const char *name, u32 value) { }
+static void hc15_rw_mark(const char *name, u32 value) { }
 #endif
 
 static void hc15_update32(u32 phys, u32 clear, u32 set)
@@ -586,6 +596,16 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 		data->bytes_xfered = 0;
 		host->last_read_sample = 0;
 		host->last_read_sample2 = 0;
+		if (cmd->opcode == MMC_READ_SINGLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_BLOCK ||
+		    cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK) {
+			hc15_rw_mark("hc15-rw-op", cmd->opcode);
+			hc15_rw_mark("hc15-rw-arg", cmd->arg);
+			hc15_rw_mark("hc15-rw-flags", data->flags);
+			hc15_rw_mark("hc15-rw-blksz", data->blksz);
+			hc15_rw_mark("hc15-rw-blocks", data->blocks);
+		}
 		hc15_setup_data(host, data);
 	}
 
@@ -615,6 +635,14 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	}
 
 	if (data) {
+		if (cmd->opcode == MMC_READ_SINGLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_BLOCK ||
+		    cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK) {
+			hc15_rw_mark("hc15-rw-bytes", data->bytes_xfered);
+			hc15_rw_mark("hc15-rw-cmderr", cmd->error);
+			hc15_rw_mark("hc15-rw-dataerr", data->error);
+		}
 		hc15_mark("hc15-data-error", data->error);
 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
 	}
