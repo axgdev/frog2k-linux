@@ -13,7 +13,7 @@ _start:
 	li	$2, 4001		/* exit */
 	syscall
 	nop
-3:
-	b	3b
+1:
+	b	1b
 	nop
 	.end _start
