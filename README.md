@@ -43,6 +43,7 @@ make qemu
 make ROOTFS=buildroot sdcard-linux
 make ROOTFS=buildroot smoke-linux-buildroot-asd
 make ROOTFS=buildroot smoke-linux-buildroot-rom
+make smoke-qemu-board-contract
 make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
@@ -52,6 +53,10 @@ make status
 `external/sf2000_qemu` raw-image DMA writeback smoke, so the default storage
 regression path uses the stronger emulator-side oracle instead of the brittle
 direct guest probe.
+
+`smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
+board-contract smoke, which keeps the board-profile, display, audio, USB, and
+storage snapshots queryable from the Linux workspace as well.
 
 `sdcard-linux` writes three intentionally different boot artifacts under
 `build/sdcard`:

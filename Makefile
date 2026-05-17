@@ -938,6 +938,11 @@ run-qemu-stock-fatfs-writeback:
 
 smoke-qemu-stock-fatfs-writeback: run-qemu-stock-fatfs-writeback
 
+run-qemu-board-contract:
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-board-contract QEMU_JOBS='$(JOBS)'
+
+smoke-qemu-board-contract: run-qemu-board-contract
+
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-rom
