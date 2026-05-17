@@ -807,12 +807,13 @@ run-linux-buildroot-storage:
 
 smoke-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
+		SF2000_TRACE_SDIO='1' \
 		QEMU_DEBUG='guest_errors,unimp' \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
 		run-linux-buildroot-storage
 	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847c0050->47c0050' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000: pc-landmark storage_probe_entry' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000: sdio-reg-read addr=0x1884c030' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000: storage-progress .*mips-start-thread-pc' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:

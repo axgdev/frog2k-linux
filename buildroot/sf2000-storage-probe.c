@@ -89,9 +89,8 @@ static volatile struct progress_log *progress_log;
 
 static volatile struct progress_log *progress_log_current(void)
 {
-	if (progress_log)
-		return progress_log;
-	return (volatile struct progress_log *)(uintptr_t)PROGRESS_PHYS;
+	return (volatile struct progress_log *)(uintptr_t)(
+		PROGRESS_PHYS | 0xa0000000u);
 }
 
 int map_progress_log(void)
@@ -120,7 +119,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value)
 	volatile struct progress_entry *entry;
 	uint32_t index;
 	uint32_t seq;
-
 	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
 		log->magic = PROGRESS_MAGIC;
 		log->version = PROGRESS_VERSION;
@@ -150,7 +148,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value)
 static void progress_reset(const char *name)
 {
 	volatile struct progress_log *log = progress_log_current();
-
 	log->magic = PROGRESS_MAGIC;
 	log->version = PROGRESS_VERSION;
 	log->seq = 0;
@@ -165,7 +162,6 @@ void storage_probe_entry_mark(void)
 	volatile struct progress_entry *entry;
 	uint32_t index;
 	uint32_t seq;
-
 	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
 		log->magic = PROGRESS_MAGIC;
 		log->version = PROGRESS_VERSION;
@@ -349,6 +345,16 @@ static void ensure_mounts(void)
 	ret = mount("devpts", "/dev/pts", "devpts", 0, "");
 	progress_mark("stor-mount-pts-ret", 0x3au, (uint32_t)ret);
 	progress_mark("stor-mount-pts-err", 0x3au, (uint32_t)errno);
+}
+
+static void ensure_core_nodes(void)
+{
+	errno = 0;
+	(void)mknod("/dev/mem", S_IFCHR | 0600, makedev(1, 1));
+	errno = 0;
+	(void)mknod("/dev/console", S_IFCHR | 0600, makedev(5, 1));
+	errno = 0;
+	(void)mknod("/dev/kmsg", S_IFCHR | 0600, makedev(1, 11));
 }
 
 static void log_dir(const char *label, const char *path)
@@ -1630,12 +1636,11 @@ int main(void)
 {
 	int mounted = -1;
 
-	map_progress_log();
-	progress_reset("stor-ring-reset");
-	storage_probe_entry_mark();
 	progress_mark("stor-start", 0x3au, STORAGE_TAG);
 	log_line("sf2000_storage_probe: start " STORAGE_TAG_TEXT " guarded write diagnostics\n");
+	map_progress_log();
 	ensure_mounts();
+	ensure_core_nodes();
 	ensure_block_nodes();
 	stat_node("/dev/mmcblk0");
 	stat_node("/dev/mmcblk0p1");
