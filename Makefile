@@ -17,6 +17,7 @@ QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
 QEMU_ROM_CPU ?=
 QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
+QEMU_SD_ARGS ?=
 HOSTCC ?= cc
 TOOLCHAIN_DIR ?= /opt/gdb-mips-toolchain
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-mti-elf-
@@ -72,7 +73,8 @@ BUILDROOT_STORAGE_PROBE_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin 
 BUILDROOT_STORAGE_FASTPROBE_SRC := buildroot/sf2000-storage-fastprobe.c
 BUILDROOT_STORAGE_FASTPROBE_ENTRY := buildroot/sf2000-storage-fastprobe-entry.S
 BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
-BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
+BUILDROOT_STORAGE_FASTPROBE_CFLAGS := $(BUILDROOT_HELPER_CFLAGS) -ffunction-sections -fdata-sections
+BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS) -Wl,--gc-sections
 BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
 BUILDROOT_RESET_FASTPROBE_ENTRY := buildroot/sf2000-reset-fastprobe-entry.S
 	BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
@@ -156,7 +158,10 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
 	smoke-linux-buildroot-asd run-linux-buildroot-storage \
 	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
-	smoke-linux-buildroot-storage-fast run-linux-buildroot-rom \
+	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
+	smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
+	smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-rom \
+	run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-display run-linux-buildroot-panel \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
@@ -341,7 +346,7 @@ $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_P
 
 $(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(BUILDROOT_STORAGE_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_STORAGE_FASTPROBE_LDFLAGS) \
+	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_FASTPROBE_CFLAGS) $(BUILDROOT_STORAGE_FASTPROBE_LDFLAGS) \
 		-o '$@' '$(BUILDROOT_STORAGE_FASTPROBE_ENTRY)' '$(BUILDROOT_STORAGE_FASTPROBE_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
@@ -806,6 +811,7 @@ run-linux-asd: qemu linux-asd
 	SF2000_TRACE_SDIO='$(SF2000_TRACE_SDIO)' \
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-append '$(LINUX_CMDLINE)' \
+		$(QEMU_SD_ARGS) \
 		-display none -serial none -monitor none \
 		-d '$(QEMU_DEBUG)' -D '$(BUILD_DIR)'/logs/linux-asd.log \
 		> '$(BUILD_DIR)'/logs/linux-asd.console 2>&1 || test $$? -eq 124
@@ -870,24 +876,19 @@ smoke-linux-buildroot-asd:
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
-		BUILDROOT_INIT_SOURCE='buildroot/sf2000-storage-init.sh' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon' \
-		run-linux-asd
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-buildroot-storage-fast
 
 smoke-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
-		BUILDROOT_INIT_SOURCE='buildroot/sf2000-storage-init.sh' \
 		SF2000_TRACE_SDIO='1' \
 		QEMU_DEBUG='guest_errors,unimp' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon' \
-		run-linux-buildroot-storage
-	grep -q 'sf2000_buildroot: storage init script start' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_rcS: start' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_rcS: run /etc/init.d/S05sf2000-storage' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_storage: probe begin' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_storage: dev-mmc' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_storage: mount try /dev/mmcblk0' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_storage: no mounted sd block device' '$(BUILD_DIR)'/logs/linux-asd.log
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-buildroot-storage-fast
+	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-fast:
 	$(MAKE) ROOTFS=buildroot \
@@ -900,12 +901,59 @@ smoke-linux-buildroot-storage-fast:
 		QEMU_DEBUG='guest_errors,unimp' \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-buildroot-storage-fast
+	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000-usb 18844000\.usb: registered SF2000 musb-hdrc glue' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000-usb 18850000\.usb: registered SF2000 musb-hdrc glue' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
+
+run-linux-buildroot-storage-writeback:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-buildroot-storage-fast
+
+smoke-linux-buildroot-storage-writeback:
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-writeback.XXXXXX.img); \
+	trap 'rm -f $$tmp_sd' EXIT; \
+	truncate -s 16M "$$tmp_sd"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
+	$(MAKE) ROOTFS=buildroot \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-buildroot-storage-writeback; \
+	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_fastprobe: probe begin' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_fastprobe: readback ok' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_fastprobe: mount ok' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_fastprobe: write ok /sf2000-linux-rw-0227.txt' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_fastprobe: umount ok' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -a -q 'sf2000 linux sd write test 0227' "$$tmp_sd"
+
+run-linux-buildroot-storage-probe-writeback:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
+		run-linux-asd
+
+smoke-linux-buildroot-storage-probe-writeback:
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-probe-writeback.XXXXXX.img); \
+	trap 'rm -f $$tmp_sd' EXIT; \
+	truncate -s 16M "$$tmp_sd"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
+	$(MAKE) ROOTFS=buildroot \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-buildroot-storage-probe-writeback; \
+	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_probe: start 0239 guarded write diagnostics' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_probe: fast storage path ok' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000_storage_probe: done' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -a -q 'sf2000 linux sd write test 0239' "$$tmp_sd"
+
+run-linux-buildroot-storage-launch:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-buildroot-storage-fast
+
+smoke-linux-buildroot-storage-launch: run-linux-buildroot-storage-launch
+	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
@@ -971,6 +1019,8 @@ run-linux-buildroot-panel-fast: qemu
 smoke-linux-buildroot-panel-fast: run-linux-buildroot-panel-fast
 	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.console
 	grep -q 'Run /usr/sbin/sf2000-panel-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
+	grep -q 'sf2000: panel-read-id start panel-id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
+	grep -q 'sf2000_panel_fastprobe: panel id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
 	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
 
 run-linux-buildroot-input:

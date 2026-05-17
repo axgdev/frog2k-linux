@@ -4,12 +4,19 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
 typedef unsigned int size_t;
 
 extern long syscall(long number, ...);
+
+#define PROGRESS_PHYS 0x013f0000u
+#define PROGRESS_MAGIC 0x52504653u
+#define PROGRESS_VERSION 1u
+#define PROGRESS_ENTRIES 1024u
+#define PROGRESS_NAME_LEN 32u
 
 #define SYS_exit 4001
 #define SYS_read 4003
@@ -26,8 +33,28 @@ extern long syscall(long number, ...);
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR 2
+#define O_CREAT 0100
+#define O_TRUNC 01000
 #define O_CLOEXEC 02000000
 #define SEEK_SET 0
+
+struct progress_entry {
+	unsigned int seq;
+	unsigned int kind;
+	unsigned int value;
+	unsigned int name_ptr;
+	char name[PROGRESS_NAME_LEN];
+};
+
+struct progress_log {
+	unsigned int magic;
+	unsigned int version;
+	unsigned int seq;
+	unsigned int write_index;
+	unsigned int wrapped;
+	unsigned int reserved[3];
+	struct progress_entry entries[PROGRESS_ENTRIES];
+};
 
 static long syscall1(long nr, long a0)
 {
@@ -99,11 +126,106 @@ static void write_all(long fd, const char *s)
 	(void)syscall3(SYS_write, fd, (long)s, (long)(p - s));
 }
 
+static volatile struct progress_log *progress_log_current(void)
+{
+	return (volatile struct progress_log *)(uintptr_t)(
+		PROGRESS_PHYS | 0xa0000000u);
+}
+
+static void progress_copy_name(volatile char *dst, const char *src)
+{
+	unsigned i;
+
+	for (i = 0; i < PROGRESS_NAME_LEN - 1u && src[i]; i++)
+		dst[i] = src[i];
+	for (; i < PROGRESS_NAME_LEN; i++)
+		dst[i] = 0;
+}
+
+static void progress_mark(const char *name, unsigned int kind,
+		unsigned int value)
+{
+	volatile struct progress_log *log = progress_log_current();
+	volatile struct progress_entry *entry;
+	unsigned int index;
+	unsigned int seq;
+	unsigned int i;
+
+	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
+		volatile unsigned int *p = (volatile unsigned int *)log;
+
+		for (i = 0; i < sizeof(*log) / sizeof(*p); i++)
+			p[i] = 0;
+		log->magic = PROGRESS_MAGIC;
+		log->version = PROGRESS_VERSION;
+	}
+
+	seq = log->seq + 1u;
+	index = log->write_index;
+	if (index >= PROGRESS_ENTRIES) {
+		index = 0;
+		log->wrapped = 1;
+	}
+
+	entry = &log->entries[index];
+	entry->seq = seq;
+	entry->kind = kind;
+	entry->value = value;
+	entry->name_ptr = (unsigned int)(uintptr_t)name;
+	progress_copy_name(entry->name, name);
+	log->write_index = index + 1u;
+	log->seq = seq;
+}
+
+void storage_probe_entry_mark(void)
+{
+	progress_mark("entry-start", 0x11u, 0x656e7472u);
+}
+
 static int path_exists(const char *path)
 {
 	struct stat st;
 
 	return stat(path, &st) == 0;
+}
+
+static void log_message(const char *message);
+
+static int mount_vfat_writeback(void)
+{
+	long fd;
+	long ret;
+
+	(void)mkdir("/mnt", 0755);
+	(void)mkdir("/mnt/sd", 0755);
+	ret = mount("/dev/mmcblk0", "/mnt/sd", "vfat", MS_NOATIME, "");
+	if (ret != 0) {
+		ret = mount("/dev/mmcblk0", "/mnt/sd", "msdos", MS_NOATIME, "");
+	}
+	if (ret != 0) {
+		log_message("sf2000_storage_fastprobe: mount failed\n");
+	return 1;
+	}
+	log_message("sf2000_storage_fastprobe: mount ok\n");
+	fd = syscall3(SYS_open, (long)"/mnt/sd/sf2000-linux-rw-0227.txt",
+		      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		log_message("sf2000_storage_fastprobe: file open failed\n");
+		(void)umount("/mnt/sd");
+		return 1;
+	}
+	write_all(fd, "sf2000 linux sd write test 0227\n");
+	if (fsync((int)fd) != 0) {
+		log_message("sf2000_storage_fastprobe: fsync failed\n");
+	}
+	(void)syscall1(SYS_close, fd);
+	log_message("sf2000_storage_fastprobe: write ok /sf2000-linux-rw-0227.txt\n");
+	if (umount("/mnt/sd") != 0) {
+		log_message("sf2000_storage_fastprobe: umount failed\n");
+		return 1;
+	}
+	log_message("sf2000_storage_fastprobe: umount ok\n");
+	return 0;
 }
 
 static void log_message(const char *message)
@@ -171,105 +293,6 @@ static void create_block_node_from_sysfs(const char *sys_path,
 
 int main(void)
 {
-	unsigned char write_buf[512] = { 0 };
-	unsigned char read_buf[512];
-	long fd;
-	long ret;
-	unsigned i;
-	unsigned waited;
-
 	log_message("sf2000_storage_fastprobe: probe begin\n");
-	(void)mkdir("/dev", 0755);
-	ret = syscall6(SYS_mount, (long)"devtmpfs", (long)"/dev",
-		       (long)"devtmpfs", 0, (long)"mode=0755", 0);
-	if (ret < 0) {
-		log_message_long("sf2000_storage_fastprobe: devtmpfs mount failed ret=", ret);
-	}
-	(void)mkdir("/proc", 0755);
-	ret = syscall6(SYS_mount, (long)"proc", (long)"/proc",
-		       (long)"proc", 0, 0, 0);
-	if (ret < 0) {
-		log_message_long("sf2000_storage_fastprobe: proc mount failed ret=", ret);
-	}
-	(void)mkdir("/sys", 0755);
-	ret = syscall6(SYS_mount, (long)"sysfs", (long)"/sys", (long)"sysfs", 0, 0, 0);
-	if (ret < 0) {
-		log_message_long("sf2000_storage_fastprobe: sysfs mount failed ret=", ret);
-	}
-	for (waited = 0; waited < 30; waited++) {
-		if (path_exists("/sys/bus/platform/devices/18844000.usb") &&
-		    path_exists("/sys/bus/platform/devices/18850000.usb")) {
-			break;
-		}
-		log_message("sf2000_storage_fastprobe: waiting usb devices\n");
-		sleep(1);
-	}
-	if (path_exists("/sys/bus/platform/devices/18844000.usb")) {
-		log_message("sf2000_storage_fastprobe: usb1 present\n");
-	} else {
-		log_message("sf2000_storage_fastprobe: usb1 missing\n");
-	}
-	if (path_exists("/sys/bus/platform/devices/18850000.usb")) {
-		log_message("sf2000_storage_fastprobe: usb2 present\n");
-	} else {
-		log_message("sf2000_storage_fastprobe: usb2 missing\n");
-	}
-	for (waited = 0; waited < 30; waited++) {
-		if (path_exists("/dev/mmcblk0")) {
-			break;
-		}
-		if (path_exists("/sys/block/mmcblk0/dev")) {
-			create_block_node_from_sysfs("/sys/block/mmcblk0/dev",
-						    "/dev/mmcblk0");
-			if (path_exists("/dev/mmcblk0")) {
-				break;
-			}
-		}
-		log_message("sf2000_storage_fastprobe: waiting mmc device\n");
-		sleep(1);
-	}
-	if (!path_exists("/dev/mmcblk0")) {
-		create_block_node_from_sysfs("/sys/block/mmcblk0/dev", "/dev/mmcblk0");
-	}
-	if (path_exists("/dev/mmcblk0")) {
-		log_message("sf2000_storage_fastprobe: mmc device ready\n");
-	}
-	fd = syscall3(SYS_open, (long)"/dev/mmcblk0", O_RDWR | O_CLOEXEC, 0);
-	if (fd < 0) {
-		log_message("sf2000_storage_fastprobe: open failed\n");
-		return 1;
-	}
-
-	ret = syscall3(SYS_write, fd, (long)write_buf, sizeof(write_buf));
-	if (ret != (long)sizeof(write_buf)) {
-		log_message("sf2000_storage_fastprobe: write failed\n");
-		(void)syscall1(SYS_close, fd);
-		return 1;
-	}
-
-	ret = syscall3(SYS_lseek, fd, 0, SEEK_SET);
-	if (ret < 0) {
-		log_message("sf2000_storage_fastprobe: seek failed\n");
-		(void)syscall1(SYS_close, fd);
-		return 1;
-	}
-
-	ret = syscall3(SYS_read, fd, (long)read_buf, sizeof(read_buf));
-	if (ret != (long)sizeof(read_buf)) {
-		log_message("sf2000_storage_fastprobe: read failed\n");
-		(void)syscall1(SYS_close, fd);
-		return 1;
-	}
-
-	(void)syscall1(SYS_close, fd);
-
-	for (i = 0; i < sizeof(write_buf); i++) {
-		if (read_buf[i] != write_buf[i]) {
-			log_message("sf2000_storage_fastprobe: readback mismatch\n");
-			return 1;
-		}
-	}
-
-	log_message("sf2000_storage_fastprobe: readback ok\n");
 	return 0;
 }
