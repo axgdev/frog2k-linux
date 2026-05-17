@@ -54,10 +54,16 @@ BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN_CFLAGS :=
 BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
+BUILDROOT_PANEL_PROBE_LINK := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe
+BUILDROOT_PANEL_PROBE_TARGET ?= sf2000-screen
 BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
 BUILDROOT_PANEL_INIT_ENTRY := buildroot/sf2000-panel-init-entry.S
 BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-launcher.S
 BUILDROOT_PANEL_INIT_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
+BUILDROOT_PANEL_FASTPROBE_SRC := buildroot/sf2000-panel-fastprobe.c
+BUILDROOT_PANEL_FASTPROBE_ENTRY := buildroot/sf2000-panel-fastprobe-entry.S
+BUILDROOT_PANEL_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-fastprobe
+BUILDROOT_PANEL_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
 BUILDROOT_STORAGE_PROBE_SRC := buildroot/sf2000-storage-probe.c
 BUILDROOT_STORAGE_PROBE_ENTRY := buildroot/sf2000-storage-probe-entry.S
 BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
@@ -144,7 +150,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-buildroot-storage-fast run-linux-buildroot-rom \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-display run-linux-buildroot-panel \
-	smoke-linux-buildroot-panel run-linux-input smoke-linux-input \
+	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
+	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot clean
@@ -295,13 +302,23 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 		-o '$@' '$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
-	ln -sf sf2000-screen '$(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe'
+
+buildroot-panel-probe-link: $(BUILDROOT_PANEL_FASTPROBE) Makefile
+	mkdir -p '$(dir $(BUILDROOT_PANEL_PROBE_LINK))'
+	ln -sf '$(BUILDROOT_PANEL_PROBE_TARGET)' '$(BUILDROOT_PANEL_PROBE_LINK)'
 
 $(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_PANEL_INIT_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PANEL_INIT_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
 		-o '$@' '$(BUILDROOT_PANEL_INIT_ENTRY)' '$(BUILDROOT_PANEL_INIT_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
+$(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(BUILDROOT_PANEL_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_PANEL_FASTPROBE_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_PANEL_FASTPROBE_ENTRY)' '$(BUILDROOT_PANEL_FASTPROBE_SRC)'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
@@ -324,7 +341,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -921,6 +938,18 @@ smoke-linux-buildroot-panel: run-linux-buildroot-panel
 	grep -q 'sf2000: panel-read-id start panel-id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: panel init done id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: panel probe done' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+
+run-linux-buildroot-panel-fast: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-fastprobe' \
+		SF2000_TRACE_PC='1' run-linux-asd
+	mv '$(BUILD_DIR)'/logs/linux-asd.log '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
+	mv '$(BUILD_DIR)'/logs/linux-asd.console '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.console
+
+smoke-linux-buildroot-panel-fast: run-linux-buildroot-panel-fast
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.console
+	grep -q 'Run /usr/sbin/sf2000-panel-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
+	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
 
 run-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot run-linux-input
