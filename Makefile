@@ -814,6 +814,7 @@ smoke-linux-buildroot-storage:
 	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847c0050->47c0050' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000: sdio-reg-read addr=0x1884c030' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000: sdio-reg-write addr=0x1884c030 value=0x00000020 size=1' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'mmio-write addr=0x1884c004 size=4 value=0x00000000' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'mmio-write addr=0x1884c002 size=1 value=0x000000c0' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000: storage-progress .*mips-start-thread-pc' '$(BUILD_DIR)'/logs/linux-asd.log
