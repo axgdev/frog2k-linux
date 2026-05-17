@@ -911,23 +911,10 @@ smoke-linux-buildroot-storage-fast:
 	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-writeback:
-	$(MAKE) ROOTFS=buildroot \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
-		run-linux-buildroot-storage-fast
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback QEMU_JOBS='$(JOBS)'
 
 smoke-linux-buildroot-storage-writeback:
-	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-writeback.XXXXXX.img); \
-	trap 'rm -f $$tmp_sd' EXIT; \
-	truncate -s 16M "$$tmp_sd"; \
-	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
-	$(MAKE) ROOTFS=buildroot \
-		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
-		run-linux-buildroot-storage-writeback; \
-	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sf2000_storage_fastprobe: entry-start' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sf2000_storage_fastprobe: probe begin' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sf2000_storage_fastprobe: raw writeback ok 0239' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -a -q 'sf2000 linux sd write test 0239' "$$tmp_sd"
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback QEMU_JOBS='$(JOBS)'
 
 run-linux-buildroot-storage-probe-writeback:
 	$(MAKE) ROOTFS=buildroot \
