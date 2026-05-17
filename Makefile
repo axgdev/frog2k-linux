@@ -53,6 +53,10 @@ BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
+BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
+BUILDROOT_PANEL_INIT_ENTRY := buildroot/sf2000-panel-init-entry.S
+BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-launcher.S
+BUILDROOT_PANEL_INIT_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
 BUILDROOT_STORAGE_PROBE_SRC := buildroot/sf2000-storage-probe.c
 BUILDROOT_STORAGE_PROBE_ENTRY := buildroot/sf2000-storage-probe-entry.S
 BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
@@ -79,6 +83,8 @@ BUILDROOT_SUPERVISOR_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
 BUILDROOT_SUPERVISOR_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin
 BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
+BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
+INIT_CFLAGS ?=
 BUILDROOT_SCREEN_LDFLAGS := -nostartfiles -static -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
@@ -180,7 +186,7 @@ $(BFLTPACK): tools/bfltpack.c Makefile
 
 $(INIT_RAW): init/sf2000-flat-init.S Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' -Os -nostdlib -ffreestanding \
+	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
 		-fno-pic -mno-gpopt -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
 		-Wl,--gc-sections -Wl,-z,noexecstack -o '$@.elf' '$<'
@@ -251,9 +257,9 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_INIT): $(INIT_BIN) Makefile
+$(BUILDROOT_INIT): $(BUILDROOT_INIT_SOURCE) Makefile
 	mkdir -p '$(dir $@)'
-	cp '$(INIT_BIN)' '$@'
+	cp '$(BUILDROOT_INIT_SOURCE)' '$@'
 	chmod 0755 '$@'
 
 $(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) $(BUILDROOT_INIT_CLONE) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
@@ -283,6 +289,13 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 	rm -f '$@.gdb'
 	ln -sf sf2000-screen '$(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe'
 
+$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_PANEL_INIT_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PANEL_INIT_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_PANEL_INIT_ENTRY)' '$(BUILDROOT_PANEL_INIT_SRC)'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_PROBE_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
@@ -296,7 +309,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -855,11 +868,12 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
 
-run-linux-buildroot-panel: qemu linux-asd
-	$(MAKE) ROOTFS=buildroot linux-asd
-	mkdir -p '$(BUILD_DIR)'/logs
+run-linux-buildroot-panel: qemu
+	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_PANEL_INIT)' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon' linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs; \
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
-		-append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-probe' \
+		-append 'console=ttyS0,115200 earlycon' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-panel.console 2>&1 || test $$? -eq 124
