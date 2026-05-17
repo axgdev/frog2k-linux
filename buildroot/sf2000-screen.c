@@ -2617,6 +2617,17 @@ static void log_direct_diag(const struct panel_variant *variant,
 	append_file_log(line);
 }
 
+static int argv0_is(const char *argv0, const char *name)
+{
+	const char *base;
+
+	if (!argv0 || !name)
+		return 0;
+	base = strrchr(argv0, '/');
+	base = base ? base + 1 : argv0;
+	return strcmp(base, name) == 0;
+}
+
 static void show_direct_frame(const char *phase,
 	const struct panel_variant *variant, uint8_t madctl, unsigned *frame,
 	unsigned hold_ms)
@@ -2875,6 +2886,14 @@ int main(int argc, char **argv, char **envp)
 			close(fd);
 			progress_mark("screen-map-devmem-ok", 0x3fu, SCREEN_TAG);
 		}
+	}
+
+	if (argv0_is(argc > 0 ? argv[0] : 0, "sf2000-panel-probe") ||
+	    env_is((const char *const *)envp, "SF2000_PANEL_PROBE", "1")) {
+		log_line("sf2000-screen: panel probe begin\n");
+		panel_init_variant(first_variant);
+		log_line("sf2000-screen: panel probe done\n");
+		return 0;
 	}
 
 	progress_mark("screen-before-owner", 0x3fu, SCREEN_TAG);

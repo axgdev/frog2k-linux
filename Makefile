@@ -129,7 +129,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-buildroot-asd run-linux-buildroot-storage \
 	smoke-linux-buildroot-storage run-linux-buildroot-rom \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
-	smoke-linux-buildroot-display run-linux-input smoke-linux-input \
+	smoke-linux-buildroot-display run-linux-buildroot-panel \
+	smoke-linux-buildroot-panel run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot clean
@@ -280,6 +281,7 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 		-o '$@' '$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
+	ln -sf sf2000-screen '$(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe'
 
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -852,6 +854,22 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+
+run-linux-buildroot-panel: qemu linux-asd
+	$(MAKE) ROOTFS=buildroot linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-probe' \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-panel.console 2>&1 || test $$? -eq 124
+
+smoke-linux-buildroot-panel: run-linux-buildroot-panel
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel.console
+	grep -q 'sf2000-screen: panel probe begin' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	grep -q 'sf2000: panel-read-id start panel-id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	grep -q 'sf2000-screen: panel init done id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	grep -q 'sf2000-screen: panel probe done' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 
 run-linux-buildroot-input:
 	$(MAKE) ROOTFS=buildroot run-linux-input
