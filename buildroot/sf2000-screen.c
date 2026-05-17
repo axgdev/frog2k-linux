@@ -2849,8 +2849,16 @@ static void run_rgb_only_diag(unsigned *frame)
 	runtime_watchdog_disable();
 }
 
+#ifdef PANEL_PROBE_INIT
+int main(void)
+{
+	int argc = 0;
+	char **argv = 0;
+	char **envp = 0;
+#else
 int main(int argc, char **argv, char **envp)
 {
+#endif
 	int fd;
 	unsigned frame = 0;
 	const struct panel_variant *first_variant = &panel_variants[0];
@@ -2858,6 +2866,7 @@ int main(int argc, char **argv, char **envp)
 	(void)argc;
 	(void)argv;
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
+	log_line("sf2000-screen: main entry\n");
 	if (envp)
 		environ = envp;
 	progress_mark("screen-after-env", 0x3fu, SCREEN_TAG);
@@ -2888,12 +2897,21 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 
-	if (argv0_is(argc > 0 ? argv[0] : 0, "sf2000-panel-probe") ||
-	    env_is((const char *const *)envp, "SF2000_PANEL_PROBE", "1")) {
+	{
+#ifdef PANEL_PROBE_INIT
 		log_line("sf2000-screen: panel probe begin\n");
 		panel_init_variant(first_variant);
 		log_line("sf2000-screen: panel probe done\n");
 		return 0;
+#else
+		if (argv0_is(argc > 0 ? argv[0] : 0, "sf2000-panel-probe") ||
+		    env_is((const char *const *)envp, "SF2000_PANEL_PROBE", "1")) {
+			log_line("sf2000-screen: panel probe begin\n");
+			panel_init_variant(first_variant);
+			log_line("sf2000-screen: panel probe done\n");
+			return 0;
+		}
+#endif
 	}
 
 	progress_mark("screen-before-owner", 0x3fu, SCREEN_TAG);

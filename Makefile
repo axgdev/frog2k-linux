@@ -289,10 +289,10 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 	rm -f '$@.gdb'
 	ln -sf sf2000-screen '$(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe'
 
-$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_PANEL_INIT_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PANEL_INIT_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_PANEL_INIT_ENTRY)' '$(BUILDROOT_PANEL_INIT_SRC)'
+		-o '$@' '$(BUILDROOT_PANEL_INIT_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
@@ -870,10 +870,10 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 
 run-linux-buildroot-panel: qemu
 	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_PANEL_INIT)' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon' linux-asd
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-init' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs; \
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
-		-append 'console=ttyS0,115200 earlycon' \
+		-append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-init' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-panel.console 2>&1 || test $$? -eq 124

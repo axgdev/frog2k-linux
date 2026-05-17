@@ -3,11 +3,37 @@
 	.set noreorder
 	.text
 	.align 4
-	.globl panel_launcher_main
-	.ent panel_launcher_main
-panel_launcher_main:
-	lui	$4, %hi(panel_path)
-	addiu	$4, $4, %lo(panel_path)
+	.globl _start
+	.ent _start
+_start:
+	lui	$4, %hi(path_kmsg)
+	addiu	$4, $4, %lo(path_kmsg)
+	li	$5, 1
+	move	$6, $0
+	li	$2, 4005		/* open */
+	syscall
+	nop
+	move	$8, $2
+	bgez	$2, 1f
+	nop
+	lui	$4, %hi(path_console)
+	addiu	$4, $4, %lo(path_console)
+	li	$5, 1
+	move	$6, $0
+	li	$2, 4005		/* open */
+	syscall
+	nop
+	move	$8, $2
+1:
+	move	$4, $8
+	lui	$5, %hi(start_msg)
+	addiu	$5, $5, %lo(start_msg)
+	li	$6, 32
+	li	$2, 4004		/* write */
+	syscall
+	nop
+	lui	$4, %hi(panel_probe_path)
+	addiu	$4, $4, %lo(panel_probe_path)
 	lui	$5, %hi(panel_argv)
 	addiu	$5, $5, %lo(panel_argv)
 	lui	$6, %hi(panel_envp)
@@ -16,17 +42,23 @@ panel_launcher_main:
 	syscall
 	nop
 	li	$2, 127
-	jr	$31
+	li	$4, 127
+	li	$7, 0
+	li	$2, 4001		/* exit */
+	syscall
 	nop
-	.end panel_launcher_main
+1:
+	b	1b
+	nop
+	.end _start
 
 	.section .rodata, "a"
 	.align 4
-panel_path:
-	.asciiz "/usr/sbin/sf2000-screen"
+panel_probe_path:
+	.asciiz "/usr/sbin/sf2000-panel-probe"
 	.align 2
 panel_argv:
-	.word panel_path
+	.word panel_probe_path
 	.word 0
 	.align 2
 env_home:
@@ -59,3 +91,10 @@ panel_envp:
 	.word env_heartbeat
 	.word env_panel_probe
 	.word 0
+
+start_msg:
+	.asciiz "<6>sf2000-panel-launcher: start\n"
+path_kmsg:
+	.asciiz "/dev/kmsg"
+path_console:
+	.asciiz "/dev/console"

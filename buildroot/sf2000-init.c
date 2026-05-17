@@ -3,8 +3,11 @@ typedef unsigned int size_t;
 #define SYS_exit 4001
 #define SYS_write 4004
 #define SYS_open 4005
+#define SYS_read 4003
 #define SYS_close 4006
 #define SYS_execve 4011
+#define SYS_mkdirat 4289
+#define SYS_mount 4021
 #define SYS_clone 4120
 #define SYS_pause 4029
 #define SYS_dup2 4063
@@ -16,6 +19,7 @@ typedef unsigned int size_t;
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR 2
+#define AT_FDCWD -100
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define MAP_SHARED 1
@@ -74,6 +78,7 @@ struct progress_log {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
@@ -233,6 +238,11 @@ static long syscall6(long nr, long a0, long a1, long a2, long a3,
 	if (r7)
 		return -r2;
 	return r2;
+}
+
+static int mkdir_path(const char *path, unsigned int mode)
+{
+	return (int)syscall3(SYS_mkdirat, AT_FDCWD, (long)path, (long)mode);
 }
 
 static void *sys_mmap2(void *addr, unsigned long length, unsigned long prot,
@@ -472,6 +482,43 @@ static int path_exists(const char *path)
 	return 1;
 }
 
+static int mount_procfs(void)
+{
+	(void)mkdir_path("/proc", 0755);
+	if (syscall6(SYS_mount, (long)"proc", (long)"/proc", (long)"proc",
+			0, (long)"", 0) == 0)
+		return 0;
+	return -1;
+}
+
+static int cmdline_contains(const char *needle)
+{
+	static char buf[512];
+	long fd;
+	long got;
+	unsigned int i;
+	unsigned int j;
+
+	fd = syscall3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
+	if (fd < 0)
+		return 0;
+	got = syscall3(SYS_read, fd, (long)buf, (long)(sizeof(buf) - 1u));
+	syscall1(SYS_close, fd);
+	if (got <= 0)
+		return 0;
+	buf[got] = 0;
+
+	for (i = 0; buf[i]; i++) {
+		for (j = 0; needle[j]; j++) {
+			if (buf[i + j] != needle[j])
+				break;
+		}
+		if (!needle[j])
+			return 1;
+	}
+	return 0;
+}
+
 static unsigned long service_stack_top(unsigned long *stack)
 {
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
@@ -534,10 +581,18 @@ void sf2000_init_main(void)
 	unsigned int storage_started = 0;
 	unsigned int screen_wait_ticks = 0;
 	unsigned int spawn_storage = 0;
+	unsigned int panel_probe = 0;
 
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
 	progress_mark("init-stdio", 0x3eu, INIT_TAG);
+	(void)mount_procfs();
+	panel_probe = cmdline_contains("SF2000_PANEL_PROBE=1");
+#ifdef PANEL_PROBE_INIT
+	panel_probe = 1;
+#endif
+	if (panel_probe)
+		log_message("sf2000_buildroot: panel probe requested\n");
 	if (early_watchdog_disable() == 0)
 		log_message("sf2000_buildroot: early watchdog disabled\n");
 	else
@@ -554,19 +609,32 @@ void sf2000_init_main(void)
 	log_message("sf2000_buildroot: userspace alive\n");
 	progress_mark("init-userspace-alive", 0x3eu, INIT_TAG);
 
+	if (panel_probe) {
+		log_message("sf2000_buildroot: starting panel probe\n");
+		spawn_service("sf2000_buildroot: starting panel probe\n",
+			panel_probe_argv, screen_stack);
+		log_message("sf2000_buildroot: panel probe started\n");
+		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
+		storage_started = 1;
+	}
+
 	log_message("sf2000_buildroot: screen owns keypad\n");
 	diagnostic_watchdog_pet();
 	sleep_ms(50);
 	diagnostic_watchdog_pet();
-	spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
-		screen_stack);
+	if (!panel_probe) {
+		spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
+			screen_stack);
+	}
 	diagnostic_watchdog_pet();
 	sleep_ms(1200);
 	progress_mark("init-storage-spawn-delay", 0x3eu, INIT_TAG);
-	spawn_service("sf2000_buildroot: starting storage probe early\n",
-		storage_argv, storage_late_stack);
-	storage_started = 1;
-	log_message("sf2000_buildroot: early storage probe started\n");
+	if (!panel_probe) {
+		spawn_service("sf2000_buildroot: starting storage probe early\n",
+			storage_argv, storage_late_stack);
+		storage_started = 1;
+		log_message("sf2000_buildroot: early storage probe started\n");
+	}
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
@@ -613,4 +681,10 @@ void sf2000_init_main(void)
 	}
 
 	syscall1(SYS_exit, 1);
+}
+
+int main(void)
+{
+	sf2000_init_main();
+	return 0;
 }

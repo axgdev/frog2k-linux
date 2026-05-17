@@ -139,8 +139,8 @@ _start:
 	li	$2, 4006
 	syscall
 	 nop
-	b	9f
-	 nop
+	b	panel_probe_scan
+	nop
 8:
 	li	$8, 0xa1400000
 	li	$9, 0x51510429
@@ -148,7 +148,73 @@ _start:
 	sw	$0, 284($8)
 	sw	$0, 288($8)
 
-9:
+panel_probe_scan:
+#ifdef PANEL_PROBE_INIT
+	li	$19, 1
+#else
+	li	$19, 0
+	li	$8, 0xa1400000
+	li	$9, 0x5151042d
+	sw	$9, 328($8)
+	addiu	$4, $16, path_cmdline - 1b
+	move	$5, $0
+	move	$6, $0
+	li	$2, 4005
+	syscall
+	nop
+	bnez	$7, 10f
+	nop
+	move	$18, $2
+	addiu	$4, $29, 32
+	move	$5, $18
+	li	$6, 96
+	li	$2, 4003
+	syscall
+	nop
+	move	$20, $2
+	move	$4, $18
+	li	$2, 4006
+	syscall
+	nop
+	blez	$20, 10f
+	nop
+	addiu	$21, $29, 32
+	addu	$22, $21, $20
+	addiu	$23, $16, needle_panel_probe - 1b
+11:
+	sltu	$24, $21, $22
+	beqz	$24, 10f
+	nop
+	lbu	$24, 0($21)
+	lbu	$25, 0($23)
+	bne	$24, $25, 12f
+	nop
+	beqz	$25, 13f
+	nop
+	addiu	$21, $21, 1
+	addiu	$23, $23, 1
+	b	11b
+	nop
+12:
+	addiu	$21, $21, 1
+	addiu	$23, $16, needle_panel_probe - 1b
+	b	11b
+	nop
+13:
+	li	$19, 1
+	li	$8, 0xa1400000
+	li	$9, 0x5151042e
+	sw	$9, 332($8)
+	move	$4, $17
+	addiu	$5, $16, msg_panel_probe - 1b
+	li	$6, msg_panel_probe_end - msg_panel_probe
+	li	$2, 4004
+	syscall
+	nop
+panel_probe_done:
+#endif
+	/* fall through */
+10:
 	li	$8, 0xa1400000
 	li	$9, 0x5151042b
 	sw	$9, 304($8)
@@ -170,7 +236,14 @@ _start:
 	sync
 
 	addiu	$29, $29, -64
+	beqz	$19, 11f
+	 nop
+	addiu	$8, $16, arg_panel_probe - 1b
+	b	12f
+	 nop
+11:
 	addiu	$8, $16, arg_init - 1b
+12:
 	sw	$8, 0($29)
 	sw	$0, 4($29)
 	addiu	$8, $16, env_home - 1b
@@ -180,6 +253,12 @@ _start:
 	addiu	$8, $16, env_term - 1b
 	sw	$8, 24($29)
 	sw	$0, 28($29)
+	beqz	$19, 13f
+	 nop
+	addiu	$8, $16, env_panel_probe - 1b
+	sw	$8, 28($29)
+	sw	$0, 32($29)
+13:
 	addiu	$4, $16, path_busybox - 1b
 	move	$5, $29
 	addiu	$6, $29, 16
@@ -241,20 +320,33 @@ path_proc_type:
 	.asciz	"proc"
 path_meminfo:
 	.asciz	"/proc/meminfo"
+path_cmdline:
+	.asciz	"/proc/cmdline"
 path_busybox:
 	.asciz	"/usr/sbin/sf2000-init"
+path_panel_probe:
+	.asciz	"/usr/sbin/sf2000-panel-probe"
 arg_init:
 	.asciz	"/usr/sbin/sf2000-init"
+arg_panel_probe:
+	.asciz	"/usr/sbin/sf2000-panel-probe"
+needle_panel_probe:
+	.asciz	"SF2000_PANEL_PROBE=1"
 env_home:
 	.asciz	"HOME=/"
 env_path:
 	.asciz	"PATH=/bin:/sbin:/usr/bin:/usr/sbin"
 env_term:
 	.asciz	"TERM=linux"
+env_panel_probe:
+	.asciz	"SF2000_PANEL_PROBE=1"
 msg_alive:
 	.ascii	"<6>sf2000_linux: flat init alive\n"
 msg_alive_end:
 msg_nommu:
 	.ascii	"<6>sf2000_linux: nommu userspace reached\n"
 msg_nommu_end:
+msg_panel_probe:
+	.ascii	"<6>sf2000_linux: panel probe requested\n"
+msg_panel_probe_end:
 	.end _start
