@@ -43,9 +43,15 @@ make qemu
 make ROOTFS=buildroot sdcard-linux
 make ROOTFS=buildroot smoke-linux-buildroot-asd
 make ROOTFS=buildroot smoke-linux-buildroot-rom
+make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
 ```
+
+`smoke-linux-buildroot-storage` now delegates to the sibling
+`external/sf2000_qemu` raw-image DMA writeback smoke, so the default storage
+regression path uses the stronger emulator-side oracle instead of the brittle
+direct guest probe.
 
 `sdcard-linux` writes three intentionally different boot artifacts under
 `build/sdcard`:
