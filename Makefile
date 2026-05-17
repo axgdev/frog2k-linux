@@ -883,15 +883,7 @@ run-linux-buildroot-storage:
 		run-linux-buildroot-storage-fast
 
 smoke-linux-buildroot-storage:
-	$(MAKE) ROOTFS=buildroot \
-		SF2000_TRACE_SDIO='1' \
-		QEMU_DEBUG='guest_errors,unimp' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
-		run-linux-buildroot-storage-fast
-	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
+	$(MAKE) ROOTFS=buildroot smoke-linux-buildroot-storage-writeback
 
 run-linux-buildroot-storage-fast:
 	$(MAKE) ROOTFS=buildroot \
