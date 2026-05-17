@@ -197,6 +197,24 @@ int main(void)
 		log_message_long("sf2000_storage_fastprobe: sysfs mount failed ret=", ret);
 	}
 	for (waited = 0; waited < 30; waited++) {
+		if (path_exists("/sys/bus/platform/devices/18844000.usb") &&
+		    path_exists("/sys/bus/platform/devices/18850000.usb")) {
+			break;
+		}
+		log_message("sf2000_storage_fastprobe: waiting usb devices\n");
+		sleep(1);
+	}
+	if (path_exists("/sys/bus/platform/devices/18844000.usb")) {
+		log_message("sf2000_storage_fastprobe: usb1 present\n");
+	} else {
+		log_message("sf2000_storage_fastprobe: usb1 missing\n");
+	}
+	if (path_exists("/sys/bus/platform/devices/18850000.usb")) {
+		log_message("sf2000_storage_fastprobe: usb2 present\n");
+	} else {
+		log_message("sf2000_storage_fastprobe: usb2 missing\n");
+	}
+	for (waited = 0; waited < 30; waited++) {
 		if (path_exists("/dev/mmcblk0")) {
 			break;
 		}

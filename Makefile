@@ -75,7 +75,7 @@ BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-st
 BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
 BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
 BUILDROOT_RESET_FASTPROBE_ENTRY := buildroot/sf2000-reset-fastprobe-entry.S
-BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
+	BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
 BUILDROOT_RESET_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
 BUILDROOT_RESET_RESTORE_SCRIPT := scripts/qmp_restore_smoke.py
 BUILDROOT_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migration
@@ -542,6 +542,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable USB_OHCI_HCD_PLATFORM \
 		--enable USB_MUSB_HDRC \
 		--enable USB_MUSB_HOST \
+		--enable USB_MUSB_SF2000 \
+		--enable NOP_USB_XCEIV \
 		--enable MUSB_PIO_ONLY \
 		--enable USB_STORAGE \
 		--enable HID \
@@ -900,6 +902,8 @@ smoke-linux-buildroot-storage-fast:
 		run-linux-buildroot-storage-fast
 	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-usb 18844000\.usb: registered SF2000 musb-hdrc glue' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-usb 18850000\.usb: registered SF2000 musb-hdrc glue' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 

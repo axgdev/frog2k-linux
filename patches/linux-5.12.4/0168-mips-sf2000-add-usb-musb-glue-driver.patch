@@ -1,0 +1,101 @@
+--- a/drivers/usb/musb/sf2000.c
++++ b/drivers/usb/musb/sf2000.c
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * SF2000 Hichip MUSB glue
++ */
++
++#include <linux/dma-mapping.h>
++#include <linux/err.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/usb/phy.h>
++#include <linux/usb/usb_phy_generic.h>
++
++#include "musb_core.h"
++
++struct sf2000_glue {
++	struct platform_device *musb;
++	struct platform_device *usb_phy;
++};
++
++static int sf2000_usb_probe(struct platform_device *pdev)
++{
++	const struct musb_hdrc_platform_data pdata = {
++		.mode = MUSB_HOST,
++	};
++	struct sf2000_glue *glue;
++	struct platform_device *musb;
++	int ret;
++
++	glue = devm_kzalloc(&pdev->dev, sizeof(*glue), GFP_KERNEL);
++	if (!glue)
++		return -ENOMEM;
++
++	glue->usb_phy = usb_phy_generic_register();
++	if (IS_ERR(glue->usb_phy))
++		return PTR_ERR(glue->usb_phy);
++	if (!glue->usb_phy)
++		return -ENODEV;
++
++	musb = platform_device_alloc("musb-hdrc", PLATFORM_DEVID_AUTO);
++	if (!musb) {
++		ret = -ENOMEM;
++		goto err_phy;
++	}
++
++	musb->dev.parent = &pdev->dev;
++	musb->dev.dma_mask = &musb->dev.coherent_dma_mask;
++	musb->dev.coherent_dma_mask = DMA_BIT_MASK(32);
++
++	ret = platform_device_add_data(musb, &pdata, sizeof(pdata));
++	if (ret)
++		goto err_put;
++
++	ret = platform_device_add(musb);
++	if (ret)
++		goto err_put;
++
++	glue->musb = musb;
++	platform_set_drvdata(pdev, glue);
++
++	dev_info(&pdev->dev, "registered SF2000 musb-hdrc glue\n");
++	return 0;
++
++err_put:
++	platform_device_put(musb);
++err_phy:
++	usb_phy_generic_unregister(glue->usb_phy);
++	return ret;
++}
++
++static int sf2000_usb_remove(struct platform_device *pdev)
++{
++	struct sf2000_glue *glue = platform_get_drvdata(pdev);
++
++	platform_device_unregister(glue->musb);
++	usb_phy_generic_unregister(glue->usb_phy);
++	return 0;
++}
++
++static const struct of_device_id sf2000_usb_of_match[] = {
++	{ .compatible = "hichip,hc16xx-musb" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, sf2000_usb_of_match);
++
++static struct platform_driver sf2000_usb_driver = {
++	.probe = sf2000_usb_probe,
++	.remove = sf2000_usb_remove,
++	.driver = {
++		.name = "sf2000-usb",
++		.of_match_table = sf2000_usb_of_match,
++	},
++};
++module_platform_driver(sf2000_usb_driver);
++
++MODULE_DESCRIPTION("SF2000 Hichip MUSB glue");
++MODULE_AUTHOR("Codex");
++MODULE_LICENSE("GPL");
