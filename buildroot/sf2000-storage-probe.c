@@ -1639,9 +1639,15 @@ int main(void)
 	progress_mark("stor-start", 0x3au, STORAGE_TAG);
 	log_line("sf2000_storage_probe: start " STORAGE_TAG_TEXT " guarded write diagnostics\n");
 	map_progress_log();
-	ensure_mounts();
 	ensure_core_nodes();
 	ensure_block_nodes();
+	{
+		unsigned char echo_buf[512] = { 0 };
+
+		(void)write_sector_lba_flags("/dev/mmcblk0", 0,
+			"stor-echo-write", echo_buf, 0, 1);
+	}
+	ensure_mounts();
 	stat_node("/dev/mmcblk0");
 	stat_node("/dev/mmcblk0p1");
 	stat_node("/dev/mmcblk0p2");
@@ -1667,6 +1673,12 @@ int main(void)
 #endif
 	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
 	progress_mark("stor-fast-done", 0x3au, STORAGE_TAG);
+	if (try_mount_write("/dev/mmcblk0") == 0 ||
+	    try_mount_write("/dev/mmcblk0p1") == 0 ||
+	    try_mount_write("/dev/mmcblk0p2") == 0 ||
+	    try_mount_write("/dev/mmcblk0sys") == 0 ||
+	    try_mount_write("/dev/mmcblk0class") == 0)
+		mounted = 0;
 	if (mounted == 0) {
 		log_line("sf2000_storage_probe: fast storage path ok\n");
 		progress_mark("stor-done", 0x3au, STORAGE_TAG);
