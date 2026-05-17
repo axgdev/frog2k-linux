@@ -77,6 +77,11 @@ BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
 BUILDROOT_RESET_FASTPROBE_ENTRY := buildroot/sf2000-reset-fastprobe-entry.S
 BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
 BUILDROOT_RESET_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
+BUILDROOT_RESET_RESTORE_SCRIPT := scripts/qmp_restore_smoke.py
+BUILDROOT_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migration
+BUILDROOT_RESET_RESTORE_SOCKET := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe.qmp
+BUILDROOT_RESET_RESTORE_SOCKET_DEST := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe-restore.qmp
+BUILDROOT_RESET_RESTORE_PREFIX := $(BUILD_DIR)/logs/linux-buildroot-reset-restore
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -158,7 +163,9 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
-	smoke-linux-buildroot-reboot clean
+	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
+	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
+	smoke-linux-buildroot-reset-restore clean
 
 all: status
 
@@ -992,6 +999,29 @@ smoke-linux-buildroot-reset-snapshot: run-linux-buildroot-reset-snapshot
 	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.console
 	grep -q 'Run /usr/sbin/sf2000-reset-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.log
 	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.log
+
+run-linux-buildroot-reset-restore: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
+		linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/qmp '$(BUILD_DIR)'/state
+	python3 '$(BUILDROOT_RESET_RESTORE_SCRIPT)' \
+		--qemu '$(QEMU_BIN)' \
+		--cpu '$(QEMU_CPU)' \
+		--kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		--append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
+		--state '$(BUILDROOT_RESET_RESTORE_STATE)' \
+		--source-console '$(BUILDROOT_RESET_RESTORE_PREFIX).source.console' \
+		--source-log '$(BUILDROOT_RESET_RESTORE_PREFIX).source.log' \
+		--restore-console '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.console' \
+		--restore-log '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.log' \
+		--socket '$(BUILDROOT_RESET_RESTORE_SOCKET)' \
+		--restore-socket '$(BUILDROOT_RESET_RESTORE_SOCKET_DEST)' \
+		--timeout '$(QEMU_BOOT_TIMEOUT)'
+
+smoke-linux-buildroot-reset-restore: run-linux-buildroot-reset-restore
+	grep -q 'sf2000: loaded ASD' '$(BUILDROOT_RESET_RESTORE_PREFIX).source.console'
+	grep -q 'sf2000: entry-bytes storage_probe_entry pc=0x047c0050' '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.log'
 
 clean:
 	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'
