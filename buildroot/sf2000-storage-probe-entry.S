@@ -5,7 +5,31 @@
 	.align 4
 	.globl _start
 	.ent _start
+	.rdata
+1:
+	.ascii "/dev/console\0"
+2:
+	.ascii "sf2000_storage_probe: _start\n"
+3:
+	.text
 _start:
+	li	$2, 4005		/* open */
+	lui	$4, %hi(1b)
+	addiu	$4, $4, %lo(1b)
+	li	$5, 1			/* O_WRONLY */
+	move	$6, $0
+	syscall
+	nop
+	bltz	$2, 1f
+	nop
+	move	$4, $2
+	li	$2, 4004		/* write */
+	lui	$5, %hi(2b)
+	addiu	$5, $5, %lo(2b)
+	li	$6, 29
+	syscall
+	nop
+1:
 	move	$31, $0
 	lw	$4, 0($29)		/* argc */
 	addiu	$5, $29, 4		/* argv */

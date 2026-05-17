@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -12,11 +13,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/*
- * The probe is a NOMMU flat binary, so it talks to the emulated machine using
- * direct physical addresses instead of kernel kseg1 aliases.
- */
-#define KSEG1ADDR(x) ((volatile void *)(uintptr_t)(uint32_t)(x))
+#define KSEG1ADDR(x) ((volatile void *)(uintptr_t)((uint32_t)(x) | 0xa0000000u))
 #define PROGRESS_PHYS 0x013f0000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
@@ -88,10 +85,31 @@ static void progress_copy_name(volatile char *dst, const char *src)
 		dst[i] = 0;
 }
 
+static volatile struct progress_log *progress_log;
+
+static int map_progress_log(void)
+{
+	int fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+
+	if (fd < 0) {
+		progress_log = (volatile struct progress_log *)(uintptr_t)(
+			PROGRESS_PHYS | 0xa0000000u);
+		return 0;
+	}
+
+	progress_log = mmap(NULL, sizeof(*progress_log),
+		PROT_READ | PROT_WRITE, MAP_SHARED, fd, PROGRESS_PHYS);
+	close(fd);
+	if (progress_log == MAP_FAILED) {
+		progress_log = (volatile struct progress_log *)(uintptr_t)(
+			PROGRESS_PHYS | 0xa0000000u);
+	}
+	return 0;
+}
+
 static void progress_mark(const char *name, uint32_t kind, uint32_t value)
 {
-	volatile struct progress_log *log =
-		(volatile struct progress_log *)KSEG1ADDR(PROGRESS_PHYS);
+	volatile struct progress_log *log = progress_log;
 	volatile struct progress_entry *entry;
 	uint32_t index;
 	uint32_t seq;
@@ -124,8 +142,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value)
 
 static void progress_reset(const char *name)
 {
-	volatile struct progress_log *log =
-		(volatile struct progress_log *)KSEG1ADDR(PROGRESS_PHYS);
+	volatile struct progress_log *log = progress_log;
 
 	log->magic = PROGRESS_MAGIC;
 	log->version = PROGRESS_VERSION;
@@ -133,6 +150,47 @@ static void progress_reset(const char *name)
 	log->write_index = 0;
 	log->wrapped = 0;
 	progress_mark(name, 0x3au, STORAGE_TAG);
+}
+
+void storage_probe_entry_mark(void)
+{
+	volatile struct progress_log *log = progress_log;
+	volatile struct progress_entry *entry;
+	uint32_t index;
+	uint32_t seq;
+
+	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION) {
+		log->magic = PROGRESS_MAGIC;
+		log->version = PROGRESS_VERSION;
+		log->seq = 0;
+		log->write_index = 0;
+		log->wrapped = 0;
+	}
+
+	seq = log->seq + 1u;
+	index = log->write_index;
+	if (index >= PROGRESS_ENTRIES) {
+		index = 0;
+		log->wrapped = 1;
+	}
+
+	entry = &log->entries[index];
+	entry->seq = seq;
+	entry->kind = 0x11u;
+	entry->value = 0x656e7472u;
+	entry->name_ptr = (uint32_t)(uintptr_t)"entry-start";
+	progress_copy_name(entry->name, "entry-start");
+
+	log->write_index = index + 1u;
+	log->seq = seq;
+}
+
+void storage_probe_entry_pause(void)
+{
+	volatile unsigned spin;
+
+	for (spin = 0; spin < 64u; spin++)
+		(void)getpid();
 }
 
 static unsigned char direct_write_buf[512] __attribute__((aligned(512)));
@@ -1563,64 +1621,9 @@ static int try_mount_write(const char *dev)
 
 int main(void)
 {
-	int mounted = -1;
-
-	log_line("sf2000_storage_probe: start 0239 guarded write diagnostics\n");
+	map_progress_log();
 	progress_reset("stor-ring-reset");
+	storage_probe_entry_mark();
 	progress_mark("stor-start", 0x3au, STORAGE_TAG);
-	ensure_mounts();
-	ensure_block_nodes();
-	stat_node("/dev/mmcblk0");
-	stat_node("/dev/mmcblk0p1");
-	stat_node("/dev/mmcblk0p2");
-	stat_node("/dev/mmcblk0sys");
-	stat_node("/dev/mmcblk0class");
-	stat_node("/dev/mmcblk0p1sys");
-	stat_node("/dev/mmcblk0p2sys");
-	set_readahead_zero("/dev/mmcblk0");
-	set_readahead_zero("/dev/mmcblk0p1");
-	set_readahead_zero("/dev/mmcblk0p2");
-	set_readahead_zero("/dev/mmcblk0sys");
-	set_readahead_zero("/dev/mmcblk0class");
-	if (log_fat_geometry("/dev/mmcblk0") == 0)
-		mounted = 0;
-	progress_mark("stor-before-mounts", 0x3au, STORAGE_TAG);
-#if 0
-	if (try_mount_write("/dev/mmcblk0") == 0 ||
-	    try_mount_write("/dev/mmcblk0p1") == 0 ||
-	    try_mount_write("/dev/mmcblk0p2") == 0 ||
-	    try_mount_write("/dev/mmcblk0sys") == 0 ||
-	    try_mount_write("/dev/mmcblk0class") == 0)
-		mounted = 0;
-#endif
-	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
-	progress_mark("stor-fast-done", 0x3au, STORAGE_TAG);
-	if (mounted == 0) {
-		log_line("sf2000_storage_probe: fast storage path ok\n");
-		progress_mark("stor-done", 0x3au, STORAGE_TAG);
-		return 0;
-	}
-	log_block_head("/dev/mmcblk0");
-	log_block_head("/dev/mmcblk0p1");
-	log_block_head("/dev/mmcblk0p2");
-	log_block_head("/dev/mmcblk0sys");
-	log_block_head("/dev/mmcblk0class");
-	log_file_head("sys-mmc0-dev", "/sys/block/mmcblk0/dev");
-	log_file_head("sys-mmc0-size", "/sys/block/mmcblk0/size");
-	log_file_head("cls-mmc0-dev", "/sys/class/block/mmcblk0/dev");
-	log_file_head("cls-mmc0p1-dev", "/sys/class/block/mmcblk0p1/dev");
-	log_file_head("cls-mmc0p2-dev", "/sys/class/block/mmcblk0p2/dev");
-	log_dir("sys-block", "/sys/block");
-	log_dir("class-block", "/sys/class/block");
-	log_dir("dev-block", "/sys/dev/block");
-	log_dir("mmc-host", "/sys/class/mmc_host");
-	log_dir("platform-devices", "/sys/bus/platform/devices");
-	log_dir("platform-drivers", "/sys/bus/platform/drivers");
-	log_dir("dev", "/dev");
-	log_file_head("proc-partitions", "/proc/partitions");
-	log_file_head("proc-devices", "/proc/devices");
-	log_file_head("proc-interrupts", "/proc/interrupts");
-	log_line("sf2000_storage_probe: done\n");
-	progress_mark("stor-done", 0x3au, STORAGE_TAG);
 	return 0;
 }

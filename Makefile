@@ -56,6 +56,8 @@ BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
 BUILDROOT_STORAGE_PROBE_SRC := buildroot/sf2000-storage-probe.c
 BUILDROOT_STORAGE_PROBE_ENTRY := buildroot/sf2000-storage-probe-entry.S
 BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
+BUILDROOT_STORAGE_PROBE_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
+	-mno-abicalls -fno-pic -mno-gpopt
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -281,7 +283,7 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDRO
 
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
+	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_PROBE_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
 		-o '$@' '$(BUILDROOT_STORAGE_PROBE_ENTRY)' '$(BUILDROOT_STORAGE_PROBE_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
@@ -733,6 +735,7 @@ smoke-linux: run-linux
 
 run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
+	SF2000_TRACE_PC='$(SF2000_TRACE_PC)' \
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
@@ -808,7 +811,7 @@ smoke-linux-buildroot-storage:
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
 		run-linux-buildroot-storage
 	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847c0050->47c0050' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847a0050->47a0050' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000: storage-progress .*mips-start-thread-pc' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
