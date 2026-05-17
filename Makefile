@@ -52,6 +52,7 @@ BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
+BUILDROOT_SCREEN_CFLAGS :=
 BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
 BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
 BUILDROOT_PANEL_INIT_ENTRY := buildroot/sf2000-panel-init-entry.S
@@ -62,6 +63,10 @@ BUILDROOT_STORAGE_PROBE_ENTRY := buildroot/sf2000-storage-probe-entry.S
 BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
 BUILDROOT_STORAGE_PROBE_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
 	-mno-abicalls -fno-pic -mno-gpopt
+BUILDROOT_STORAGE_FASTPROBE_SRC := buildroot/sf2000-storage-fastprobe.c
+BUILDROOT_STORAGE_FASTPROBE_ENTRY := buildroot/sf2000-storage-fastprobe-entry.S
+BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
+BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
 BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
 BUILDROOT_PATCHES := buildroot/patches
 BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
@@ -75,12 +80,13 @@ BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
 BUILDROOT_FLTHDR := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-flthdr
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
-BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra
+BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
+	-mno-abicalls -fno-pic -mno-gpopt
 BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static
 BUILDROOT_HELPER_STACK_SIZE := 65536
 BUILDROOT_SCREEN_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
 BUILDROOT_SUPERVISOR_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
-BUILDROOT_SUPERVISOR_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin
+BUILDROOT_SUPERVISOR_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
 BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
 BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
@@ -121,6 +127,7 @@ SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
+LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 QEMU_BOOT_TIMEOUT ?= 90s
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
@@ -133,7 +140,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
 	smoke-linux-buildroot-asd run-linux-buildroot-storage \
-	smoke-linux-buildroot-storage run-linux-buildroot-rom \
+	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
+	smoke-linux-buildroot-storage-fast run-linux-buildroot-rom \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-display run-linux-buildroot-panel \
 	smoke-linux-buildroot-panel run-linux-input smoke-linux-input \
@@ -283,23 +291,30 @@ $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) 
 
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
 		-o '$@' '$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 	ln -sf sf2000-screen '$(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe'
 
-$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_PANEL_INIT_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PANEL_INIT_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_PANEL_INIT_SRC)'
+		-o '$@' '$(BUILDROOT_PANEL_INIT_ENTRY)' '$(BUILDROOT_PANEL_INIT_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_PROBE_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_STORAGE_PROBE_ENTRY)' '$(BUILDROOT_STORAGE_PROBE_SRC)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_PROBE_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_STORAGE_PROBE_SRC)'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
+$(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(BUILDROOT_STORAGE_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_STORAGE_FASTPROBE_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_STORAGE_FASTPROBE_ENTRY)' '$(BUILDROOT_STORAGE_FASTPROBE_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
@@ -309,7 +324,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -751,6 +766,7 @@ smoke-linux: run-linux
 run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	SF2000_TRACE_PC='$(SF2000_TRACE_PC)' \
+	SF2000_TRACE_SDIO='$(SF2000_TRACE_SDIO)' \
 	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor none \
@@ -817,22 +833,40 @@ smoke-linux-buildroot-asd:
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
+		BUILDROOT_INIT_SOURCE='buildroot/sf2000-storage-init.sh' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon' \
 		run-linux-asd
 
 smoke-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
+		BUILDROOT_INIT_SOURCE='buildroot/sf2000-storage-init.sh' \
 		SF2000_TRACE_SDIO='1' \
 		QEMU_DEBUG='guest_errors,unimp' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon' \
 		run-linux-buildroot-storage
-	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry 847c0050->47c0050' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000: sdio-reg-read addr=0x1884c030' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000: sdio-reg-write addr=0x1884c030 value=0x00000020 size=1' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'mmio-write addr=0x1884c004 size=4 value=0x00000000' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'mmio-write addr=0x1884c002 size=1 value=0x000000c0' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000: storage-progress .*mips-start-thread-pc' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_buildroot: storage init script start' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_rcS: start' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_rcS: run /etc/init.d/S05sf2000-storage' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_storage: probe begin' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_storage: dev-mmc' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_storage: mount try /dev/mmcblk0' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_storage: no mounted sd block device' '$(BUILD_DIR)'/logs/linux-asd.log
+
+run-linux-buildroot-storage-fast:
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-asd
+
+smoke-linux-buildroot-storage-fast:
+	$(MAKE) ROOTFS=buildroot \
+		SF2000_TRACE_SDIO='1' \
+		QEMU_DEBUG='guest_errors,unimp' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
+		run-linux-buildroot-storage-fast
+	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
@@ -869,17 +903,20 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
 
 run-linux-buildroot-panel: qemu
-	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_PANEL_INIT)' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-init' linux-asd
+	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \
+		BUILDROOT_SCREEN_CFLAGS='-DPANEL_PROBE_INIT' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs; \
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
-		-append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-init' \
+	SF2000_TRACE_PC='1' timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-panel.console 2>&1 || test $$? -eq 124
 
 smoke-linux-buildroot-panel: run-linux-buildroot-panel
 	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel.console
+	grep -q 'Run /init as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	grep -q 'sf2000-screen: main entry' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: panel probe begin' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000: panel-read-id start panel-id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: panel init done id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
