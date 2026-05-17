@@ -378,7 +378,7 @@ static uint32_t panel_read_id(void)
 
 int main(void)
 {
-	log_message("sf2000_panel_fastprobe: probe begin\n");
-	log_message("sf2000_panel_fastprobe: probe done\n");
+	sysio = KSEG1ADDR(SYSIO_PHYS);
+	panel_cmd(0x04);
 	return 0;
 }
