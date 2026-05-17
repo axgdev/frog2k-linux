@@ -44,6 +44,7 @@ make ROOTFS=buildroot sdcard-linux
 make ROOTFS=buildroot smoke-linux-buildroot-asd
 make ROOTFS=buildroot smoke-linux-buildroot-rom
 make smoke-qemu-board-contract
+make smoke-qemu-display
 make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
@@ -57,6 +58,11 @@ direct guest probe.
 `smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
 storage snapshots queryable from the Linux workspace as well.
+
+`smoke-qemu-display` delegates to the sibling `external/sf2000_qemu`
+stock-display and GB300-display smokes, giving the Linux workspace a direct
+way to exercise the stronger display oracle without replaying the guest-side
+panel boot chain.
 
 `sdcard-linux` writes three intentionally different boot artifacts under
 `build/sdcard`:

@@ -943,6 +943,12 @@ run-qemu-board-contract:
 
 smoke-qemu-board-contract: run-qemu-board-contract
 
+run-qemu-display:
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-display QEMU_JOBS='$(JOBS)' && \
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-gb300-display QEMU_JOBS='$(JOBS)'
+
+smoke-qemu-display: run-qemu-display
+
 run-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-rom
