@@ -1,5 +1,8 @@
 #!/bin/sh
 
-exec >/dev/console 2>&1
-echo 'sf2000_buildroot: storage init script start'
+if [ -w /dev/kmsg ]; then
+	printf 'sf2000_buildroot: storage init script start\n' > /dev/kmsg
+else
+	echo 'sf2000_buildroot: storage init script start'
+fi
 exec /etc/init.d/rcS start

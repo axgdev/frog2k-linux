@@ -7,6 +7,8 @@
 	.globl _start
 	.ent _start
 _start:
+	jal	sf2000_init_entry_mark
+	nop
 	jal	main
 	nop
 	move	$4, $2

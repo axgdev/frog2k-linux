@@ -3,18 +3,23 @@
 	.set noreorder
 	.text
 	.align 4
+	.section .bss
+	.align 4
+screen_stack:
+	.space 65536
+screen_stack_top:
+	.text
 	.globl _start
 	.ent _start
 _start:
-	move	$31, $0
-	lw	$4, 0($29)		/* argc */
-	addiu	$5, $29, 4		/* argv */
-	sll	$6, $4, 2
-	addu	$6, $6, $5
-	addiu	$6, $6, 4		/* envp = argv + argc + 1 */
-	li	$8, -8
-	and	$29, $29, $8
-	addiu	$29, $29, -32
+	li	$2, 4020		/* getpid: first physical userspace marker */
+	syscall
+	nop
+	lui	$29, %hi(screen_stack_top)
+	addiu	$29, $29, %lo(screen_stack_top)
+	move	$4, $0
+	move	$5, $0
+	move	$6, $0
 	jal	main
 	nop
 	move	$4, $2

@@ -144,7 +144,18 @@
 			dr_mode = "host";
 			index_num = <0>;
 			ctrl_base = <0x18800000>;
-			status = "disabled";
+			status = "okay";
+		};
+
+		usb1: usb@18850000 {
+			compatible = "hichip,hc16xx-musb";
+			reg = <0x18850000 0x1000>;
+			interrupts = <55>, <54>;
+			interrupt-names = "mc", "dma";
+			dr_mode = "host";
+			index_num = <1>;
+			ctrl_base = <0x18800000>;
+			status = "okay";
 		};
 	};
 };

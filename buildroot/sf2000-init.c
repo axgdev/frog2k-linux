@@ -33,6 +33,9 @@ typedef unsigned int size_t;
 #define KSEG1ADDR(x) ((volatile unsigned char *)((unsigned long)(x) | 0xa0000000UL))
 #define PINMUX_L_OFF 0x4a0UL
 #define PINMUX_R_OFF 0x4e0UL
+#define SYS_CLOCK_GATE0_OFF 0x060UL
+#define SYS_SFCLK_OFF 0x07cUL
+#define SYS_IO_VOLTAGE_OFF 0x184UL
 #define GPIO_L_OUT_OFF 0x54UL
 #define GPIO_L_DIR_OFF 0x58UL
 #define GPIO_R_OUT_OFF 0xf4UL
@@ -79,7 +82,7 @@ struct progress_log {
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
-static char *const storage_argv[] = { "/usr/sbin/sf2000-storage-probe", 0 };
+static char *const storage_argv[] = { "/etc/init.d/S05sf2000-storage", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
@@ -139,6 +142,11 @@ static void progress_mark(const char *name, unsigned int kind,
 	progress_copy_name(entry->name, name);
 	log->write_index = index + 1u;
 	log->seq = seq;
+}
+
+void sf2000_init_entry_mark(void)
+{
+	progress_mark("init-entry-asm", 0x3eu, INIT_TAG);
 }
 
 static long syscall1(long nr, long a0)
@@ -519,6 +527,42 @@ static int cmdline_contains(const char *needle)
 	return 0;
 }
 
+static unsigned int direct_read32(unsigned long phys)
+{
+	return *(volatile unsigned int *)KSEG1ADDR(phys);
+}
+
+static unsigned int direct_read8(unsigned long phys)
+{
+	return *(volatile unsigned char *)KSEG1ADDR(phys);
+}
+
+static void reset_snapshot_fast(void)
+{
+	unsigned int pins = 0;
+	unsigned int i;
+
+	log_message("sf2000_buildroot: reset snapshot fast\n");
+	progress_mark("init-reset-snapshot-fast", 0x3eu, INIT_TAG);
+	progress_mark("diag-fast-reset-begin", 0x30u, INIT_TAG);
+	progress_mark("diag-fast-wdt-count", 0x31u,
+		direct_read32(WDT_MAP_BASE_PHYS + WDT_REG_OFF + WDT_COUNT_OFF));
+	progress_mark("diag-fast-wdt-conf", 0x31u,
+		direct_read8(WDT_MAP_BASE_PHYS + WDT_REG_OFF + WDT_CONF_OFF));
+	progress_mark("diag-fast-sfclk", 0x31u,
+		direct_read32(SYSIO_BASE_PHYS + SYS_SFCLK_OFF));
+	progress_mark("diag-fast-gate0", 0x31u,
+		direct_read32(SYSIO_BASE_PHYS + SYS_CLOCK_GATE0_OFF));
+	progress_mark("diag-fast-iovolt", 0x31u,
+		direct_read32(SYSIO_BASE_PHYS + SYS_IO_VOLTAGE_OFF));
+	for (i = 16u; i <= 22u; i++)
+		pins |= (unsigned int)(direct_read8(
+			SYSIO_BASE_PHYS + PINMUX_L_OFF + i) & 0xfu)
+			<< ((i - 16u) * 4u);
+	progress_mark("diag-fast-pin-l16-22", 0x31u, pins);
+	progress_mark("diag-fast-reset-done", 0x30u, INIT_TAG);
+}
+
 static unsigned long service_stack_top(unsigned long *stack)
 {
 	return ((unsigned long)(stack + SERVICE_STACK_WORDS)) & ~7UL;
@@ -576,13 +620,13 @@ static void reap_children(void)
 		;
 }
 
-void sf2000_init_main(void)
+int main(void)
 {
 	unsigned int storage_started = 0;
 	unsigned int screen_wait_ticks = 0;
 	unsigned int spawn_storage = 0;
 	unsigned int panel_probe = 0;
-
+	log_message("sf2000_buildroot: init main entry\n");
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
 	progress_mark("init-stdio", 0x3eu, INIT_TAG);
@@ -608,6 +652,8 @@ void sf2000_init_main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 	progress_mark("init-userspace-alive", 0x3eu, INIT_TAG);
+	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast"))
+		reset_snapshot_fast();
 
 	if (panel_probe) {
 		log_message("sf2000_buildroot: starting panel probe\n");
@@ -617,7 +663,6 @@ void sf2000_init_main(void)
 		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
 		storage_started = 1;
 	}
-
 	log_message("sf2000_buildroot: screen owns keypad\n");
 	diagnostic_watchdog_pet();
 	sleep_ms(50);
@@ -630,10 +675,10 @@ void sf2000_init_main(void)
 	sleep_ms(1200);
 	progress_mark("init-storage-spawn-delay", 0x3eu, INIT_TAG);
 	if (!panel_probe) {
-		spawn_service("sf2000_buildroot: starting storage probe early\n",
+		spawn_service("sf2000_buildroot: starting storage service early\n",
 			storage_argv, storage_late_stack);
 		storage_started = 1;
-		log_message("sf2000_buildroot: early storage probe started\n");
+		log_message("sf2000_buildroot: early storage service started\n");
 	}
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
@@ -665,9 +710,9 @@ void sf2000_init_main(void)
 			if (spawn_storage) {
 				progress_mark("init-storage-spawn", 0x3eu,
 					INIT_TAG);
-				spawn_service("sf2000_buildroot: starting storage probe after screen\n",
+				spawn_service("sf2000_buildroot: starting storage service after screen\n",
 					storage_argv, storage_late_stack);
-				log_message("sf2000_buildroot: libc helpers started\n");
+				log_message("sf2000_buildroot: storage service started\n");
 				progress_mark("init-helpers-started", 0x3eu,
 					INIT_TAG);
 			}
@@ -681,10 +726,5 @@ void sf2000_init_main(void)
 	}
 
 	syscall1(SYS_exit, 1);
-}
-
-int main(void)
-{
-	sf2000_init_main();
 	return 0;
 }

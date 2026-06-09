@@ -2573,6 +2573,22 @@ static int env_is(const char *const *envp, const char *name, const char *value)
 	return 0;
 }
 
+static int cmdline_contains(const char *needle)
+{
+	int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+	char buf[512];
+	ssize_t n;
+
+	if (fd < 0)
+		return 0;
+	n = read(fd, buf, sizeof(buf) - 1u);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	buf[n] = '\0';
+	return strstr(buf, needle) != NULL;
+}
+
 static void log_gma_ready(void)
 {
 	char line[160];
@@ -2861,12 +2877,13 @@ int main(int argc, char **argv, char **envp)
 #endif
 	int fd;
 	unsigned frame = 0;
-	const struct panel_variant *first_variant = &panel_variants[0];
+	const struct panel_variant *first_variant;
 
 	(void)argc;
 	(void)argv;
-	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	log_line("sf2000-screen: main entry\n");
+	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
+	first_variant = &panel_variants[0];
 	if (envp)
 		environ = envp;
 	progress_mark("screen-after-env", 0x3fu, SCREEN_TAG);
@@ -2878,6 +2895,19 @@ int main(int argc, char **argv, char **envp)
 	if (env_is((const char *const *)envp, "SF2000_FAST_PANEL", "1"))
 		slow_panel_bus = 0;
 	progress_mark("screen-after-env-checks", 0x3fu, SCREEN_TAG);
+
+	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast")) {
+		log_line("sf2000-screen: reset snapshot fast\n");
+		progress_mark("screen-reset-snapshot-fast", 0x3fu, SCREEN_TAG);
+		progress_mark_reset_snapshot_fast();
+		return 0;
+	}
+	if (cmdline_contains("SF2000_RESET_SNAPSHOT=full")) {
+		log_line("sf2000-screen: reset snapshot full\n");
+		progress_mark("screen-reset-snapshot-full", 0x3fu, SCREEN_TAG);
+		progress_mark_reset_snapshot_full();
+		return 0;
+	}
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
 	progress_mark("screen-devmem-fd", 0x3fu, (uint32_t)fd);
@@ -2899,18 +2929,21 @@ int main(int argc, char **argv, char **envp)
 
 	{
 #ifdef PANEL_PROBE_INIT
+	progress_mark("screen-raw-main-entry", 0x3fu, SCREEN_TAG);
+	log_line("sf2000-screen: main entry\n");
+	log_line("sf2000-screen: panel probe begin\n");
+	panel_init_variant(first_variant);
+	log_line("sf2000-screen: panel probe done\n");
+	return 0;
+#else
+	if (argv0_is(argc > 0 ? argv[0] : 0, "sf2000-panel-probe") ||
+	    env_is((const char *const *)envp, "SF2000_PANEL_PROBE", "1") ||
+	    cmdline_contains("SF2000_PANEL_PROBE=1")) {
 		log_line("sf2000-screen: panel probe begin\n");
 		panel_init_variant(first_variant);
 		log_line("sf2000-screen: panel probe done\n");
 		return 0;
-#else
-		if (argv0_is(argc > 0 ? argv[0] : 0, "sf2000-panel-probe") ||
-		    env_is((const char *const *)envp, "SF2000_PANEL_PROBE", "1")) {
-			log_line("sf2000-screen: panel probe begin\n");
-			panel_init_variant(first_variant);
-			log_line("sf2000-screen: panel probe done\n");
-			return 0;
-		}
+	}
 #endif
 	}
 
