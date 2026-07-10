@@ -46,6 +46,7 @@ make ROOTFS=buildroot smoke-linux-buildroot-rom
 make smoke-qemu-board-contract
 make smoke-qemu-display
 make ROOTFS=buildroot smoke-linux-buildroot-storage
+make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
 ```
@@ -54,6 +55,11 @@ make status
 `external/sf2000_qemu` raw-image DMA writeback smoke, so the default storage
 regression path uses the stronger emulator-side oracle instead of the brittle
 direct guest probe.
+
+`smoke-linux-buildroot-storage-enumeration` exercises the in-tree QEMU model
+and Linux HC15 host together. It checks SCR DMA, SD card registration,
+`mmcblk0`, and the first 4 KiB block read without depending on the currently
+unfinished NOMMU helper-process handoff.
 
 `smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
