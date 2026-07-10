@@ -414,6 +414,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
+		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
 		printf 'nod /dev/input/event1 0660 0 0 c 13 65\n'; \
@@ -664,7 +665,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable SND_USB_AUDIO \
 		--disable MEDIA_SUPPORT \
 		--disable DRM \
-		--disable FB
+		--enable FB \
+		--enable FB_SIMPLE
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 	touch '$@'
@@ -1046,6 +1048,9 @@ run-linux-buildroot-display: qemu
 
 smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-display.console
+	grep -q 'simple-framebuffer .*fb0: simplefb registered' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000_buildroot: framebuffer ready /dev/fb0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

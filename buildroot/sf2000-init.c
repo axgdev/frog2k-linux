@@ -656,6 +656,12 @@ int main(void)
 		log_message("sf2000_buildroot: /init visible userspace stage failed\n");
 	log_message("sf2000_buildroot: userspace alive\n");
 	progress_mark("init-userspace-alive", 0x3eu, INIT_TAG);
+	if (path_exists("/dev/fb0")) {
+		log_message("sf2000_buildroot: framebuffer ready /dev/fb0\n");
+		progress_mark("init-framebuffer-ready", 0x3eu, INIT_TAG);
+	} else {
+		log_message("sf2000_buildroot: framebuffer missing /dev/fb0\n");
+	}
 	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast"))
 		reset_snapshot_fast();
 

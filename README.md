@@ -75,7 +75,13 @@ and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 `smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
 the screen service's ready marker and rejects data-bus faults.
 `smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
-scanout and a captured 320x240 framebuffer.
+scanout and a captured 320x240 framebuffer. The kernel reserves that scanout
+as a 320x240 RGB565 simple framebuffer and exposes it as `/dev/fb0`; the smoke
+requires device registration and a successful userspace write through the
+standard fbdev file interface. The screen service still programs the vendor
+GMA descriptors and panel registers directly. Framebuffer `mmap` is not yet
+enabled on this NOMMU port, so applications should use `read`, `write`, and
+fbdev ioctls for now.
 
 `smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0

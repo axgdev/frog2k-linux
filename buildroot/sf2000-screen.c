@@ -934,6 +934,30 @@ static void map_regions_direct(void)
 	log_line("sf2000-screen: using direct MMIO mappings\n");
 }
 
+static void map_framebuffer_device(void)
+{
+	uint16_t black = 0;
+	int fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
+
+	if (fd < 0) {
+		log_line("sf2000-screen: open /dev/fb0 failed, using GMA RAM\n");
+		return;
+	}
+	if (pwrite(fd, &black, sizeof(black), 0) != (ssize_t)sizeof(black)) {
+		char line[112];
+
+		snprintf(line, sizeof(line),
+			"sf2000-screen: write /dev/fb0 failed errno=%d, using GMA RAM\n",
+			errno);
+		log_line(line);
+		close(fd);
+		return;
+	}
+	close(fd);
+	log_line("sf2000-screen: /dev/fb0 RGB565 write ready\n");
+	progress_mark("screen-fb0-write-ok", 0x3fu, sizeof(black));
+}
+
 static void backlight_set(int on)
 {
 	uint32_t bit = BACKLIGHT_R05;
@@ -2850,6 +2874,7 @@ int main(int argc, char **argv, char **envp)
 			progress_mark("screen-map-devmem-ok", 0x3fu, SCREEN_TAG);
 		}
 	}
+	map_framebuffer_device();
 
 	{
 #ifdef PANEL_PROBE_INIT
