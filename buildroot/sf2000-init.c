@@ -82,6 +82,7 @@ struct progress_log {
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
 static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "sf2000", 0 };
+static char *const audio_argv[] = { "/usr/sbin/sf2000-audio", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = { "/etc/init.d/S05sf2000-storage", 0 };
 static char *const init_envp[] = {
@@ -95,6 +96,7 @@ static char *const init_envp[] = {
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
 static unsigned long pad_stack[SERVICE_STACK_WORDS];
+static unsigned long audio_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_late_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
@@ -667,6 +669,9 @@ int main(void)
 	}
 	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
 		pad_stack);
+	if (cmdline_contains("SF2000_AUDIO_TEST=1"))
+		spawn_service("sf2000_buildroot: starting audio DMA test\n",
+			audio_argv, audio_stack);
 	diagnostic_watchdog_pet();
 	sleep_ms(50);
 	diagnostic_watchdog_pet();

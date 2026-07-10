@@ -51,6 +51,9 @@ BUILDROOT_SUPERVISOR := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
 BUILDROOT_PAD_ENTRY := buildroot/sf2000-pad-entry.S
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
+BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
+BUILDROOT_AUDIO_ENTRY := buildroot/sf2000-audio-entry.S
+BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
@@ -176,6 +179,7 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
+	run-linux-buildroot-audio smoke-linux-buildroot-audio \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore clean
 
@@ -314,6 +318,13 @@ $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_PAD_ENTRY) $(BUILDROOT_TOOLCH
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
+$(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(BUILDROOT_AUDIO_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_AUDIO_ENTRY)' '$(BUILDROOT_AUDIO_SRC)'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
 $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
@@ -372,7 +383,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1020,6 +1031,25 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+
+run-linux-buildroot-audio: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	rm -f '$(BUILD_DIR)'/sf2000-audio.wav
+	(sleep 6; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' \
+		-audiodev wav,id=sf2000wav,path='$(BUILD_DIR)'/sf2000-audio.wav \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-audio.console 2>&1
+
+smoke-linux-buildroot-audio: run-linux-buildroot-audio
+	grep -q 'sf2000-audio: PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
+	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
+	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 
 run-linux-buildroot-panel: qemu
 	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \
