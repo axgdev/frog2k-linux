@@ -50,6 +50,8 @@ make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
 make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make smoke-linux-buildroot-audio
+make smoke-qemu-unifrog
+make smoke-qemu-mufrog
 make status
 ```
 
@@ -77,6 +79,12 @@ scanout and a captured 320x240 framebuffer.
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
 DMA ring, and requires QEMU's WAV backend to receive the guest samples.  The
 same driver and device-tree node are used by the physical image.
+
+`smoke-qemu-unifrog` and `smoke-qemu-mufrog` consume the existing, read-only
+frontend build artifacts, construct disposable FAT images under `build/`, and
+follow their persistent boot-trace ABI through module initialization, storage
+completion, JavaScript/frontend startup, and boot-logo presentation.  Override
+`UNIFROG_DIR` or `MUFROG_DIR` when those sibling checkouts live elsewhere.
 
 `smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and

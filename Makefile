@@ -154,6 +154,14 @@ LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
+UNIFROG_DIR ?= $(abspath ../unifrog)
+MUFROG_DIR ?= $(if $(wildcard $(abspath ../mufrog-commandc)),$(abspath ../mufrog-commandc),$(abspath ../mufrog))
+UNIFROG_ASD ?= $(UNIFROG_DIR)/bisrv.asd
+MUFROG_ASD ?= $(MUFROG_DIR)/bisrv.asd
+UNIFROG_SD_ROOT ?= $(UNIFROG_DIR)/output/sdcard
+MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
+UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
+MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
@@ -180,6 +188,7 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
+	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore clean
 
@@ -879,7 +888,7 @@ run-linux-reboot: qemu linux-rom-sd
 		> '$(BUILD_DIR)'/logs/linux-reboot.console 2>&1
 
 smoke-linux-reboot: run-linux-reboot
-	grep -q 'sf2000-pad: SELECT pressed, rebooting' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000_linux: flat init alive' '$(BUILD_DIR)'/logs/linux-reboot.log
 	grep -q 'sf2000: watchdog restart' '$(BUILD_DIR)'/logs/linux-reboot.log
 	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 2
 
@@ -1061,6 +1070,49 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
+
+$(UNIFROG_QEMU_SD): $(UNIFROG_ASD) $(UNIFROG_SD_ROOT)
+	test -d '$(UNIFROG_SD_ROOT)'
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n UNIFROG '$@' >/dev/null
+	mcopy -i '$@' -s '$(UNIFROG_SD_ROOT)'/* ::/
+
+$(MUFROG_QEMU_SD): $(MUFROG_ASD) $(MUFROG_SD_ROOT)
+	test -d '$(MUFROG_SD_ROOT)'
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n MUFROG '$@' >/dev/null
+	mcopy -i '$@' -s '$(MUFROG_SD_ROOT)'/* ::/
+
+run-qemu-unifrog: qemu $(UNIFROG_QEMU_SD)
+	test -f '$(UNIFROG_ASD)'
+	mkdir -p '$(BUILD_DIR)'/logs
+	timeout 30s '$(QEMU_BIN)' -M sf2000 -kernel '$(UNIFROG_ASD)' \
+		-drive if=none,id=sd0,file='$(UNIFROG_QEMU_SD)',format=raw \
+		-display none -serial none -monitor none -d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/qemu-unifrog.log \
+		> '$(BUILD_DIR)'/logs/qemu-unifrog.console 2>&1 || test $$? -eq 124
+
+smoke-qemu-unifrog: run-qemu-unifrog
+	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-unifrog.log
+	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-unifrog.log
+	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-unifrog.log
+
+run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
+	test -f '$(MUFROG_ASD)'
+	mkdir -p '$(BUILD_DIR)'/logs
+	timeout 70s '$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
+		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
+		-display none -serial none -monitor none -d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/qemu-mufrog.log \
+		> '$(BUILD_DIR)'/logs/qemu-mufrog.console 2>&1 || test $$? -eq 124
+
+smoke-qemu-mufrog: run-qemu-mufrog
+	grep -q 'name=unifrog.module_init.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
+	grep -q 'name=unifrog.storage.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
+	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog.log
+	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 
 run-linux-buildroot-panel: qemu
 	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \
