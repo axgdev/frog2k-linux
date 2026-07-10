@@ -991,9 +991,9 @@ smoke-linux-buildroot-rom:
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
 	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
-	grep -q 'sf2000-heartbeat: backlight heartbeat ready' '$(BUILD_DIR)'/logs/linux-rom.log
-	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-rom.log
-	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-rom.log
+	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-rom.log
 
 run-linux-buildroot-display: qemu
 	$(MAKE) ROOTFS=buildroot linux-asd
