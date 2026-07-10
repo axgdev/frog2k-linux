@@ -1071,19 +1071,23 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 
-$(UNIFROG_QEMU_SD): $(UNIFROG_ASD) $(UNIFROG_SD_ROOT)
+$(UNIFROG_QEMU_SD): $(UNIFROG_ASD) $(UNIFROG_SD_ROOT) Makefile
 	test -d '$(UNIFROG_SD_ROOT)'
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n UNIFROG '$@' >/dev/null
 	mcopy -i '$@' -s '$(UNIFROG_SD_ROOT)'/* ::/
 
-$(MUFROG_QEMU_SD): $(MUFROG_ASD) $(MUFROG_SD_ROOT)
+$(MUFROG_QEMU_SD): $(MUFROG_ASD) $(MUFROG_SD_ROOT) Makefile
 	test -d '$(MUFROG_SD_ROOT)'
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n MUFROG '$@' >/dev/null
 	mcopy -i '$@' -s '$(MUFROG_SD_ROOT)'/* ::/
+	# MuFrog deliberately rejects a package-only template as a user SD card.
+	# A normal card has at least one user directory; keep the fixture empty but
+	# representative so this smoke test exercises the mounted block device.
+	mmd -i '$@' ::/ROMS
 
 run-qemu-unifrog: qemu $(UNIFROG_QEMU_SD)
 	test -f '$(UNIFROG_ASD)'
@@ -1102,7 +1106,7 @@ smoke-qemu-unifrog: run-qemu-unifrog
 run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
 	test -f '$(MUFROG_ASD)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	timeout 70s '$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
+	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
 		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
 		-display none -serial none -monitor none -d guest_errors,unimp \
 		-D '$(BUILD_DIR)'/logs/qemu-mufrog.log \
@@ -1110,7 +1114,7 @@ run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
 
 smoke-qemu-mufrog: run-qemu-mufrog
 	grep -q 'name=unifrog.module_init.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
-	grep -q 'name=unifrog.storage.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
+	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 

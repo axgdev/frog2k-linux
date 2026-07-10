@@ -85,6 +85,9 @@ frontend build artifacts, construct disposable FAT images under `build/`, and
 follow their persistent boot-trace ABI through module initialization, storage
 completion, JavaScript/frontend startup, and boot-logo presentation.  Override
 `UNIFROG_DIR` or `MUFROG_DIR` when those sibling checkouts live elsewhere.
+The MuFrog fixture adds an empty `ROMS` directory because MuFrog intentionally
+rejects package-only update media; this represents a blank user card while
+still requiring a successful VFAT mount and storage-readiness result.
 
 `smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
