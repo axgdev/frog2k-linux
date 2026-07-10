@@ -392,7 +392,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 	rsync -a '$(BUILDROOT_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
 	rsync -a '$(BUILDROOT_GENERATED_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
 	rm -rf '$(BUILDROOT_REPACK_DIR)'/run/* '$(BUILDROOT_REPACK_DIR)'/tmp/*
-	mkdir -p '$(BUILDROOT_REPACK_DIR)'/dev/input \
+	mkdir -p '$(BUILDROOT_REPACK_DIR)'/dev/input '$(BUILDROOT_REPACK_DIR)'/dev/snd \
 		'$(BUILDROOT_REPACK_DIR)'/dev/pts '$(BUILDROOT_REPACK_DIR)'/dev/shm
 	{ \
 		printf 'nod /dev/console 0622 0 0 c 5 1\n'; \
@@ -403,6 +403,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
+		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
 		printf 'nod /dev/input/event1 0660 0 0 c 13 65\n'; \
 		printf 'nod /dev/input/event2 0660 0 0 c 13 66\n'; \
@@ -640,7 +641,16 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable TMPFS_POSIX_ACL \
 		--disable TMPFS_XATTR \
 		--disable CRYPTO \
-		--disable SOUND \
+		--enable SOUND \
+		--enable SND \
+		--enable SND_PCM \
+		--enable SND_DRIVERS \
+		--enable SND_SF2000 \
+		--disable SND_SEQUENCER \
+		--disable SND_MIXER_OSS \
+		--disable SND_PCM_OSS \
+		--disable SND_HDA \
+		--disable SND_USB_AUDIO \
 		--disable MEDIA_SUPPORT \
 		--disable DRM \
 		--disable FB
@@ -1047,7 +1057,8 @@ run-linux-buildroot-audio: qemu
 		> '$(BUILD_DIR)'/logs/linux-buildroot-audio.console 2>&1
 
 smoke-linux-buildroot-audio: run-linux-buildroot-audio
-	grep -q 'sf2000-audio: PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
+	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
+	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 

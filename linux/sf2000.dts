@@ -136,6 +136,13 @@
 			status = "okay";
 		};
 
+		audio: sound@1880a000 {
+			compatible = "hichip,hc15xx-snd0";
+			reg = <0x1880a000 0x1000>,
+			      <0x1880b000 0x1000>;
+			status = "okay";
+		};
+
 		usb0: usb@18844000 {
 			compatible = "hichip,hc16xx-musb";
 			reg = <0x18844000 0x1000>;

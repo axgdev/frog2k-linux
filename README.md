@@ -49,6 +49,7 @@ make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
 make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
 make ROOTFS=buildroot smoke-linux-buildroot-display
+make smoke-linux-buildroot-audio
 make status
 ```
 
@@ -71,6 +72,11 @@ and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 the screen service's ready marker and rejects data-bus faults.
 `smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
 scanout and a captured 320x240 framebuffer.
+
+`smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
+NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
+DMA ring, and requires QEMU's WAV backend to receive the guest samples.  The
+same driver and device-tree node are used by the physical image.
 
 `smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
