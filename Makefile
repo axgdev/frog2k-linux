@@ -931,7 +931,7 @@ smoke-linux-buildroot-storage-probe-writeback:
 	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-access write addr=0x1884c024' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-access write addr=0x1884c02c' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sdio-dma-write .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sdio-dma-write lba=16 .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'value=0x00000000 name=exit-code' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -a -q 'sf2000 linux sd write test 0239' "$$tmp_sd"
 
