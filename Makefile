@@ -189,6 +189,8 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
 	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
+	run-qemu-unifrog-display smoke-qemu-unifrog-display \
+	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore clean
 
@@ -1103,6 +1105,24 @@ smoke-qemu-unifrog: run-qemu-unifrog
 	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-unifrog.log
 	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-unifrog.log
 
+run-qemu-unifrog-display: qemu $(UNIFROG_QEMU_SD)
+	test -f '$(UNIFROG_ASD)'
+	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots
+	rm -f '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm
+	(sleep 8; printf 'screendump $(BUILD_DIR)/screenshots/qemu-unifrog.ppm\nquit\n') | \
+		'$(QEMU_BIN)' -M sf2000 -kernel '$(UNIFROG_ASD)' \
+		-drive if=none,id=sd0,file='$(UNIFROG_QEMU_SD)',format=raw \
+		-display none -serial none -monitor stdio -d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/qemu-unifrog-display.log \
+		> '$(BUILD_DIR)'/logs/qemu-unifrog-display.console 2>&1
+
+smoke-qemu-unifrog-display: run-qemu-unifrog-display
+	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
+	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
+	test -s '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm
+	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
+
 run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
 	test -f '$(MUFROG_ASD)'
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -1117,6 +1137,24 @@ smoke-qemu-mufrog: run-qemu-mufrog
 	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog.log
 	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
+
+run-qemu-mufrog-display: qemu $(MUFROG_QEMU_SD)
+	test -f '$(MUFROG_ASD)'
+	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots
+	rm -f '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
+	(sleep 9; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog.ppm\nquit\n') | \
+		'$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
+		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
+		-display none -serial none -monitor stdio -d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/qemu-mufrog-display.log \
+		> '$(BUILD_DIR)'/logs/qemu-mufrog-display.console 2>&1
+
+smoke-qemu-mufrog-display: run-qemu-mufrog-display
+	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
+	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
+	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
+	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
 
 run-linux-buildroot-panel: qemu
 	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \

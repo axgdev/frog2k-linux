@@ -52,6 +52,8 @@ make ROOTFS=buildroot smoke-linux-buildroot-display
 make smoke-linux-buildroot-audio
 make smoke-qemu-unifrog
 make smoke-qemu-mufrog
+make smoke-qemu-unifrog-display
+make smoke-qemu-mufrog-display
 make status
 ```
 
@@ -88,6 +90,9 @@ completion, JavaScript/frontend startup, and boot-logo presentation.  Override
 The MuFrog fixture adds an empty `ROMS` directory because MuFrog intentionally
 rejects package-only update media; this represents a blank user card while
 still requiring a successful VFAT mount and storage-readiness result.
+The corresponding `*-display` targets capture QEMU's 320x240 panel after
+frontend startup and reject an all-black pixel payload, covering continuous
+GMA scanout of the framebuffer after its descriptor has been installed.
 
 `smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
