@@ -33,10 +33,23 @@ NESTED(handle_sys, PT_SIZE, sp)
 	sw	v0, 24(k0)
 	mfc0	k1, CP0_EPC
 	sw	k1, 28(k0)
+	li	k0, __NR_O32_Linux + 162
+	beq	v0, k0, sf2000_syscall_irq_on
+	 nop
+	li	k0, __NR_O32_Linux + 118
+	beq	v0, k0, sf2000_syscall_irq_on
+	 nop
 	lw	k1, PT_STATUS(sp)
 	andi	k1, ST0_ERL
 	bnez	k1, sf2000_erl_syscall_irq_off
 	 nop
+	lw	k1, PT_EPC(sp)
+	li	k0, 0xe0000000
+	and	k1, k0
+	li	k0, 0x80000000
+	beq	k1, k0, sf2000_erl_syscall_irq_off
+	 nop
+sf2000_syscall_irq_on:
 #endif
 	TRACE_IRQS_ON_RELOAD
 	STI
@@ -44,6 +57,7 @@ NESTED(handle_sys, PT_SIZE, sp)
 	b	sf2000_after_syscall_irq_state
 	 nop
 sf2000_erl_syscall_irq_off:
+	CLI
 	li	k0, 0xa1400000
 	li	k1, 0x51510430
 	sw	k1, 20(k0)

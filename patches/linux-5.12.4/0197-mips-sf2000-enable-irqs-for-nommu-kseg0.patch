@@ -1,0 +1,13 @@
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -136,8 +136,8 @@ static bool sf2000_nommu_flat_kseg0_handoff(unsigned long *pc,
+ 	sf2000_identity_init_sp = CKSEG0ADDR(*sp);
+ 	*pc = sf2000_identity_init_pc;
+ 	*sp = sf2000_identity_init_sp;
+-	*status |= ST0_ERL;
+-	*status &= ~(ST0_EXL | KU_MASK | ST0_IE);
++	*status |= ST0_ERL | ST0_IE;
++	*status &= ~(ST0_EXL | KU_MASK);
+ 	sf2000_progress_mark("mips-start-thread-kseg0-pc", 9, *pc);
+ 	sf2000_progress_mark("mips-start-thread-kseg0-sp", 9, *sp);
+ 	sf2000_progress_mark("mips-start-thread-kseg0-status", 9, *status);

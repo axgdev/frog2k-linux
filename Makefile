@@ -13,7 +13,7 @@ ASDPACK := $(BUILD_DIR)/asdpack
 BFLTPACK := $(BUILD_DIR)/bfltpack
 QEMU_BIN := $(QEMU_DIR)/.cache/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
-QEMU_CPU ?= 4Kc
+QEMU_CPU ?= 4Km
 QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
 QEMU_ROM_CPU ?=
 QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
@@ -386,6 +386,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/tty 0666 0 0 c 5 0\n'; \
 		printf 'nod /dev/ttyS0 0660 0 5 c 4 64\n'; \
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
+		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
 		printf 'nod /dev/input/event1 0660 0 0 c 13 65\n'; \
@@ -913,7 +914,7 @@ smoke-linux-buildroot-storage-writeback:
 
 run-linux-buildroot-storage-probe-writeback:
 	$(MAKE) ROOTFS=buildroot \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-asd
 
 smoke-linux-buildroot-storage-probe-writeback:
@@ -926,23 +927,32 @@ smoke-linux-buildroot-storage-probe-writeback:
 		SF2000_TRACE_SDIO='1' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-buildroot-storage-probe-writeback; \
-	grep -q 'Run /usr/sbin/sf2000-storage-probe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sf2000_storage_probe: entry-start' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-access write addr=0x1884c024' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-access write addr=0x1884c02c' '$(BUILD_DIR)'/logs/linux-asd.log; \
-	grep -q 'sdio-dma-write .*len=512 copied=512' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sdio-dma-write .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'value=0x00000000 name=exit-code' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -a -q 'sf2000 linux sd write test 0239' "$$tmp_sd"
 
 run-linux-buildroot-storage-enumeration:
 	$(MAKE) ROOTFS=buildroot \
 		SF2000_TRACE_SDIO='1' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-probe' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-asd
 
-smoke-linux-buildroot-storage-enumeration: run-linux-buildroot-storage-enumeration
-	grep -q 'sdio-dma-scr .*len=8 result=0' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'mmc0: new SDXC card' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log
+smoke-linux-buildroot-storage-enumeration:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-enumeration.XXXXXX.img); \
+	trap 'rm -f $$tmp_sd' EXIT; \
+	truncate -s 16M "$$tmp_sd"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
+	$(MAKE) ROOTFS=buildroot \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-buildroot-storage-enumeration; \
+	grep -q 'sdio-dma-scr .*len=8 result=0' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'mmc0: new SDXC card' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-dma-read .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-launch:

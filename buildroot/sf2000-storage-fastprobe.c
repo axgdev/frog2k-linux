@@ -1,13 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 
 #include <stdint.h>
-#include <unistd.h>
-#include <sys/syscall.h>
-#include <sys/mount.h>
 
 typedef unsigned int size_t;
-
-extern long syscall(long number, ...);
 
 #define SYS_exit 4001
 #define SYS_read 4003
@@ -15,16 +10,13 @@ extern long syscall(long number, ...);
 #define SYS_open 4005
 #define SYS_close 4006
 #define SYS_lseek 4019
-#define SYS_getpid 4020
-#ifdef SYS_mount
-#undef SYS_mount
-#endif
-#define SYS_mount 4021
-#define SYS_fsync 4148
+#define SYS_sched_yield 4162
+#define SYS_fsync 4118
 
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR 2
+#define O_NONBLOCK 04000
 #define O_CREAT 0100
 #define O_TRUNC 01000
 #define O_CLOEXEC 02000000
@@ -72,30 +64,6 @@ static long syscall3(long nr, long a0, long a1, long a2)
 	return r2;
 }
 
-static long syscall6(long nr, long a0, long a1, long a2, long a3,
-		long a4, long a5)
-{
-	register long r2 __asm__("$2") = nr;
-	register long r4 __asm__("$4") = a0;
-	register long r5 __asm__("$5") = a1;
-	register long r6 __asm__("$6") = a2;
-	register long r7 __asm__("$7") = a3;
-
-	__asm__ volatile (
-		"addiu $29, $29, -32\n\t"
-		"sw %5, 16($29)\n\t"
-		"sw %6, 20($29)\n\t"
-		"syscall\n\t"
-		"addiu $29, $29, 32"
-		: "+r"(r2), "+r"(r7)
-		: "r"(r4), "r"(r5), "r"(r6), "r"(a4), "r"(a5)
-		: "$3", "$8", "$9", "$10", "$11", "$12", "$13",
-		  "$14", "$15", "$24", "$25", "hi", "lo", "memory");
-	if (r7)
-		return -r2;
-	return r2;
-}
-
 static void write_all(long fd, const char *s)
 {
 	const char *p = s;
@@ -114,19 +82,7 @@ void storage_probe_entry_mark(void)
 
 static void log_message(const char *message)
 {
-	long log_fd = syscall3(SYS_open, (long)"/dev/kmsg", O_WRONLY, 0);
-
-	if (log_fd < 0) {
-		log_fd = syscall3(SYS_open, (long)"/dev/console", O_WRONLY, 0);
-	}
-	if (log_fd < 0) {
-		log_fd = 1;
-	}
-	write_all(log_fd, "<6>");
-	write_all(log_fd, message);
-	if (log_fd > 2) {
-		(void)syscall1(SYS_close, log_fd);
-	}
+	write_all(1, message);
 }
 
 static void log_message_long(const char *prefix, long value)
@@ -159,19 +115,13 @@ static __attribute__((noinline)) int open_mmcb_block(void)
 	long fd;
 	unsigned int i;
 
-	for (i = 0; i < 80; i++) {
+	for (i = 0; i < 100000; i++) {
 		fd = syscall3(SYS_open, (long)"/dev/mmcblk0",
-			      O_RDWR | O_CLOEXEC, 0);
+			      O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 		if (fd >= 0) {
 			return (int)fd;
 		}
-		if (i == 0) {
-			(void)syscall6(SYS_mount, (long)"sysfs", (long)"/sys",
-				       (long)"sysfs", 0, 0, 0);
-			(void)syscall6(SYS_mount, (long)"devtmpfs", (long)"/dev",
-				       (long)"devtmpfs", 0, 0, 0);
-		}
-		(void)syscall1(SYS_getpid, 0);
+		(void)syscall1(SYS_sched_yield, 0);
 	}
 	return -1;
 }
@@ -196,41 +146,41 @@ static __attribute__((noinline)) int raw_writeback_probe(void)
 	fd = open_mmcb_block();
 	if (fd < 0) {
 		log_message("sf2000_storage_fastprobe: open mmcblk0 failed\n");
-		return 1;
+		return 11;
 	}
 	ret = syscall3(SYS_lseek, fd, WRITE_OFFSET, SEEK_SET);
 	if (ret < 0) {
 		log_message("sf2000_storage_fastprobe: lseek failed\n");
 		(void)syscall1(SYS_close, fd);
-		return 1;
+		return 12;
 	}
 	ret = syscall3(SYS_write, fd, (long)out, (long)SECTOR_SIZE);
 	if (ret != (long)SECTOR_SIZE) {
 		log_message("sf2000_storage_fastprobe: write failed\n");
 		(void)syscall1(SYS_close, fd);
-		return 1;
+		return 13;
 	}
-	if (fsync(fd) != 0) {
+	if (syscall1(SYS_fsync, fd) != 0) {
 		log_message("sf2000_storage_fastprobe: fsync failed\n");
 		(void)syscall1(SYS_close, fd);
-		return 1;
+		return 14;
 	}
 	ret = syscall3(SYS_lseek, fd, WRITE_OFFSET, SEEK_SET);
 	if (ret < 0) {
 		log_message("sf2000_storage_fastprobe: readback seek failed\n");
 		(void)syscall1(SYS_close, fd);
-		return 1;
+		return 15;
 	}
 	ret = syscall3(SYS_read, fd, (long)in, (long)SECTOR_SIZE);
 	(void)syscall1(SYS_close, fd);
 	if (ret != (long)SECTOR_SIZE) {
 		log_message("sf2000_storage_fastprobe: readback failed\n");
-		return 1;
+		return 16;
 	}
 	for (i = 0; i < SECTOR_SIZE; i++) {
 		if (in[i] != out[i]) {
 			log_message("sf2000_storage_fastprobe: verify mismatch\n");
-			return 1;
+			return 17;
 		}
 	}
 	log_message("sf2000_storage_fastprobe: raw writeback ok 0239\n");

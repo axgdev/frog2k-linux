@@ -41,6 +41,7 @@
 #include <asm/stacktrace.h>
 
 #define SF2000_IDENTITY_USER_STACK 0x013e0000UL
+
 #ifdef CONFIG_HOTPLUG_CPU
 void arch_cpu_idle_dead(void)
 {
@@ -93,8 +94,6 @@ void sf2000_ret_before_restore(struct pt_regs *regs)
 		return;
 	sf2000_progress_mark("ret-restore-status", 9, regs->cp0_status);
 	sf2000_progress_mark("ret-restore-epc", 9, regs->cp0_epc);
-	sf2000_progress_mark("ret-restore-sp", 9, regs->regs[29]);
-	sf2000_progress_mark("ret-restore-init-sp", 9, sf2000_identity_init_sp);
 	if (regs->cp0_status & ST0_EXL) {
 		regs->cp0_status &= ~ST0_EXL;
 		sf2000_progress_mark("ret-restore-status-fixed", 9,
@@ -107,11 +106,6 @@ void sf2000_ret_before_restore(struct pt_regs *regs)
 		sf2000_progress_mark("ret-restore-stub-epc", 9,
 			SF2000_IDENTITY_STUB_KSEG0);
 		regs->cp0_epc = SF2000_IDENTITY_STUB_KSEG0;
-		if (sf2000_identity_init_sp) {
-			regs->regs[29] = sf2000_identity_init_sp;
-			sf2000_progress_mark("ret-restore-sp-fixed", 9,
-				regs->regs[29]);
-		}
 		sf2000_progress_mark("ret-restore-stub-errorepc", 9,
 			SF2000_IDENTITY_STUB_KSEG0);
 		write_c0_errorepc(SF2000_IDENTITY_STUB_KSEG0);
@@ -131,18 +125,19 @@ static bool sf2000_nommu_flat_kseg0_handoff(unsigned long *pc,
 	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || IS_ENABLED(CONFIG_MMU))
 		return false;
 
-	if (!sf2000_rom_handoff_present())
+	if (sf2000_identity_handoff_used)
 		return false;
 
 	if (*pc >= KSEG0)
 		return false;
 
+	sf2000_identity_handoff_used = true;
 	sf2000_identity_init_pc = CKSEG0ADDR(*pc);
 	sf2000_identity_init_sp = CKSEG0ADDR(*sp);
 	*pc = sf2000_identity_init_pc;
 	*sp = sf2000_identity_init_sp;
-	*status |= ST0_ERL;
-	*status &= ~(ST0_EXL | KU_MASK | ST0_IE);
+	*status |= ST0_ERL | ST0_IE;
+	*status &= ~(ST0_EXL | KU_MASK);
 	sf2000_progress_mark("mips-start-thread-kseg0-pc", 9, *pc);
 	sf2000_progress_mark("mips-start-thread-kseg0-sp", 9, *sp);
 	sf2000_progress_mark("mips-start-thread-kseg0-status", 9, *status);

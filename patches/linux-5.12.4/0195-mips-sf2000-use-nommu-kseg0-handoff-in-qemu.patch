@@ -1,0 +1,12 @@
+--- a/arch/mips/kernel/process.c
++++ b/arch/mips/kernel/process.c
+@@ -129,9 +129,6 @@ static bool sf2000_nommu_flat_kseg0_handoff(unsigned long *pc,
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000) || IS_ENABLED(CONFIG_MMU))
+ 		return false;
+ 
+-	if (!sf2000_rom_handoff_present())
+-		return false;
+-
+ 	if (sf2000_identity_handoff_used)
+ 		return false;
+ 

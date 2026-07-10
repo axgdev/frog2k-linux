@@ -1,0 +1,15 @@
+--- a/arch/mips/kernel/scall32-o32.S
++++ b/arch/mips/kernel/scall32-o32.S
+@@ -37,6 +37,12 @@ NESTED(handle_sys, PT_SIZE, sp)
+ 	andi	k1, ST0_ERL
+ 	bnez	k1, sf2000_erl_syscall_irq_off
+ 	 nop
++	lw	k1, PT_EPC(sp)
++	li	k0, 0xe0000000
++	and	k1, k0
++	li	k0, 0x80000000
++	beq	k1, k0, sf2000_erl_syscall_irq_off
++	 nop
+ #endif
+ 	TRACE_IRQS_ON_RELOAD
+ 	STI

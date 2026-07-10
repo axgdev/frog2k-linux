@@ -47,6 +47,7 @@ make smoke-qemu-board-contract
 make smoke-qemu-display
 make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
+make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
 make ROOTFS=buildroot smoke-linux-buildroot-display
 make status
 ```
@@ -58,8 +59,13 @@ direct guest probe.
 
 `smoke-linux-buildroot-storage-enumeration` exercises the in-tree QEMU model
 and Linux HC15 host together. It checks SCR DMA, SD card registration,
-`mmcblk0`, and the first 4 KiB block read without depending on the currently
-unfinished NOMMU helper-process handoff.
+`mmcblk0`, and the first 4 KiB block read.
+
+`smoke-linux-buildroot-storage-probe-writeback` boots the minimal NOMMU
+storage helper, writes through `mmcblk0`, flushes and reads the data back, and
+then verifies the same signature in QEMU's SD image. Linux QEMU runs default
+to the MIPS32r1 `4Km` fixed-mapping CPU model; `4Kc` models an R4000-style TLB
+and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 
 `smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
