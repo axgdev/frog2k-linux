@@ -92,7 +92,9 @@ rejects package-only update media; this represents a blank user card while
 still requiring a successful VFAT mount and storage-readiness result.
 The corresponding `*-display` targets capture QEMU's 320x240 panel after
 frontend startup and reject an all-black pixel payload, covering continuous
-GMA scanout of the framebuffer after its descriptor has been installed.
+GMA scanout of the framebuffer after its descriptor has been installed. They
+then inject a D-pad down event, capture a second frame, and require the pixels
+to change, covering the keypad-to-frontend redraw path as well.
 
 `smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and

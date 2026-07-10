@@ -1108,8 +1108,10 @@ smoke-qemu-unifrog: run-qemu-unifrog
 run-qemu-unifrog-display: qemu $(UNIFROG_QEMU_SD)
 	test -f '$(UNIFROG_ASD)'
 	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots
-	rm -f '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm
-	(sleep 8; printf 'screendump $(BUILD_DIR)/screenshots/qemu-unifrog.ppm\nquit\n') | \
+	rm -f '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm \
+		'$(BUILD_DIR)'/screenshots/qemu-unifrog-after-input.ppm
+	(sleep 8; printf 'screendump $(BUILD_DIR)/screenshots/qemu-unifrog.ppm\nsendkey down 1000\n'; \
+		sleep 2; printf 'screendump $(BUILD_DIR)/screenshots/qemu-unifrog-after-input.ppm\nquit\n') | \
 		'$(QEMU_BIN)' -M sf2000 -kernel '$(UNIFROG_ASD)' \
 		-drive if=none,id=sd0,file='$(UNIFROG_QEMU_SD)',format=raw \
 		-display none -serial none -monitor stdio -d guest_errors,unimp \
@@ -1122,6 +1124,9 @@ smoke-qemu-unifrog-display: run-qemu-unifrog-display
 	test -s '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm
 	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
+	test -s '$(BUILD_DIR)'/screenshots/qemu-unifrog-after-input.ppm
+	! cmp -s '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm \
+		'$(BUILD_DIR)'/screenshots/qemu-unifrog-after-input.ppm
 
 run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
 	test -f '$(MUFROG_ASD)'
@@ -1141,8 +1146,10 @@ smoke-qemu-mufrog: run-qemu-mufrog
 run-qemu-mufrog-display: qemu $(MUFROG_QEMU_SD)
 	test -f '$(MUFROG_ASD)'
 	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots
-	rm -f '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
-	(sleep 9; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog.ppm\nquit\n') | \
+	rm -f '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm \
+		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
+	(sleep 9; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog.ppm\nsendkey down 1000\n'; \
+		sleep 2; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog-after-input.ppm\nquit\n') | \
 		'$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
 		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
 		-display none -serial none -monitor stdio -d guest_errors,unimp \
@@ -1155,6 +1162,9 @@ smoke-qemu-mufrog-display: run-qemu-mufrog-display
 	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
 	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
+	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
+	! cmp -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm \
+		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
 
 run-linux-buildroot-panel: qemu
 	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \
