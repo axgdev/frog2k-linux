@@ -372,22 +372,31 @@ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd,
 	status = readb(host->base + HC15_REG_CMDSTS);
 	writeb(irq, host->base + HC15_REG_IRQSTS);
 
-	if (status & 0x01)
-		norm |= 0x01;
-	if (status & 0x02)
-		norm |= 0x02;
-	if (status & 0x08)
-		norm |= 0x04;
-	if (status & 0x10)
-		norm |= 0x08;
-	if (status & 0x40)
-		norm |= 0x10;
-	if (status & 0x04)
-		norm |= 0x20;
-	if (status & 0x20)
-		norm |= 0x40;
-	if (status & 0x80)
-		norm |= 0x80;
+	/*
+	 * The vendor controller reports 0xe4 after a command completes
+	 * successfully.  Those high bits are a terminal engine state, not the
+	 * individual CRC/timeout flags used by the provisional decoder below.
+	 * Keep recording the raw byte, but do not turn the captured success state
+	 * into a synthetic command error.
+	 */
+	if (status != 0xe4) {
+		if (status & 0x01)
+			norm |= 0x01;
+		if (status & 0x02)
+			norm |= 0x02;
+		if (status & 0x08)
+			norm |= 0x04;
+		if (status & 0x10)
+			norm |= 0x08;
+		if (status & 0x40)
+			norm |= 0x10;
+		if (status & 0x04)
+			norm |= 0x20;
+		if (status & 0x20)
+			norm |= 0x40;
+		if (status & 0x80)
+			norm |= 0x80;
+	}
 
 	hc15_mark("hc15-irq", irq);
 	hc15_mark("hc15-cmdctl-wait", cmdctl);
@@ -823,7 +832,8 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
 	else if (data && (data->flags & MMC_DATA_WRITE))
 		hc15_pio_write(host, data);
 
-	if (!data_write || !write_wait_first) {
+	/* DMA completion was already consumed before hc15_wait_dma(). */
+	if (!dma_xfer && (!data_write || !write_wait_first)) {
 		hc15_wait_irq(host, cmd, data != NULL);
 		hc15_get_response(host, cmd);
 	}

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 QEMU_DIR := external/sf2000_qemu
-QEMU_ORACLE_DIR := $(abspath ../sf2000_qemu)
+QEMU_ORACLE_DIR ?= $(abspath $(QEMU_DIR))
 HCLINUX_DIR := external/hclinux/2024.02.y.2
 BUILD_DIR := build
 INITRAMFS := $(BUILD_DIR)/initramfs.cpio
@@ -149,6 +149,8 @@ SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
+STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
+QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
 QEMU_BOOT_TIMEOUT ?= 90s
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
@@ -912,10 +914,10 @@ smoke-linux-buildroot-storage-fast:
 	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-writeback:
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback QEMU_JOBS='$(JOBS)'
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback $(QEMU_ORACLE_ARGS)
 
 smoke-linux-buildroot-storage-writeback:
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback QEMU_JOBS='$(JOBS)'
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback $(QEMU_ORACLE_ARGS)
 
 run-linux-buildroot-storage-probe-writeback:
 	$(MAKE) ROOTFS=buildroot \
@@ -969,18 +971,18 @@ smoke-linux-buildroot-storage-launch: run-linux-buildroot-storage-launch
 	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-qemu-stock-fatfs-writeback:
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback QEMU_JOBS='$(JOBS)'
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback $(QEMU_ORACLE_ARGS)
 
 smoke-qemu-stock-fatfs-writeback: run-qemu-stock-fatfs-writeback
 
 run-qemu-board-contract:
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-board-contract QEMU_JOBS='$(JOBS)'
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-board-contract $(QEMU_ORACLE_ARGS)
 
 smoke-qemu-board-contract: run-qemu-board-contract
 
 run-qemu-display:
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-display QEMU_JOBS='$(JOBS)' && \
-	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-gb300-display QEMU_JOBS='$(JOBS)'
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-display $(QEMU_ORACLE_ARGS) && \
+	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-gb300-display $(QEMU_ORACLE_ARGS)
 
 smoke-qemu-display: run-qemu-display
 

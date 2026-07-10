@@ -1,0 +1,27 @@
+From: SF2000 Linux project
+Subject: [PATCH] mmc: hc15: do not consume DMA command completion twice
+
+The DMA path waits for command completion before waiting for the DMA engine.
+Do not enter the common PIO command-wait block afterward: the first wait has
+already acknowledged the command IRQ, and a second wait can only time out once
+the controller exposes its persistent command-control state accurately.
+
+---
+ drivers/mmc/host/hc15_mmc.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/mmc/host/hc15_mmc.c b/drivers/mmc/host/hc15_mmc.c
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -833,7 +833,8 @@ static void hc15_run_command(struct hc15_mmc *host, struct mmc_command *cmd,
+ 	else if (data && (data->flags & MMC_DATA_WRITE))
+ 		hc15_pio_write(host, data);
+ 
+-	if (!data_write || !write_wait_first) {
++	/* DMA completion was already consumed before hc15_wait_dma(). */
++	if (!dma_xfer && (!data_write || !write_wait_first)) {
+ 		hc15_wait_irq(host, cmd, data != NULL);
+ 		hc15_get_response(host, cmd);
+ 	}
+-- 
+2.0.0

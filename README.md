@@ -72,12 +72,12 @@ the screen service's ready marker and rejects data-bus faults.
 `smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
 scanout and a captured 320x240 framebuffer.
 
-`smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
+`smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
 storage snapshots queryable from the Linux workspace as well.
 
-`smoke-qemu-display` delegates to the sibling `external/sf2000_qemu`
-stock-display and GB300-display smokes, giving the Linux workspace a direct
+`smoke-qemu-display` runs the local `external/sf2000_qemu` stock-display and
+GB300-display smokes, giving the Linux workspace a direct
 way to exercise the stronger display oracle without replaying the guest-side
 panel boot chain.
 
