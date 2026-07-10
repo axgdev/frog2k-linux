@@ -1,0 +1,40 @@
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -169,7 +169,7 @@ static inline int flat_mips_find_hi16_for_lo16(u32 __user *rp, u32 lo,
+ }
+ 
+ static inline int flat_mips_update_hi16_for_lo16(u32 __user *rp, u32 lo,
+-						 u32 addr)
++						 u32 original, u32 addr)
+ {
+ 	u32 *p = (__force u32 *)rp;
+ 	u32 rs = flat_mips_lo16_rs(lo);
+@@ -187,7 +187,7 @@ static inline int flat_mips_update_hi16_for_lo16(u32 __user *rp, u32 lo,
+ 			continue;
+ 
+ 		candidate = ((hi & 0xffff) << 16) + (s16)(lo & 0xffff);
+-		if (!flat_mips_addr_plausible(candidate))
++		if (candidate != original)
+ 			continue;
+ 
+ 		hi = get_unaligned(scan);
+@@ -270,14 +270,11 @@ static inline int flat_put_addr_at_rp(u32 __user *rp, u32 addr, u32 relval)
+ 		return 0;
+ 	case FLAT_MIPS_R_LO16:
+ 		lo = get_unaligned(p);
+-		if (!flat_mips_update_hi16_for_lo16(rp, lo, addr) &&
+-		    flat_mips_find_hi16_for_lo16(rp, lo, &hi_rp, &hi)) {
+-			u32 *hi_p = (__force u32 *)hi_rp;
+-
+-			hi = get_unaligned(hi_p);
+-			hi = (hi & 0xffff0000) |
+-			     (((addr + 0x8000) >> 16) & 0xffff);
+-			put_unaligned(hi, hi_p);
++		if (flat_mips_find_hi16_for_lo16(rp, lo, &hi_rp, &hi)) {
++			u32 original = ((hi & 0xffff) << 16) +
++				       (s16)(lo & 0xffff);
++
++			flat_mips_update_hi16_for_lo16(rp, lo, original, addr);
+ 		}
+ 		lo = (lo & 0xffff0000) | (addr & 0xffff);
+ 		put_unaligned(lo, p);

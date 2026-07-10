@@ -1,0 +1,42 @@
+From: sf2000-linux contributors
+Subject: [PATCH] elf2flt: keep undefined MIPS weak symbols zero
+
+The ELF linker resolves undefined weak symbols to zero.  Do not emit FLAT
+load relocations for the MIPS absolute relocation forms that refer to those
+symbols, otherwise the loader changes zero into the executable load address.
+
+--- a/elf2flt.c
++++ b/elf2flt.c
+@@ -559,6 +559,32 @@ output_relocs (
+ #else
+ 			sym_addr = (*(q->sym_ptr_ptr))->value;
+ #endif
++#if defined(TARGET_mips) || defined(TARGET_mipsel)
++			/*
++			 * The ELF linker has already resolved an undefined weak symbol
++			 * to zero (plus any explicit addend).  Emitting a FLAT load
++			 * relocation for it would incorrectly turn that zero into the
++			 * executable's load address.
++			 */
++			if (((*(q->sym_ptr_ptr))->flags & BSF_WEAK) &&
++			    bfd_is_und_section(sym_section)) {
++				switch (q->howto->type) {
++				case R_MIPS_32:
++				case R_MIPS_26:
++				case R_MIPS_LO16:
++					continue;
++				case R_MIPS_HI16:
++					{
++						uint32_t insn = bfd_getl32(r_mem);
++						uint32_t target = (insn >> 16) & 0x1f;
++
++						/* or target, zero, zero */
++						bfd_putl32((target << 11) | 0x25, r_mem);
++						continue;
++					}
++				}
++			}
++#endif
+ 			if (use_resolved) {
+ 				/* Use the address of the symbol already in
+ 				   the program text.  How this is handled may

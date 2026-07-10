@@ -165,8 +165,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PINPAD_L08 8u
 #define PINPAD_L09 9u
 #define PINPAD_L10 10u
-#define PINPAD_L23 23u
-#define PINPAD_L24 24u
 #define PINPAD_L25 25u
 #define PINPAD_R05 69u
 #define PINPAD_T00 96u
@@ -225,8 +223,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define BTN_DPAD_RIGHT 0x223
 #endif
 
-#define KEY_SHIFTER_LOAD_SPINS 300u
-#define KEY_SHIFTER_CLOCK_LOW_SPINS 180u
 #define CONSOLE_INPUT_FDS 4u
 #define CONSOLE_POLL_MS 50u
 #define CONSOLE_IDLE_REDRAW_TICKS 40u
@@ -913,14 +909,6 @@ static void sleep_ms(unsigned msec)
 	watchdog_pet();
 }
 
-static void sleep_spins(unsigned count)
-{
-	volatile unsigned spin;
-
-	for (spin = 0; spin < count; spin++)
-		__asm__ volatile ("" ::: "memory");
-}
-
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
 		uint32_t size, const char *name)
 {
@@ -1489,30 +1477,6 @@ static void status_led_set(int on)
 	 * frontend uses it as a status LED, but it is not needed for scrolling.
 	 */
 	(void)on;
-}
-
-static uint32_t scan_keypad_sf2000(void)
-{
-	uint32_t raw_mask = 0;
-	unsigned i;
-
-	gpio_config_output(PINPAD_L24);
-	gpio_set_pad(PINPAD_L24, 1);
-	gpio_config_output(PINPAD_L23);
-	gpio_set_pad(PINPAD_L23, 0);
-	sleep_spins(KEY_SHIFTER_LOAD_SPINS);
-	gpio_config_input(PINPAD_L23);
-
-	for (i = 0; i < 12u; i++) {
-		if (1 ^ gpio_get_pad(PINPAD_L23))
-			raw_mask |= 1u << i;
-
-		gpio_set_pad(PINPAD_L24, 0);
-		sleep_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
-		gpio_set_pad(PINPAD_L24, 1);
-	}
-
-	return raw_mask;
 }
 
 static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
@@ -2376,9 +2340,9 @@ static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
 		fds[i] = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	}
 	if (console_input_has_fd(fds))
-		console_add_line("dpad scroll: evdev plus raw fallback");
+		console_add_line("dpad scroll: evdev input");
 	else
-		console_add_line("dpad scroll: raw sf2000 fallback");
+		console_add_line("dpad scroll: waiting for evdev");
 }
 
 static void console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
@@ -2404,50 +2368,6 @@ static void console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
 				*held_buttons &= ~button;
 		}
 	}
-}
-
-static uint32_t console_buttons_from_normalized_keypad(uint32_t raw)
-{
-	uint32_t buttons = 0;
-
-	if (raw & (1u << 6))
-		buttons |= CONSOLE_BTN_SELECT;
-	if (raw & (1u << 8))
-		buttons |= CONSOLE_BTN_UP;
-	if (raw & (1u << 9))
-		buttons |= CONSOLE_BTN_DOWN;
-	if (raw & (1u << 10))
-		buttons |= CONSOLE_BTN_LEFT;
-	if (raw & (1u << 11))
-		buttons |= CONSOLE_BTN_RIGHT;
-	return buttons;
-}
-
-static uint32_t console_poll_raw_buttons(void)
-{
-	static uint32_t stable;
-	static uint32_t reported;
-	static uint32_t previous_raw;
-	static uint32_t logged_raw;
-	static unsigned raw_count;
-	uint32_t raw = scan_keypad_sf2000();
-
-	if (raw != logged_raw)
-		logged_raw = raw;
-
-	if (raw == previous_raw) {
-		if (raw_count < 3u)
-			raw_count++;
-	} else {
-		previous_raw = raw;
-		raw_count = 0;
-	}
-
-	if (raw_count >= 2u)
-		stable = raw;
-	if (stable != reported)
-		reported = stable;
-	return console_buttons_from_normalized_keypad(stable);
 }
 
 static int console_handle_held_buttons(uint32_t held_buttons)
@@ -2758,12 +2678,10 @@ static void run_direct_console(unsigned *frame)
 
 		if (console_input_has_fd(input_fds)) {
 			console_poll_evdev_buttons(input_fds, &evdev_held);
-			changed |= console_handle_held_buttons(evdev_held |
-				console_poll_raw_buttons());
+			changed |= console_handle_held_buttons(evdev_held);
 		} else {
 			evdev_held = 0;
-			changed |= console_handle_held_buttons(
-				console_poll_raw_buttons());
+			changed |= console_handle_held_buttons(0);
 			if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
 				console_input_open_fds(input_fds);
 				input_retry = 0;

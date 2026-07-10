@@ -132,8 +132,8 @@ static bool sf2000_nommu_flat_kseg0_handoff(unsigned long *pc,
 	sf2000_identity_init_sp = CKSEG0ADDR(*sp);
 	*pc = sf2000_identity_init_pc;
 	*sp = sf2000_identity_init_sp;
-	*status |= ST0_ERL | ST0_IE;
-	*status &= ~(ST0_EXL | KU_MASK);
+	*status |= ST0_IE;
+	*status &= ~(ST0_ERL | ST0_EXL | KU_MASK);
 	sf2000_progress_mark("mips-start-thread-kseg0-pc", 9, *pc);
 	sf2000_progress_mark("mips-start-thread-kseg0-sp", 9, *sp);
 	sf2000_progress_mark("mips-start-thread-kseg0-status", 9, *status);
@@ -184,8 +184,8 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 		write_c0_errorepc(pc);
 		sf2000_progress_mark("mips-start-thread-errorepc-after", 9,
 			read_c0_errorepc());
-		sf2000_progress_mark("mips-start-thread-nommu-erl-pc", 9, pc);
-		sf2000_progress_mark("mips-start-thread-nommu-erl-sp", 9, sp);
+		sf2000_progress_mark("mips-start-thread-nommu-kseg0-pc", 9, pc);
+		sf2000_progress_mark("mips-start-thread-nommu-kseg0-sp", 9, sp);
 	}
 normal_user_status:
 	regs->cp0_status = status;

@@ -42,7 +42,16 @@ FEXPORT(__ret_from_irq)
 resume_userspace_check:
 	LONG_L	t0, PT_STATUS(sp)		# returning to kernel mode?
 	andi	t0, t0, KU_USER
+#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
+	bnez	t0, resume_userspace
+	LONG_L	t0, PT_EPC(sp)
+	li	t1, 0xfc000000
+	and	t0, t1
+	li	t1, 0x84000000
+	bne	t0, t1, resume_kernel
+#else
 	beqz	t0, resume_kernel
+#endif
 
 resume_userspace:
 	local_irq_disable		# make sure we dont miss an
@@ -208,7 +217,17 @@ FEXPORT(syscall_exit_partial)
 syscall_exit_work:
 	LONG_L	t0, PT_STATUS(sp)		# returning to kernel mode?
 	andi	t0, t0, KU_USER
+#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
+	bnez	t0, 1f
+	LONG_L	t0, PT_EPC(sp)
+	li	t1, 0xfc000000
+	and	t0, t1
+	li	t1, 0x84000000
+	bne	t0, t1, resume_kernel
+1:
+#else
 	beqz	t0, resume_kernel
+#endif
 	li	t0, _TIF_WORK_SYSCALL_EXIT
 	and	t0, a2			# a2 is preloaded with TI_FLAGS
 	beqz	t0, work_pending	# trace bit set?

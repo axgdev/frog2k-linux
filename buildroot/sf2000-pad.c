@@ -48,10 +48,10 @@
 #define PIN_L27 27u
 
 #define KEY_SHIFTER_BITS 16u
-#define KEY_SHIFTER_LOAD_US 4u
-#define KEY_SHIFTER_SETTLE_US 4u
-#define KEY_SHIFTER_CLOCK_LOW_US 3u
-#define KEY_SHIFTER_CLOCK_HIGH_US 3u
+#define KEY_SHIFTER_LOAD_SPINS 300u
+#define KEY_SHIFTER_SETTLE_SPINS 300u
+#define KEY_SHIFTER_CLOCK_LOW_SPINS 180u
+#define KEY_SHIFTER_CLOCK_HIGH_SPINS 180u
 #define POLL_INTERVAL_MS 20u
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -109,7 +109,8 @@ enum button_index {
 
 #define REBOOT_BUTTON_MASK BUTTON_BIT(SELECT)
 
-static volatile uint8_t *sysio;
+static volatile uint8_t *sysio_mapping;
+#define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
 static volatile sig_atomic_t stopping;
 
 static void log_line(const char *line)
@@ -126,14 +127,12 @@ static void log_line(const char *line)
 	(void)write(STDERR_FILENO, line, strlen(line));
 }
 
-static void sleep_us(unsigned usec)
+static void delay_spins(unsigned count)
 {
-	struct timespec ts;
+	volatile unsigned i;
 
-	ts.tv_sec = 0;
-	ts.tv_nsec = (long)usec * 1000L;
-	while (nanosleep(&ts, &ts) < 0 && errno == EINTR)
-		;
+	for (i = 0; i < count; i++)
+		__asm__ volatile ("nop");
 }
 
 static void sleep_ms(unsigned msec)
@@ -219,18 +218,18 @@ static uint32_t scan_sf2000(void)
 	gpio_l_set(PIN_L24, 1);
 	gpio_l_configure(PIN_L23, 1);
 	gpio_l_set(PIN_L23, 0);
-	sleep_us(KEY_SHIFTER_LOAD_US);
+	delay_spins(KEY_SHIFTER_LOAD_SPINS);
 	gpio_l_configure(PIN_L23, 0);
-	sleep_us(KEY_SHIFTER_SETTLE_US);
+	delay_spins(KEY_SHIFTER_SETTLE_SPINS);
 
 	for (i = 0; i < ARRAY_SIZE(buttons); i++) {
 		if (1 ^ gpio_l_get(PIN_L23))
 			raw_mask |= 1u << i;
 
 		gpio_l_set(PIN_L24, 0);
-		sleep_us(KEY_SHIFTER_CLOCK_LOW_US);
+		delay_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
 		gpio_l_set(PIN_L24, 1);
-		sleep_us(KEY_SHIFTER_CLOCK_HIGH_US);
+		delay_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
 	}
 
 	return raw_mask;
@@ -247,11 +246,11 @@ static uint32_t scan_stock_bits(void)
 	gpio_l_set(PIN_L27, 0);
 	gpio_l_set(PIN_L25, 0);
 	gpio_l_set(PIN_L26, 0);
-	sleep_us(KEY_SHIFTER_LOAD_US);
+	delay_spins(KEY_SHIFTER_LOAD_SPINS);
 
 	gpio_l_configure(PIN_L27, 0);
 	gpio_l_configure(PIN_L25, 0);
-	sleep_us(KEY_SHIFTER_SETTLE_US);
+	delay_spins(KEY_SHIFTER_SETTLE_SPINS);
 
 	for (i = 0; i < KEY_SHIFTER_BITS; i++) {
 		int raw0 = 1 ^ gpio_l_get(PIN_L27);
@@ -261,9 +260,9 @@ static uint32_t scan_stock_bits(void)
 			raw_mask |= 1u << gb300_stock_bit_for_shift[i];
 
 		gpio_l_set(PIN_L26, 0);
-		sleep_us(KEY_SHIFTER_CLOCK_LOW_US);
+		delay_spins(KEY_SHIFTER_CLOCK_LOW_SPINS);
 		gpio_l_set(PIN_L26, 1);
-		sleep_us(KEY_SHIFTER_CLOCK_HIGH_US);
+		delay_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
 	}
 
 	return normalize_stock_bits(raw_mask);
@@ -418,16 +417,16 @@ static int map_sysio(void)
 
 	if (fd < 0) {
 		log_line("sf2000-pad: using direct SYSIO mapping\n");
-		sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+		sysio_mapping = KSEG1ADDR(SYSIO_BASE_PHYS);
 		return 0;
 	}
 
-	sysio = mmap(NULL, SYSIO_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
+	sysio_mapping = mmap(NULL, SYSIO_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
 		fd, SYSIO_BASE_PHYS);
 	close(fd);
-	if (sysio == MAP_FAILED) {
+	if (sysio_mapping == MAP_FAILED) {
 		perror("mmap sysio");
-		sysio = KSEG1ADDR(SYSIO_BASE_PHYS);
+		sysio_mapping = KSEG1ADDR(SYSIO_BASE_PHYS);
 		log_line("sf2000-pad: using direct SYSIO mapping\n");
 		return 0;
 	}
@@ -490,8 +489,8 @@ int main(int argc, char **argv)
 
 	(void)ioctl(uinput_fd, UI_DEV_DESTROY);
 	close(uinput_fd);
-	if (sysio && sysio != KSEG1ADDR(SYSIO_BASE_PHYS))
-		munmap((void *)sysio, SYSIO_SIZE);
+	if (sysio_mapping && sysio_mapping != KSEG1ADDR(SYSIO_BASE_PHYS))
+		munmap((void *)sysio_mapping, SYSIO_SIZE);
 	log_line("sf2000-pad: stopped\n");
 	return 0;
 }

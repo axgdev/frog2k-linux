@@ -81,6 +81,7 @@ struct progress_log {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
+static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "sf2000", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = { "/etc/init.d/S05sf2000-storage", 0 };
 static char *const init_envp[] = {
@@ -93,6 +94,7 @@ static char *const init_envp[] = {
 	0
 };
 static unsigned long screen_stack[SERVICE_STACK_WORDS];
+static unsigned long pad_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_late_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
@@ -663,7 +665,8 @@ int main(void)
 		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
 		storage_started = 1;
 	}
-	log_message("sf2000_buildroot: screen owns keypad\n");
+	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
+		pad_stack);
 	diagnostic_watchdog_pet();
 	sleep_ms(50);
 	diagnostic_watchdog_pet();

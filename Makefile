@@ -49,6 +49,7 @@ BUILDROOT_INIT_CLONE := buildroot/sf2000-init-clone.S
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
 BUILDROOT_SUPERVISOR := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
+BUILDROOT_PAD_ENTRY := buildroot/sf2000-pad-entry.S
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
@@ -304,9 +305,10 @@ $(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) $(BUILDRO
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SUPERVISOR_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
-$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_PAD_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
+		-o '$@' '$(BUILDROOT_PAD_ENTRY)' '$(BUILDROOT_PAD_SRC)'
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
@@ -830,7 +832,7 @@ smoke-linux-asd: run-linux-asd
 
 run-linux-input: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 35; printf 'sendkey right 1000\n'; sleep 2; \
+	(sleep 5; printf 'sendkey right 1000\n'; sleep 1; \
 		printf 'sendkey x 1000\n'; sleep 2; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-display none -serial none -monitor stdio \
@@ -845,7 +847,7 @@ smoke-linux-input: run-linux-input
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 35; printf 'sendkey backspace 1000\n'; sleep 10; \
+	(sleep 10; printf 'sendkey backspace 3000\n'; sleep 8; \
 		printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_ROM_CPU_ARGS) -bios '$(BOOTROM_BUGFIX)' \
 		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \

@@ -36,6 +36,9 @@ NESTED(handle_sys, PT_SIZE, sp)
 	li	k0, __NR_O32_Linux + 162
 	beq	v0, k0, sf2000_syscall_irq_on
 	 nop
+	li	k0, __NR_O32_Linux + 166
+	beq	v0, k0, sf2000_syscall_irq_on
+	 nop
 	li	k0, __NR_O32_Linux + 118
 	beq	v0, k0, sf2000_syscall_irq_on
 	 nop
