@@ -880,6 +880,9 @@ run-linux-buildroot-asd:
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
+	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
@@ -1007,9 +1010,10 @@ run-linux-buildroot-display: qemu
 
 smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-display.console
-	grep -q 'sf2000-screen: panel init done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-pixel n=1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000-screen: gma console ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
 

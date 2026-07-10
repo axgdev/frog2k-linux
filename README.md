@@ -67,6 +67,11 @@ then verifies the same signature in QEMU's SD image. Linux QEMU runs default
 to the MIPS32r1 `4Km` fixed-mapping CPU model; `4Kc` models an R4000-style TLB
 and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 
+`smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
+the screen service's ready marker and rejects data-bus faults.
+`smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
+scanout and a captured 320x240 framebuffer.
+
 `smoke-qemu-board-contract` delegates to the sibling `external/sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
 storage snapshots queryable from the Linux workspace as well.

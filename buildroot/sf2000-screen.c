@@ -244,9 +244,12 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
 #endif
 
-static volatile uint8_t *gma_ram;
-static volatile uint8_t *gma;
-static volatile uint8_t *sysio;
+static volatile uint8_t *gma_ram_mapping;
+static volatile uint8_t *gma_mapping;
+static volatile uint8_t *sysio_mapping;
+#define gma_ram (gma_ram_mapping ? gma_ram_mapping : KSEG1ADDR(GMA_RAM_PHYS))
+#define gma (gma_mapping ? gma_mapping : KSEG1ADDR(GMA_MMIO_PHYS))
+#define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_PHYS))
 static volatile int stopping;
 static int panel_enabled = 1;
 static int led_enabled = 1;
@@ -937,9 +940,9 @@ static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
 
 static void map_regions_direct(void)
 {
-	gma_ram = KSEG1ADDR(GMA_RAM_PHYS);
-	gma = KSEG1ADDR(GMA_MMIO_PHYS);
-	sysio = KSEG1ADDR(SYSIO_PHYS);
+	gma_ram_mapping = KSEG1ADDR(GMA_RAM_PHYS);
+	gma_mapping = KSEG1ADDR(GMA_MMIO_PHYS);
+	sysio_mapping = KSEG1ADDR(SYSIO_PHYS);
 	log_line("sf2000-screen: using direct MMIO mappings\n");
 }
 
@@ -2915,9 +2918,12 @@ int main(int argc, char **argv, char **envp)
 		map_regions_direct();
 		progress_mark("screen-map-direct", 0x3fu, SCREEN_TAG);
 	} else {
-		if (map_region(fd, &gma_ram, GMA_RAM_PHYS, GMA_RAM_SIZE, "gma-ram") != 0 ||
-				map_region(fd, &gma, GMA_MMIO_PHYS, GMA_MMIO_SIZE, "gma") != 0 ||
-				map_region(fd, &sysio, SYSIO_PHYS, SYSIO_SIZE, "sysio") != 0) {
+		if (map_region(fd, &gma_ram_mapping, GMA_RAM_PHYS,
+				GMA_RAM_SIZE, "gma-ram") != 0 ||
+				map_region(fd, &gma_mapping, GMA_MMIO_PHYS,
+					GMA_MMIO_SIZE, "gma") != 0 ||
+				map_region(fd, &sysio_mapping, SYSIO_PHYS,
+					SYSIO_SIZE, "sysio") != 0) {
 			close(fd);
 			map_regions_direct();
 			progress_mark("screen-map-fallback", 0x3fu, SCREEN_TAG);
