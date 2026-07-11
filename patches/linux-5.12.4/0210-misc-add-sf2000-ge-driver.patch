@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,313 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -108,6 +108,10 @@
 +
 +	/* HC15xx clock gates are active high: clear the bit to enable GE. */
 +	writel(value & ~SF2000_SYS_GE_GATE, ge->sys + SF2000_SYS_GATE1);
++	value = readl(ge->sys + SF2000_SYS_CLK);
++	value &= ~(3u << SF2000_SYS_GE_CLK_SHIFT);
++	value |= 3u << SF2000_SYS_GE_CLK_SHIFT;
++	writel(value, ge->sys + SF2000_SYS_CLK);
 +}
 +
 +static void sf2000_ge_hw_reset(struct sf2000_ge *ge)
