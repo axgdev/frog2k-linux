@@ -2510,6 +2510,8 @@ static void ge_copy_render_to_scanout(void)
 {
 	hcge_state *state;
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
+	bool submitted;
+	int sync_ret = -1;
 
 	if (!display_ge)
 		return;
@@ -2531,8 +2533,19 @@ static void ge_copy_render_to_scanout(void)
 	hcge_set_state(display_ge, state, state->accel);
 	if (!display_ge_frames)
 		progress_mark("screen-ge-submit", 0x3fu, SCREEN_TAG);
-	if (!hcge_blit(display_ge, &source, 0, 0) ||
-	    hcge_engine_sync(display_ge) != 0) {
+	submitted = hcge_blit(display_ge, &source, 0, 0);
+	if (!display_ge_frames)
+		progress_mark(submitted ? "screen-ge-submit-ok" :
+			"screen-ge-submit-fail", 0x3fu, SCREEN_TAG);
+	if (submitted) {
+		if (!display_ge_frames)
+			progress_mark("screen-ge-sync", 0x3fu, SCREEN_TAG);
+		sync_ret = hcge_engine_sync(display_ge);
+		if (!display_ge_frames)
+			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
+				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
+	}
+	if (!submitted || sync_ret != 0) {
 		memcpy((void *)(gma_ram + GMA_FRAME_OFF),
 			(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
 		log_line("sf2000-screen: GE present failed, copied on CPU\n");

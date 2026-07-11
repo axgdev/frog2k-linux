@@ -129,7 +129,10 @@ int hcge_open_context(hcge_context *ctx)
 	ctx->cmdq_buf_phyaddr = queue.addr + 1056u;
 	ctx->cmdq_buf_size = queue.size - 1056u;
 	ctx->clut_tbl_paddr = queue.addr + 32u;
-	if (ioctl(fd, HCGE_REQUEST_IRQ, 0) < 0) {
+	/* Match the vendor runtime's required hardware bring-up order. */
+	if (ioctl(fd, HCGE_RESET, 0) < 0 ||
+	    ioctl(fd, HCGE_SET_CLOCK, 3ul) < 0 ||
+	    ioctl(fd, HCGE_REQUEST_IRQ, 0) < 0) {
 		int error = errno ? -errno : -EIO;
 
 		close(fd);

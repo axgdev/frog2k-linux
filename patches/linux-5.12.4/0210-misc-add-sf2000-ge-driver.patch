@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,309 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -51,8 +51,10 @@
 +#define SF2000_GE_START_HQ	BIT(1)
 +#define SF2000_GE_STATUS_BUSY	BIT(31)
 +
++#define SF2000_SYS_GATE1	0x64
 +#define SF2000_SYS_CLK		0x7c
 +#define SF2000_SYS_RESET		0x80
++#define SF2000_SYS_GE_GATE	BIT(4)
 +#define SF2000_SYS_GE_RESET	BIT(4)
 +#define SF2000_SYS_GE_CLK_SHIFT	18
 +
@@ -100,10 +102,19 @@
 +	bool irq_requested;
 +};
 +
++static void sf2000_ge_clock_enable(struct sf2000_ge *ge)
++{
++	u32 value = readl(ge->sys + SF2000_SYS_GATE1);
++
++	/* HC15xx clock gates are active high: clear the bit to enable GE. */
++	writel(value & ~SF2000_SYS_GE_GATE, ge->sys + SF2000_SYS_GATE1);
++}
++
 +static void sf2000_ge_hw_reset(struct sf2000_ge *ge)
 +{
 +	u32 value = readl(ge->sys + SF2000_SYS_RESET);
 +
++	sf2000_ge_clock_enable(ge);
 +	writel(value | SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
 +	udelay(10);
 +	writel(value & ~SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
@@ -158,6 +169,9 @@
 +		return 0;
 +	case HCGE_RESET:
 +		sf2000_ge_hw_reset(ge);
++		value = readl(ge->regs + SF2000_GE_CTRL);
++		value |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
++		writel(value, ge->regs + SF2000_GE_CTRL);
 +		memset(ge->queue, 0, SF2000_GE_QUEUE_SIZE);
 +		ctx->phy_addr_min = (u32)ge->queue_dma + sizeof(*ctx);
 +		ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
@@ -268,6 +282,7 @@
 +	ge->irq = platform_get_irq(pdev, 0);
 +	if (ge->irq < 0)
 +		return ge->irq;
++	sf2000_ge_clock_enable(ge);
 +	sf2000_ge_hw_reset(ge);
 +	ctrl = readl(ge->regs + SF2000_GE_CTRL);
 +	ctrl |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
