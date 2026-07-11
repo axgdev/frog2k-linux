@@ -72,6 +72,12 @@ static uint32_t hcge_rgb565(HCGEColor color)
 		((uint32_t)(color.g & 0xfcu) << 3) | color.b >> 3;
 }
 
+static uint32_t hcge_argb8888(HCGEColor color)
+{
+	return (uint32_t)color.a << 24 | (uint32_t)color.r << 16 |
+		(uint32_t)color.g << 8 | color.b;
+}
+
 static bool hcge_rgb16_surface_valid(const HCGE_CoreSurface *surface,
 	const HCGE_CoreSurfaceBuffer *buffer)
 {
@@ -276,6 +282,47 @@ bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 	node[6] = hcge_xy(dx, dy);
 	node[7] = hcge_wh(source->w, source->h);
 	node[8] = hcge_xy(source->x, source->y);
+	return hcge_linux_submit(ctx, node, sizeof(node) / sizeof(node[0])) == 0;
+}
+
+bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
+	HCGERectangle *destination)
+{
+	const hcge_state *state;
+	uint32_t node[22];
+
+	if (!ctx || !hcge_rectangle_valid(source) ||
+	    !hcge_rectangle_valid(destination) || source->x || source->y ||
+	    destination->x || destination->y)
+		return false;
+	state = &ctx->state;
+	if (state->accel != HCGE_DFXL_STRETCHBLIT ||
+	    state->blittingflags != HCGE_DSBLIT_NOFX ||
+	    !hcge_rgb16_surface_valid(&state->destination, &state->dst) ||
+	    !hcge_rgb16_surface_valid(&state->source, &state->src))
+		return false;
+	node[0] = 0x0206870fu;
+	node[1] = 0x00a03009u;
+	node[2] = (uint32_t)state->dst.phys;
+	node[3] = hcge_rgb16_buffer(state->dst.pitch);
+	node[4] = node[2];
+	node[5] = node[3];
+	node[6] = (uint32_t)state->src.phys;
+	node[7] = 0x40000000u | hcge_rgb16_buffer(state->src.pitch);
+	node[8] = 0;
+	node[9] = hcge_wh(destination->w, destination->h);
+	node[10] = 0;
+	node[11] = 0;
+	node[12] = hcge_wh(source->w, source->h);
+	node[13] = 0x00004000u;
+	node[14] = hcge_argb8888(state->color);
+	node[15] = 0x00000080u;
+	node[16] = ((uint32_t)source->w << 16) / (uint32_t)destination->w;
+	node[17] = 0;
+	node[18] = (uint32_t)source->w << 15;
+	node[19] = 0;
+	node[20] = ((uint32_t)source->h << 16) / (uint32_t)destination->h;
+	node[21] = (uint32_t)source->h << 15;
 	return hcge_linux_submit(ctx, node, sizeof(node) / sizeof(node[0])) == 0;
 }
 

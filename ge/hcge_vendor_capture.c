@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 
@@ -145,12 +146,22 @@ static void dump_nodes(const char *operation, hcge_context *ctx)
 	putchar('\n');
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	hcge_context *ctx;
 	hcge_state state;
 	HCGERectangle source = { 4, 6, 64, 48 };
 	HCGERectangle destination = { 10, 12, 160, 120 };
+	int *coordinates[] = {
+		&source.x, &source.y, &source.w, &source.h,
+		&destination.x, &destination.y, &destination.w, &destination.h,
+	};
+	unsigned int coordinate;
+
+	if (argc != 1 && argc != 9)
+		return 2;
+	for (coordinate = 0; coordinate < 8 && argc == 9; coordinate++)
+		*coordinates[coordinate] = (int)strtol(argv[coordinate + 1], NULL, 0);
 
 	memset(fake_queue, 0, sizeof(fake_queue));
 	if (hcge_open(&ctx) != 0 || !ctx)
