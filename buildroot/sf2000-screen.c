@@ -78,6 +78,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define SYS_VIDEO_SRC0_OFF 0x444u
 #define SYS_VIDEO_SRC1_OFF 0x448u
 #define SYS_VIDEO_SRC2_OFF 0x44cu
+#define SYS_RGB_CLK_INV_OFF 0x71cu
 #define VOU_HD_MODE 0x000u
 #define VOU_HD_TIMING0 0x004u
 #define VOU_HD_TIMING1 0x008u
@@ -2617,6 +2618,57 @@ static void present_frame(void)
 	present_frame_profile(&gma_scanout_profiles[3]);
 }
 
+static void run_rgb_probe_matrix(unsigned *frame)
+{
+	static const struct {
+		const char *label;
+		uint8_t profile;
+		uint8_t clock_invert;
+		int8_t panel_profile;
+	} probes[] = {
+		{ "P0 PRIMARY SDK CLK0", 3, 0, -1 },
+		{ "P1 BOTH SDK CLK0", 5, 0, -1 },
+		{ "P2 ALT SDK CLK0", 4, 0, -1 },
+		{ "P3 PRIMARY SDK CLK1", 3, 1, -1 },
+		{ "P4 BOTH SDK CLK1", 5, 1, -1 },
+		{ "P5 PRIMARY BYPASS", 0, 0, -1 },
+		{ "P6 PANEL SF2000", 3, 0, 0 },
+		{ "P7 PANEL RAMCTRL", 3, 0, 2 },
+		{ "P8 PANEL HCLINUX", 3, 0, 3 },
+	};
+	unsigned i;
+
+	for (i = 0; i < ARRAY_SIZE(probes) && !stopping; i++) {
+		uint32_t clk = mmio_read32(sysio, SYS_RGB_CLK_INV_OFF);
+
+		clk &= ~(1u << 30);
+		clk |= (uint32_t)probes[i].clock_invert << 30;
+		mmio_write32(sysio, SYS_RGB_CLK_INV_OFF, clk);
+		if (probes[i].panel_profile >= 0)
+			panel_apply_rgb_mode_profile(&panel_rgb_mode_profiles[
+				(unsigned)probes[i].panel_profile]);
+		console_add_line(probes[i].label);
+		draw_console_screen(++*frame);
+		panel_rgb_pinmux();
+		progress_mark("screen-rgb-probe", 0x3fu,
+			(i << 24) | (probes[i].profile << 16) |
+			(probes[i].clock_invert << 8) |
+			(uint8_t)probes[i].panel_profile);
+		present_frame_profile(&gma_scanout_profiles[probes[i].profile]);
+		watchdog_pet();
+		sleep_ms(1400);
+	}
+
+	mmio_write32(sysio, SYS_RGB_CLK_INV_OFF,
+		mmio_read32(sysio, SYS_RGB_CLK_INV_OFF) & ~(1u << 30));
+	panel_apply_rgb_mode_profile(&panel_rgb_mode_profiles[0]);
+	console_add_line("RGB PROBE COMPLETE");
+	draw_console_screen(++*frame);
+	panel_rgb_pinmux();
+	present_frame();
+	progress_mark("screen-rgb-probe-done", 0x3fu, SCREEN_TAG);
+}
+
 static int env_is(const char *const *envp, const char *name, const char *value)
 {
 	size_t name_len = strlen(name);
@@ -2792,6 +2844,7 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
+	run_rgb_probe_matrix(frame);
 	log_gma_ready();
 
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
