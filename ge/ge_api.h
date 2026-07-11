@@ -542,6 +542,7 @@ typedef struct hcge_context {
 } hcge_context;
 
 int hcge_open(hcge_context **pctx);
+int hcge_open_context(hcge_context *ctx);
 void hcge_close(hcge_context *ctx);
 void hcge_hw_reset(hcge_context *ctx);
 void hcge_reset(struct hcge_context *ctx);

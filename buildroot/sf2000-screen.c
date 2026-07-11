@@ -18,6 +18,8 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+#include "ge_api.h"
+
 extern char **environ;
 
 static void progress_mark(const char *name, uint32_t kind, uint32_t value);
@@ -43,8 +45,10 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
 #define GMA_FRAME_PHYS (GMA_RAM_PHYS + 0x00010000u)
+#define GMA_RENDER_PHYS (GMA_RAM_PHYS + 0x00040000u)
 #define GMA_DESC_OFF (GMA_DESC_PHYS - GMA_RAM_PHYS)
 #define GMA_FRAME_OFF (GMA_FRAME_PHYS - GMA_RAM_PHYS)
+#define GMA_RENDER_OFF (GMA_RENDER_PHYS - GMA_RAM_PHYS)
 
 #define GMA_MMIO_PHYS 0x18808000u
 #define GMA_MMIO_SIZE 0x1000u
@@ -256,6 +260,9 @@ static unsigned console_line_start;
 static unsigned console_view_offset;
 
 static uint16_t *framebuffer(void);
+static hcge_context *display_ge;
+static hcge_context display_ge_storage;
+static unsigned display_ge_frames;
 static void panel_restart_frame(void);
 
 struct glyph {
@@ -1985,7 +1992,8 @@ static const uint8_t *glyph_for(char ch)
 
 static uint16_t *framebuffer(void)
 {
-	return (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	return (uint16_t *)(gma_ram +
+		(display_ge ? GMA_RENDER_OFF : GMA_FRAME_OFF));
 }
 
 static void put_pixel(unsigned x, unsigned y, uint16_t color)
@@ -2470,6 +2478,65 @@ static void flush_present_memory(void)
 	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
 }
 
+static void ge_display_open(void)
+{
+	char line[96];
+	int ret;
+
+	ret = hcge_open_context(&display_ge_storage);
+	if (ret == 0) {
+		display_ge = &display_ge_storage;
+		log_line("sf2000-screen: GE RGB565 compositor ready\n");
+		progress_mark("screen-ge-open-ok", 0x3fu, SCREEN_TAG);
+	} else {
+		snprintf(line, sizeof(line),
+			"sf2000-screen: GE unavailable ret=%d errno=%d, using direct framebuffer\n",
+			ret, errno);
+		log_line(line);
+		progress_mark("screen-ge-open-fail", 0x3fu, (uint32_t)ret);
+	}
+}
+
+static void ge_copy_render_to_scanout(void)
+{
+	hcge_state *state;
+	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
+
+	if (!display_ge)
+		return;
+	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	state = &display_ge->state;
+	memset(state, 0, sizeof(*state));
+	state->render_options = HCGE_DSRO_NONE;
+	state->drawingflags = HCGE_DSDRAW_NOFX;
+	state->blittingflags = HCGE_DSBLIT_NOFX;
+	state->destination.config.format = HCGE_DSPF_RGB16;
+	state->destination.config.size.w = WIDTH;
+	state->destination.config.size.h = HEIGHT;
+	state->source = state->destination;
+	state->dst.phys = GMA_FRAME_PHYS;
+	state->dst.pitch = PITCH;
+	state->src.phys = GMA_RENDER_PHYS;
+	state->src.pitch = PITCH;
+	state->accel = HCGE_DFXL_BLIT;
+	hcge_set_state(display_ge, state, state->accel);
+	if (!display_ge_frames)
+		progress_mark("screen-ge-submit", 0x3fu, SCREEN_TAG);
+	if (!hcge_blit(display_ge, &source, 0, 0) ||
+	    hcge_engine_sync(display_ge) != 0) {
+		memcpy((void *)(gma_ram + GMA_FRAME_OFF),
+			(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
+		log_line("sf2000-screen: GE present failed, copied on CPU\n");
+		progress_mark("screen-ge-present-fail", 0x3fu, SCREEN_TAG);
+	} else {
+		display_ge_frames++;
+		if (display_ge_frames == 1u) {
+			log_line("sf2000-screen: first GE frame complete\n");
+			progress_mark("screen-ge-frame-ok", 0x3fu, SCREEN_TAG);
+		}
+	}
+}
+
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 {
 	uint32_t value = mmio_read32(gma, off);
@@ -2485,6 +2552,7 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 
 static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
+	ge_copy_render_to_scanout();
 	flush_present_memory();
 	mmio_write32(gma, GMA_MASK, 1);
 	mmio_write32(gma, GMA_LINEBUF, profile->linebuf);
@@ -2672,13 +2740,15 @@ static void run_direct_console(unsigned *frame)
 	console_input_open_fds(input_fds);
 	draw_console_screen(++*frame);
 	panel_push_frame(0);
+	panel_prepare_rgb_frame();
+	present_frame();
 	log_gma_ready();
 
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		console_add_line("open /dev/kmsg failed");
 		draw_console_screen(++*frame);
-		panel_push_frame(0);
+		present_frame();
 	}
 	publish_screen_ready_and_storage("direct-console\n");
 
@@ -2715,7 +2785,7 @@ static void run_direct_console(unsigned *frame)
 
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
 			draw_console_screen(++*frame);
-			panel_push_frame(0);
+			present_frame();
 			idle = 0;
 		} else {
 			idle++;
@@ -2875,6 +2945,7 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 	map_framebuffer_device();
+	ge_display_open();
 
 	{
 #ifdef PANEL_PROBE_INIT
