@@ -1526,6 +1526,8 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_VPO_AUX, 0);
 
 	value = mmio_read32(gma, VOU_VPO_CTRL);
+	/* The display-on lifecycle restores these after the vendor open stage. */
+	value |= (1u << 21) | (1u << 16);
 	value &= ~1u;         /* vendor commits the VPO update */
 	mmio_write32(gma, VOU_VPO_CTRL, value);
 	progress_mark("screen-vpo-after-90", 0x3fu, value);
@@ -2519,7 +2521,6 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 	d0 |= 1u;       /* is_last_block */
 	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
 	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
-	d0 |= 1u << 11; /* premultiply: hc16xx_fb probe default */
 	d0 |= 1u << 12; /* BT.709 enhancement coefficients */
 	return d0;
 }
@@ -2701,31 +2702,51 @@ static void run_rgb_probe_matrix(unsigned *frame)
 {
 	static const struct {
 		const char *label;
-		uint8_t source;
+		uint32_t set;
+		uint32_t clear;
 	} probes[] = {
-		{ "S0 RGB SOURCE FXDE", 0 },
-		{ "S1 RGB SOURCE 4KDE", 1 },
-		{ "S2 RGB SOURCE RESERVED", 2 },
-		{ "S3 RGB SOURCE HDMI PQ", 3 },
+		{ "A0 VENDOR RGB565", 0, (1u << 1) | (1u << 11) },
+		{ "A1 ALPHA CLOSED", 1u << 1, 1u << 11 },
+		{ "A2 NO COLOR BY COLOR", 0, (1u << 8) | (1u << 11) },
+		{ "A3 PREMULTIPLY", 1u << 11, 1u << 1 },
 	};
 	unsigned i;
 
 	for (i = 0; i < ARRAY_SIZE(probes) && !stopping; i++) {
+		uint32_t d0;
+
 		console_add_line(probes[i].label);
 		draw_console_screen(++*frame);
+		build_gma_descriptor();
+		d0 = ((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[0];
+		d0 &= ~probes[i].clear;
+		d0 |= probes[i].set;
+		write_desc32(0, d0);
 		panel_rgb_pinmux();
-		panel_rgb_source_select(probes[i].source);
+		panel_rgb_source_select(0);
 		progress_mark("screen-rgb-probe", 0x3fu,
-			(i << 24) | (probes[i].source << 16) |
-			((mmio_read32(sysio, SYS_VIDEO_SRC1_OFF) >> 18) & 3u));
+			d0);
 		present_frame();
 		watchdog_pet();
 		sleep_ms(2200);
 	}
 
+	/*
+	 * An observable control experiment independent of DE/GMA: reclaim the
+	 * multiplexed bus and rewrite the panel GRAM from the CPU after the RGB
+	 * probes.  If this appears, execution and the panel remain healthy.
+	 */
+	console_add_line("CPU RECOVERY AFTER RGB");
+	draw_console_screen(++*frame);
+	progress_mark("screen-cpu-recovery-begin", 0x3fu, SCREEN_TAG);
+	panel_push_frame(0);
+	progress_mark("screen-cpu-recovery-done", 0x3fu, SCREEN_TAG);
+	sleep_ms(2200);
+
 	panel_rgb_source_select(0);
 	console_add_line("RGB PROBE COMPLETE");
 	draw_console_screen(++*frame);
+	build_gma_descriptor();
 	panel_rgb_pinmux();
 	present_frame();
 	progress_mark("screen-rgb-probe-done", 0x3fu, SCREEN_TAG);
