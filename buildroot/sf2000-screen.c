@@ -69,6 +69,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define SYS_CLOCK_GATE1_OFF 0x064u
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_SFCLK_OFF 0x07cu
+#define SYS_RESET1_OFF 0x084u
 #define SYS_LCD_SETUP_OFF 0x094u
 #define SYS_IO_VOLTAGE_OFF 0x184u
 #define SYS_LVDS_PHY_OFF 0x440u
@@ -1400,6 +1401,13 @@ static void panel_rgb_output_mux_enable(void)
 
 	panel_rgb_clock_enable();
 
+	/* The boot path can leave the TTL/LVDS register bank in reset. */
+	value = mmio_read32(sysio, SYS_RESET1_OFF);
+	mmio_write32(sysio, SYS_RESET1_OFF, value | (1u << 8));
+	sleep_ms(1);
+	mmio_write32(sysio, SYS_RESET1_OFF, value & ~(1u << 8));
+	watchdog_pet();
+
 	strap = mmio_read32(sysio, SYS_LCD_SETUP_OFF);
 	strap &= 0x0fffffffu;
 	strap |= 2u << 28; /* LVDS_IO_TTL_SEL_RGB565 */
@@ -1968,11 +1976,17 @@ static void panel_prepare_rgb_frame(void)
 	if (!panel_enabled)
 		return;
 	watchdog_pet();
+	progress_mark("screen-rgb-control-mux", 0x3fu, SCREEN_TAG);
 	panel_control_pinmux();
+	progress_mark("screen-rgb-output-config", 0x3fu, SCREEN_TAG);
 	panel_config_outputs();
+	progress_mark("screen-rgb-bus-idle", 0x3fu, SCREEN_TAG);
 	panel_bus_idle();
+	progress_mark("screen-rgb-ramwr", 0x3fu, SCREEN_TAG);
 	panel_restart_frame();
+	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
 	panel_rgb_pinmux();
+	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
 	watchdog_pet();
 }
 
