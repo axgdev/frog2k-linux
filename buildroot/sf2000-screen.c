@@ -87,12 +87,13 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define VOU_HD_CTRL 0x084u
 #define VOU_HD_TIMING4 0x088u
 #define VOU_HD_TIMING5 0x08cu
-#define VOU_VPO_CTRL 0x090u
-#define VOU_VPO_PHASE 0x094u
-#define VOU_VPO_COEF 0x098u
-#define VOU_VPO_FORMAT 0x09cu
-#define VOU_VPO_WIDTH 0x0b8u
-#define VOU_VPO_AUX 0x0dcu
+/* libviddrv's VPO accessors add 0x100 to their logical register offsets. */
+#define VOU_VPO_CTRL 0x190u
+#define VOU_VPO_PHASE 0x194u
+#define VOU_VPO_COEF 0x198u
+#define VOU_VPO_FORMAT 0x19cu
+#define VOU_VPO_WIDTH 0x1b8u
+#define VOU_VPO_AUX 0x1dcu
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_B_OFF 0x4c0u
 #define PINMUX_R_OFF 0x4e0u
