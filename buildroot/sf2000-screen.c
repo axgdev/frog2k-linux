@@ -53,6 +53,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_MMIO_PHYS 0x18808000u
 #define GMA_MMIO_SIZE 0x1000u
 #define GMA_CTL 0x300u
+#define GMA_CTL_HW 0xb00u
 #define GMA_DMBA 0x304u
 #define GMA_DMBA_ALT 0x384u
 #define GMA_K 0x308u
@@ -2591,6 +2592,8 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 
 static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
+	static int logged_hw_state;
+
 	ge_copy_render_to_scanout();
 	flush_present_memory();
 	mmio_write32(gma, GMA_MASK, 1);
@@ -2604,11 +2607,21 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	mmio_write32(gma, GMA_MASK, 0);
 	gma_set_bit(GMA_CTL, 1u << 19, !profile->sdk_enhance);
 	gma_set_bit(GMA_CTL, 1u << 18, profile->sdk_enhance);
+	if (!logged_hw_state) {
+		progress_mark("screen-gma-ctl", 0x3fu,
+			mmio_read32(gma, GMA_CTL));
+		progress_mark("screen-gma-ctl-hw", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+		progress_mark("screen-gma-dmba", 0x3fu,
+			mmio_read32(gma, GMA_DMBA));
+		logged_hw_state = 1;
+	}
 }
 
 static void present_frame(void)
 {
-	present_frame_profile(&gma_scanout_profiles[0]);
+	/* hc16xx_fb uses CSC mode with enhancement enabled for RGB565. */
+	present_frame_profile(&gma_scanout_profiles[3]);
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
