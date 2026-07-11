@@ -169,6 +169,9 @@ MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
 GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libge.a
 GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
+GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
+GE_VENDOR_NODE_TEST := $(BUILD_DIR)/hcge-vendor-node-test
+GE_ELF_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc.br_real
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
@@ -198,7 +201,8 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
-	smoke-linux-buildroot-reset-restore reverse-ge clean
+	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
+	test-ge-node-vendor clean
 
 all: status
 
@@ -236,6 +240,23 @@ reverse-ge:
 		'$(READELF_MIPS)' --debug-dump=info "$$obj" > "$$obj.dwarf"; \
 		'$(NM_MIPS)' -C --defined-only "$$obj" > "$$obj.symbols"; \
 	done
+
+$(GE_NODE_TEST): ge/hcge_node.c ge/hcge_node.h ge/hcge_node_test.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Ige \
+		-o '$@' ge/hcge_node.c ge/hcge_node_test.c
+
+test-ge-node: $(GE_NODE_TEST)
+	'$(GE_NODE_TEST)'
+
+$(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
+		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge
+	'$(GE_ELF_CC)' -std=c99 -O2 -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections -static -Ige -o '$@' ge/hcge_node.c \
+		ge/hcge_vendor_compare.c '$(GE_REVERSE_DIR)'/hcge_node_ctx.c.o
+
+test-ge-node-vendor: $(GE_VENDOR_NODE_TEST)
+	qemu-mipsel '$(GE_VENDOR_NODE_TEST)'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
@@ -845,7 +866,11 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
 
-linux-asd: $(LINUX_ASD)
+linux-asd: $(LINUX_ASD) $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
+		$(SDCARD_FASTBOOT_BIN) $(SDCARD_CHECKSUMS)
+	cmp '$(LINUX_ASD)' '$(SDCARD_LINUX_ASD)'
+	cmp '$(LINUX_ASD)' '$(SDCARD_BIOS_ASD)'
+	cd '$(BUILD_DIR)/sdcard' && sha256sum -c SHA256SUMS
 
 linux-buildroot:
 	$(MAKE) ROOTFS=buildroot linux

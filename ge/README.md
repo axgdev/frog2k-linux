@@ -35,7 +35,14 @@ QEMU already recognizes the register block, captures real command queues, and
 executes the basic node forms used by stock firmware. It still needs exact
 execution for every optional node group and pixel format.
 
-The remaining work is the clean userspace node builder. Reconstruction order:
+The clean source tree now includes the complete command-node serializer. It
+handles all twenty hardware group bits, including the four high-address base
+records and the 512-byte filter group. `make test-ge-node-vendor` executes the
+surviving MIPS vendor serializer under qemu-user and byte-compares its complete
+172-word output with the source implementation.
+
+The remaining work is populating the recovered node context from public API
+state and executing every group exactly in system QEMU. Reconstruction order:
 
 1. `FILLRECTANGLE` with RGB565 and ARGB destinations;
 2. same-format direct `BLIT`;
