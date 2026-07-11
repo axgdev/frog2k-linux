@@ -149,6 +149,7 @@ SDCARD_FASTBOOT_BIN := $(BUILD_DIR)/sdcard/firmware/unifrog.bin
 SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
+SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
@@ -737,7 +738,10 @@ $(SDCARD_LINUX_ASD): $(LINUX_ASD)
 
 $(SDCARD_BIOS_ASD): $(LINUX_ASD)
 	mkdir -p '$(dir $@)'
-	cp '$<' '$@'
+	cp '$<' '$@.tmp'
+	cmp '$<' '$@.tmp'
+	'$(ASDPACK)' --check '$@.tmp'
+	mv '$@.tmp' '$@'
 
 $(SDCARD_FASTBOOT_BIN): $(LINUX_LOADER_BIN)
 	mkdir -p '$(dir $@)'
@@ -815,6 +819,11 @@ $(SDCARD_LOG_TXT): Makefile
 	mkdir -p '$(dir $@)'
 	dd if=/dev/zero of='$@' bs=262144 count=1 >/dev/null 2>&1
 
+$(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
+		$(SDCARD_FASTBOOT_BIN)
+	cd '$(BUILD_DIR)/sdcard' && sha256sum bios/bisrv.asd \
+		firmware/linux.asd firmware/unifrog.bin > SHA256SUMS
+
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
 
@@ -827,7 +836,8 @@ linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot linux-asd
 
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
-		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS) $(SDCARD_LOG_TXT)
+		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS) $(SDCARD_LOG_TXT) \
+		$(SDCARD_CHECKSUMS)
 
 sdcard-buildroot:
 	$(MAKE) ROOTFS=buildroot sdcard-linux

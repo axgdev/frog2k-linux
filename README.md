@@ -13,6 +13,9 @@ The goal is a small, fast iteration loop:
 
 Generated files stay under `build/`. Large vendor trees are referenced through
 local links instead of copied into this repository.
+`sdcard-linux` also writes `build/sdcard/SHA256SUMS`; verify the files again
+after copying them to removable media when a staged and direct ASD appear to
+behave differently.
 
 ## Local References
 
