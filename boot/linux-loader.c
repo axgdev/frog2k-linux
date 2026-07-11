@@ -60,9 +60,9 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
-#define PROGRESS_DUMP_ENTRIES 256u
+#define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-07-11 early-marker-bounded-recovery"
+#define LOADER_BUILD_TAG "2026-07-11 complete-marker-recovery"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;

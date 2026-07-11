@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,294 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -64,10 +64,16 @@
 +#define HCGE_GET_CMDQ_BUFINFO	_IO(HCGE_IOCBASE, 0x05)
 +#define HCGE_SET_CLOCK		_IO(HCGE_IOCBASE, 0x06)
 +#define HCGE_GET_GE_REGISTER	_IO(HCGE_IOCBASE, 0x07)
++#define HCGE_SUBMIT		_IO(HCGE_IOCBASE, 0x08)
 +
 +struct hcge_cmdq_buf_info {
 +	u32 addr;
 +	u32 size;
++};
++
++struct hcge_submit {
++	u32 data;
++	u32 length;
 +};
 +
 +struct hcge_cmdq_node_ctx {
@@ -185,6 +191,31 @@
 +		value = 0x18806000u;
 +		return copy_to_user((void __user *)arg, &value, sizeof(value)) ?
 +			-EFAULT : 0;
++	case HCGE_SUBMIT: {
++		struct hcge_submit submit;
++		u32 offset = sizeof(*ctx);
++		u32 first;
++		u32 last;
++
++		if (copy_from_user(&submit, (void __user *)arg, sizeof(submit)))
++			return -EFAULT;
++		if (!submit.data || (submit.length & 3u) || !submit.length ||
++		    submit.length > SF2000_GE_QUEUE_SIZE - offset)
++			return -EINVAL;
++		if (copy_from_user((u8 *)ge->queue + offset,
++				   (void __user *)(unsigned long)submit.data,
++				   submit.length))
++			return -EFAULT;
++		first = (u32)ge->queue_dma + offset;
++		last = first + submit.length - sizeof(u32);
++		reinit_completion(&ge->done);
++		ctx->is_finish = 0;
++		wmb();
++		writel(first, ge->regs + SF2000_GE_HQ_FIRST);
++		writel(last, ge->regs + SF2000_GE_HQ_LAST);
++		writel(SF2000_GE_START_HQ, ge->regs + SF2000_GE_START);
++		return 0;
++	}
 +	default:
 +		return -ENOTTY;
 +	}
