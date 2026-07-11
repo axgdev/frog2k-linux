@@ -1394,10 +1394,8 @@ static void panel_rgb_clock_enable(void)
 
 static void panel_rgb_output_mux_enable(void)
 {
-	volatile uint8_t *lvds = KSEG1ADDR(LVDS_RGB_PHYS);
 	uint32_t strap;
 	uint32_t value;
-	unsigned ch;
 
 	panel_rgb_clock_enable();
 
@@ -1431,16 +1429,13 @@ static void panel_rgb_output_mux_enable(void)
 	value &= 0xf000f888u; /* RGB565 lanes from FXDE, rgb order */
 	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
 
-	for (ch = 0; ch < 2; ch++) {
-		uint32_t base = 0x100u + ch * 0x40u;
-
-		mmio_write8(lvds, base + 0x00u, 0x7fu);
-		mmio_write8(lvds, base + 0x01u, 0x00u);
-		mmio_write8(lvds, base + 0x02u, 0x00u);
-		mmio_write8(lvds, base + 0x04u, 0x3fu);
-		mmio_write8(lvds, base + 0x05u, 0x3fu);
-	}
-	mmio_write32(lvds, 0x04u, 1u);
+	/*
+	 * Do not touch the 0x18860000 PHY window here. Physical SF2000 logs
+	 * 10 and 11 prove that an access to that clock-domain window wedges the
+	 * CPU without raising a recoverable bus exception. The stock bootloader
+	 * has already established the TTL electrical mode; Linux only needs to
+	 * route FXDE and switch the external pads from GPIO to PRGB.
+	 */
 }
 
 static void runtime_watchdog_arm(void)
