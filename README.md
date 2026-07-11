@@ -88,6 +88,12 @@ NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
 DMA ring, and requires QEMU's WAV backend to receive the guest samples.  The
 same driver and device-tree node are used by the physical image.
 
+The two HC16xx-compatible MUSB instances use the vendor endpoint layout
+(seven endpoints, 4 KiB FIFO RAM) and run as PIO host controllers. Their glue
+forwards the device-tree MMIO and named IRQ resources to MUSB core; the normal
+Buildroot smoke requires both USB buses to register. USB1 uses SYSINT sources
+51 and 50, matching the vendor HC16xx device tree.
+
 `smoke-qemu-unifrog` and `smoke-qemu-mufrog` consume the existing, read-only
 frontend build artifacts, construct disposable FAT images under `build/`, and
 follow their persistent boot-trace ABI through module initialization, storage

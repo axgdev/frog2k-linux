@@ -919,6 +919,9 @@ smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 1' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 2' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'IRQ mc not found' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 

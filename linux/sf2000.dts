@@ -171,7 +171,7 @@
 		usb1: usb@18850000 {
 			compatible = "hichip,hc16xx-musb";
 			reg = <0x18850000 0x1000>;
-			interrupts = <55>, <54>;
+			interrupts = <51>, <50>;
 			interrupt-names = "mc", "dma";
 			dr_mode = "host";
 			index_num = <1>;
