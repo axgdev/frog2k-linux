@@ -1416,7 +1416,12 @@ static void panel_rgb_output_mux_enable(void)
 	mmio_write32(sysio, SYS_VIDEO_SRC1_OFF, value);
 
 	value = mmio_read32(sysio, SYS_VIDEO_SRC2_OFF);
-	value &= 0xf000f888u; /* RGB565 lanes from FXDE, rgb order */
+	/*
+	 * Match the vendor PQ setup mask.  Bits 0:10 select the source bit for
+	 * each RGB lane and bits 28:30 select high-to-low ordering.  The old
+	 * 0xf000f888 mask also destroyed unrelated bits 16:27.
+	 */
+	value &= ~0x70000777u;
 	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
 
 	/*
@@ -1426,6 +1431,16 @@ static void panel_rgb_output_mux_enable(void)
 	 * has already established the TTL electrical mode; Linux only needs to
 	 * route FXDE and switch the external pads from GPIO to PRGB.
 	 */
+}
+
+static void panel_rgb_source_select(unsigned source)
+{
+	uint32_t value = mmio_read32(sysio, SYS_VIDEO_SRC1_OFF);
+
+	/* Vendor E_VIDEO_SRC_SEL: 0=FXDE, 1=4KDE, 3=HDMI/PQ. */
+	value &= ~(3u << 18);
+	value |= (source & 3u) << 18;
+	mmio_write32(sysio, SYS_VIDEO_SRC1_OFF, value);
 }
 
 static void runtime_watchdog_arm(void)
@@ -2622,46 +2637,29 @@ static void run_rgb_probe_matrix(unsigned *frame)
 {
 	static const struct {
 		const char *label;
-		uint8_t profile;
-		uint8_t clock_invert;
-		int8_t panel_profile;
+		uint8_t source;
 	} probes[] = {
-		{ "P0 PRIMARY SDK CLK0", 3, 0, -1 },
-		{ "P1 BOTH SDK CLK0", 5, 0, -1 },
-		{ "P2 ALT SDK CLK0", 4, 0, -1 },
-		{ "P3 PRIMARY SDK CLK1", 3, 1, -1 },
-		{ "P4 BOTH SDK CLK1", 5, 1, -1 },
-		{ "P5 PRIMARY BYPASS", 0, 0, -1 },
-		{ "P6 PANEL SF2000", 3, 0, 0 },
-		{ "P7 PANEL RAMCTRL", 3, 0, 2 },
-		{ "P8 PANEL HCLINUX", 3, 0, 3 },
+		{ "S0 RGB SOURCE FXDE", 0 },
+		{ "S1 RGB SOURCE 4KDE", 1 },
+		{ "S2 RGB SOURCE RESERVED", 2 },
+		{ "S3 RGB SOURCE HDMI PQ", 3 },
 	};
 	unsigned i;
 
 	for (i = 0; i < ARRAY_SIZE(probes) && !stopping; i++) {
-		uint32_t clk = mmio_read32(sysio, SYS_RGB_CLK_INV_OFF);
-
-		clk &= ~(1u << 30);
-		clk |= (uint32_t)probes[i].clock_invert << 30;
-		mmio_write32(sysio, SYS_RGB_CLK_INV_OFF, clk);
-		if (probes[i].panel_profile >= 0)
-			panel_apply_rgb_mode_profile(&panel_rgb_mode_profiles[
-				(unsigned)probes[i].panel_profile]);
 		console_add_line(probes[i].label);
 		draw_console_screen(++*frame);
 		panel_rgb_pinmux();
+		panel_rgb_source_select(probes[i].source);
 		progress_mark("screen-rgb-probe", 0x3fu,
-			(i << 24) | (probes[i].profile << 16) |
-			(probes[i].clock_invert << 8) |
-			(uint8_t)probes[i].panel_profile);
-		present_frame_profile(&gma_scanout_profiles[probes[i].profile]);
+			(i << 24) | (probes[i].source << 16) |
+			((mmio_read32(sysio, SYS_VIDEO_SRC1_OFF) >> 18) & 3u));
+		present_frame();
 		watchdog_pet();
-		sleep_ms(1400);
+		sleep_ms(2200);
 	}
 
-	mmio_write32(sysio, SYS_RGB_CLK_INV_OFF,
-		mmio_read32(sysio, SYS_RGB_CLK_INV_OFF) & ~(1u << 30));
-	panel_apply_rgb_mode_profile(&panel_rgb_mode_profiles[0]);
+	panel_rgb_source_select(0);
 	console_add_line("RGB PROBE COMPLETE");
 	draw_console_screen(++*frame);
 	panel_rgb_pinmux();
