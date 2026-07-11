@@ -144,3 +144,8 @@ L25 status LED when that LED is present:
 - 10 pulses: initramfs `/init` reached userspace.
 
 If the pulse groups stop, the next stage is where the boot is hanging.
+The loader emits its one-pulse entry marker before calling any vendor FAT or
+SD helper, so a damaged or slow recovery log cannot hide loader entry. Warm
+recovery writes the newest 256 retained entries to `log.txt`; older entries
+are counted in a `skipped-oldest` line instead of delaying boot with hundreds
+of sector writes.

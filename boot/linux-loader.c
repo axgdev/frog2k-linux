@@ -60,8 +60,9 @@ typedef unsigned long uintptr;
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
+#define PROGRESS_DUMP_ENTRIES 256u
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-05-16 nommu-flat-0239-mirrored-fat-write"
+#define LOADER_BUILD_TAG "2026-07-11 early-marker-bounded-recovery"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -642,6 +643,17 @@ static void bootlog_dump_previous_progress(void)
 	start = progress_log->wrapped ? progress_log->write_index : 0;
 	if (start >= PROGRESS_ENTRIES)
 		start = 0;
+	if (count > PROGRESS_DUMP_ENTRIES) {
+		u32 skipped = count - PROGRESS_DUMP_ENTRIES;
+
+		start = (start + skipped) % PROGRESS_ENTRIES;
+		count = PROGRESS_DUMP_ENTRIES;
+		bootlog_puts("previous progress skipped-oldest=");
+		bootlog_hex(skipped);
+		bootlog_puts(" retained=");
+		bootlog_hex(count);
+		bootlog_puts("\n");
+	}
 
 	for (i = 0; i < count; i++)
 		bootlog_progress_entry(&progress_log->entries[
@@ -1280,11 +1292,12 @@ void linux_loader_main(void)
 
 	clear_bss();
 	disable_interrupts();
+	/* Keep filesystem recovery from hiding proof that the loader started. */
+	backlight_stage_mark("loader-entry", 1);
 	bootlog_init();
 	progress_reset();
 	progress_set_live_log_sector();
 	bootlog_wdt_state();
-	backlight_stage_mark("loader-entry", 1);
 	bootlog_stage("loader-entry", 1);
 
 	kernel_size = (usize)(linux_vmlinux_end - linux_vmlinux_start);
