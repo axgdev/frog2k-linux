@@ -69,7 +69,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define KSEG1ADDR(x) ((volatile uint8_t *)((uintptr_t)(x) | 0xa0000000u))
 #define SYS_CLOCK_GATE0_OFF 0x060u
 #define SYS_CLOCK_GATE1_OFF 0x064u
-#define SYS_CLOCK_GATE2_OFF 0x08cu
 #define SYS_CLK_CTR_OFF 0x078u
 #define SYS_SFCLK_OFF 0x07cu
 #define SYS_RESET1_OFF 0x084u
@@ -1387,47 +1386,27 @@ static void panel_lcd_setup_enable(void)
 static void panel_rgb_clock_enable(void)
 {
 	uint32_t gate1;
-	uint32_t gate2;
 
 	gate1 = mmio_read32(sysio, SYS_CLOCK_GATE1_OFF);
 	gate1 &= ~(1u << 0);  /* VOU_HD_CLK */
 	gate1 &= ~(1u << 2);  /* DE_CLK */
 	gate1 &= ~(1u << 18); /* VOU_HD_EXT_CLK */
 	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate1);
-
-	/* RGB_CLK is HC15xx gate 352 + 13, in the third gate register. */
-	gate2 = mmio_read32(sysio, SYS_CLOCK_GATE2_OFF);
-	gate2 &= ~(1u << 13);
-	mmio_write32(sysio, SYS_CLOCK_GATE2_OFF, gate2);
-	progress_mark("screen-rgb-gate2", 0x3fu, gate2);
 }
 
 static void panel_rgb_output_mux_enable(void)
 {
 	uint32_t strap;
-	uint32_t value;
 
 	panel_rgb_clock_enable();
 
-	/* The boot path can leave the TTL/LVDS register bank in reset. */
-	value = mmio_read32(sysio, SYS_RESET1_OFF);
-	mmio_write32(sysio, SYS_RESET1_OFF, value | (1u << 8));
-	sleep_ms(1);
-	mmio_write32(sysio, SYS_RESET1_OFF, value & ~(1u << 8));
-	watchdog_pet();
-
 	strap = mmio_read32(sysio, SYS_LCD_SETUP_OFF);
 	strap &= 0x0fffffffu;
-	strap |= 2u << 28; /* LVDS_IO_TTL_SEL_RGB565 */
 	strap |= 1u << 16;
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF, strap);
+	progress_mark("screen-rgb-strap", 0x3fu, strap);
 
-	value = mmio_read32(sysio, SYS_LVDS_PHY_OFF);
-	value |= 0x3u;  /* enable RGB/LVDS channels 0 and 1 */
-	value &= ~(1u << 2); /* power on */
-	mmio_write32(sysio, SYS_LVDS_PHY_OFF, value);
-
-	value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
+	uint32_t value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
 	value &= 0xffffffcfu; /* RGB source: FXDE */
 	mmio_write32(sysio, SYS_VIDEO_SRC0_OFF, value);
 
@@ -1579,7 +1558,7 @@ static void panel_rgb_pinmux(void)
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
 
-	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x06060606u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu) |
 		0x06060000u);
