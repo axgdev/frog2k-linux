@@ -47,6 +47,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_FRAME_PHYS (GMA_RAM_PHYS + 0x00010000u)
 #define GMA_RENDER_PHYS (GMA_RAM_PHYS + 0x00040000u)
 #define GMA_DESC_OFF (GMA_DESC_PHYS - GMA_RAM_PHYS)
+#define GMA_DESC_BYTES 640u
 #define GMA_FRAME_OFF (GMA_FRAME_PHYS - GMA_RAM_PHYS)
 #define GMA_RENDER_OFF (GMA_RENDER_PHYS - GMA_RAM_PHYS)
 
@@ -2456,16 +2457,23 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
 	(void)variant;
-	d0 |= 1u;
+	d0 |= 1u;       /* is_last_block */
+	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
+	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
+	d0 |= 1u << 11; /* premultiply: hc16xx_fb probe default */
+	d0 |= 1u << 12; /* BT.709 enhancement coefficients */
 	return d0;
 }
 
 static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	uint32_t pitch)
 {
+	static const int32_t bt709[12] = {
+		93, 314, 32, 0, -52, -173, 225, 0, 225, -204, -21, 0
+	};
 	unsigned i;
 
-	for (i = 0; i < 16; i++)
+	for (i = 0; i < GMA_DESC_BYTES / sizeof(uint32_t); i++)
 		write_desc32(i, 0);
 
 	write_desc32(0, gma_descriptor_d0(variant, mode));
@@ -2476,6 +2484,8 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	write_desc32(5, 0xffu | (pitch << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
+	for (i = 0; i < ARRAY_SIZE(bt709); i++)
+		write_desc32(144u + i, (uint32_t)bt709[i]);
 }
 
 static void build_gma_descriptor_variant(unsigned variant)
@@ -2490,7 +2500,7 @@ static void build_gma_descriptor(void)
 
 static void flush_present_memory(void)
 {
-	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), 64, BCACHE);
+	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), GMA_DESC_BYTES, BCACHE);
 	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
 }
 
@@ -2614,6 +2624,10 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 			mmio_read32(gma, GMA_CTL_HW));
 		progress_mark("screen-gma-dmba", 0x3fu,
 			mmio_read32(gma, GMA_DMBA));
+		progress_mark("screen-gma-desc0", 0x3fu,
+			((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[0]);
+		progress_mark("screen-gma-csc0", 0x3fu,
+			((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[144]);
 		logged_hw_state = 1;
 	}
 }
