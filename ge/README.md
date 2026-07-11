@@ -41,6 +41,11 @@ records and the 512-byte filter group. `make test-ge-node-vendor` executes the
 surviving MIPS vendor serializer under qemu-user and byte-compares its complete
 172-word output with the source implementation.
 
+The surviving public `ge_api.h` ABI is now mirrored in this directory. The
+Linux backend implements context lifetime, reset, IRQ ownership, synchronous
+completion, validated copied-node submission, and conservative acceleration
+capability checks without exposing kernel mappings or registers to userspace.
+
 The remaining work is populating the recovered node context from public API
 state and executing every group exactly in system QEMU. Reconstruction order:
 

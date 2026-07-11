@@ -171,6 +171,7 @@ GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-h
 GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
 GE_VENDOR_NODE_TEST := $(BUILD_DIR)/hcge-vendor-node-test
+GE_LINUX_OBJ := $(BUILD_DIR)/hcge-linux.o
 GE_ELF_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc.br_real
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
@@ -257,6 +258,10 @@ $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 
 test-ge-node-vendor: $(GE_VENDOR_NODE_TEST)
 	qemu-mipsel '$(GE_VENDOR_NODE_TEST)'
+
+$(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
