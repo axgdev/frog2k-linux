@@ -87,6 +87,12 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define VOU_HD_CTRL 0x084u
 #define VOU_HD_TIMING4 0x088u
 #define VOU_HD_TIMING5 0x08cu
+#define VOU_VPO_CTRL 0x090u
+#define VOU_VPO_PHASE 0x094u
+#define VOU_VPO_COEF 0x098u
+#define VOU_VPO_FORMAT 0x09cu
+#define VOU_VPO_WIDTH 0x0b8u
+#define VOU_VPO_AUX 0x0dcu
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_B_OFF 0x4c0u
 #define PINMUX_R_OFF 0x4e0u
@@ -1461,6 +1467,9 @@ static void runtime_watchdog_disable(void)
 
 static void panel_vou_rgb_enable(void)
 {
+	uint32_t value;
+	unsigned phase;
+
 	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
 	mmio_write32(gma, VOU_HD_TIMING1, 0x00650000u);
@@ -1469,6 +1478,60 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_HD_CTRL, 0x00127002u);
 	mmio_write32(gma, VOU_HD_TIMING4, 0x00108080u);
 	mmio_write32(gma, VOU_HD_TIMING5, 0x00000004u);
+
+	/*
+	 * libviddrv's FXDE open path initializes the VPO block after loading
+	 * the timing generator.  These registers are distinct from the GMA
+	 * layer registers at 0x300 and were missing from the Linux bring-up.
+	 */
+	progress_mark("screen-vpo-before-90", 0x3fu,
+		mmio_read32(gma, VOU_VPO_CTRL));
+	progress_mark("screen-vpo-before-94", 0x3fu,
+		mmio_read32(gma, VOU_VPO_PHASE));
+
+	value = mmio_read32(gma, VOU_VPO_CTRL);
+	value |= 1u;          /* vendor begins an atomic VPO update */
+	value &= ~(1u << 22); /* non-4K output */
+	value |= 1u << 23;    /* progressive RGB output */
+	value &= ~(1u << 24);
+	value &= ~(1u << 16);
+	value &= ~(1u << 21);
+	mmio_write32(gma, VOU_VPO_CTRL, value);
+
+	value = mmio_read32(gma, VOU_VPO_FORMAT);
+	value &= ~0x000080ffu;
+	mmio_write32(gma, VOU_VPO_FORMAT, value);
+
+	/* Exact vendor phase-table strobe sequence (phases 8 through 15). */
+	for (phase = 8; phase < 16; phase++) {
+		value = mmio_read32(gma, VOU_VPO_PHASE);
+		value &= ~0x00000f00u;
+		value |= phase << 8;
+		mmio_write32(gma, VOU_VPO_PHASE, value);
+		value = mmio_read32(gma, VOU_VPO_COEF);
+		value &= ~0xffu;
+		value |= 0x0fu;
+		mmio_write32(gma, VOU_VPO_COEF, value);
+	}
+	value = mmio_read32(gma, VOU_VPO_PHASE);
+	value &= ~0x00000ffeu;
+	value |= 1u << 16;
+	mmio_write32(gma, VOU_VPO_PHASE, value);
+
+	value = mmio_read32(gma, VOU_VPO_WIDTH);
+	value &= ~0x1fffu;
+	value |= WIDTH;
+	mmio_write32(gma, VOU_VPO_WIDTH, value);
+	mmio_write32(gma, VOU_VPO_AUX, 0);
+
+	value = mmio_read32(gma, VOU_VPO_CTRL);
+	value &= ~1u;         /* vendor commits the VPO update */
+	mmio_write32(gma, VOU_VPO_CTRL, value);
+	progress_mark("screen-vpo-after-90", 0x3fu, value);
+	progress_mark("screen-vpo-after-94", 0x3fu,
+		mmio_read32(gma, VOU_VPO_PHASE));
+	progress_mark("screen-vpo-after-b8", 0x3fu,
+		mmio_read32(gma, VOU_VPO_WIDTH));
 }
 
 static void gpio_set_pad(unsigned pad, int high)
