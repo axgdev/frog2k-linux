@@ -38,8 +38,8 @@ LINUX_SRC ?= /tmp/sf2000_linux-kernel-$(LINUX_VERSION)
 BUILDROOT_VERSION := 2024.02.12
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
 BUILDROOT_URL := https://buildroot.org/downloads/$(BUILDROOT_TARBALL)
-BUILDROOT_SRC := $(BUILD_DIR)/buildroot-$(BUILDROOT_VERSION)
 BUILDROOT_WORK ?= /tmp/sf2000_linux-buildroot
+BUILDROOT_SRC ?= $(BUILDROOT_WORK)/buildroot-$(BUILDROOT_VERSION)
 BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
 BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
 BUILDROOT_BUSYBOX_CONFIG := buildroot/sf2000_busybox.config
@@ -172,6 +172,8 @@ GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
 GE_VENDOR_NODE_TEST := $(BUILD_DIR)/hcge-vendor-node-test
 GE_LINUX_OBJ := $(BUILD_DIR)/hcge-linux.o
+GE_VENDOR_CAPTURE := $(BUILD_DIR)/hcge-vendor-capture
+GE_VENDOR_CAPTURE_GOLDEN := ge/hcge_vendor_capture.golden
 GE_ELF_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc.br_real
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
@@ -203,7 +205,7 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
-	test-ge-node-vendor clean
+	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture clean
 
 all: status
 
@@ -262,6 +264,19 @@ test-ge-node-vendor: $(GE_VENDOR_NODE_TEST)
 $(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
+
+$(GE_VENDOR_CAPTURE): ge/hcge_vendor_capture.c ge/ge_api.h \
+		$(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' '$<' \
+		'$(GE_VENDOR_ARCHIVE)' -lm -Wl,--wrap=open -Wl,--wrap=close \
+		-Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap \
+		-Wl,--wrap=usleep
+
+capture-ge-vendor: $(GE_VENDOR_CAPTURE)
+	qemu-mipsel '$(GE_VENDOR_CAPTURE)'
+
+test-ge-vendor-capture: $(GE_VENDOR_CAPTURE) $(GE_VENDOR_CAPTURE_GOLDEN)
+	qemu-mipsel '$(GE_VENDOR_CAPTURE)' | cmp - '$(GE_VENDOR_CAPTURE_GOLDEN)'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
