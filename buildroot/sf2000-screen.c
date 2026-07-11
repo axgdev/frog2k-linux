@@ -2512,6 +2512,7 @@ static void ge_copy_render_to_scanout(void)
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
 	bool submitted;
 	int sync_ret = -1;
+	int verified = 1;
 
 	if (!display_ge)
 		return;
@@ -2544,12 +2545,22 @@ static void ge_copy_render_to_scanout(void)
 		if (!display_ge_frames)
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
+		if (sync_ret == 0 && !display_ge_frames) {
+			verified = memcmp((void *)(gma_ram + GMA_FRAME_OFF),
+				(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES) == 0;
+			progress_mark(verified ? "screen-ge-verify-ok" :
+				"screen-ge-verify-fail", 0x3fu, SCREEN_TAG);
+		}
 	}
-	if (!submitted || sync_ret != 0) {
+	if (!submitted || sync_ret != 0 || !verified) {
 		memcpy((void *)(gma_ram + GMA_FRAME_OFF),
 			(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
-		log_line("sf2000-screen: GE present failed, copied on CPU\n");
+		log_line(verified ?
+			"sf2000-screen: GE present failed, copied on CPU\n" :
+			"sf2000-screen: GE copy mismatch, disabling acceleration\n");
 		progress_mark("screen-ge-present-fail", 0x3fu, SCREEN_TAG);
+		if (!verified)
+			display_ge = NULL;
 	} else {
 		display_ge_frames++;
 		if (display_ge_frames == 1u) {

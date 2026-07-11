@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,315 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -231,7 +231,9 @@
 +		wmb();
 +		writel(first, ge->regs + SF2000_GE_HQ_FIRST);
 +		writel(last, ge->regs + SF2000_GE_HQ_LAST);
-+		writel(SF2000_GE_START_HQ, ge->regs + SF2000_GE_START);
++		value = readl(ge->regs + SF2000_GE_START);
++		writel(value | SF2000_GE_START_HQ,
++		       ge->regs + SF2000_GE_START);
 +		return 0;
 +	}
 +	default:
