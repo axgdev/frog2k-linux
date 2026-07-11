@@ -662,6 +662,12 @@ int main(void)
 	} else {
 		log_message("sf2000_buildroot: framebuffer missing /dev/fb0\n");
 	}
+	if (path_exists("/dev/ge")) {
+		log_message("sf2000_buildroot: graphics engine ready /dev/ge\n");
+		progress_mark("init-ge-ready", 0x3eu, INIT_TAG);
+	} else {
+		log_message("sf2000_buildroot: graphics engine missing /dev/ge\n");
+	}
 	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast"))
 		reset_snapshot_fast();
 

@@ -1,0 +1,287 @@
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -474,4 +474,12 @@ config HISI_HIKEY_USB
+ 	  switching between the dual-role USB-C port and the USB-A host ports
+ 	  using only one USB controller.
+ 
++config SF2000_GE
++	bool "Hichip HC15xx graphics engine"
++	depends on MIPS_SF2000
++	help
++	  Character driver for the HC15xx command-queue graphics engine used
++	  by the SF2000. It provides the vendor-compatible reset, clock,
++	  command-buffer query and completion operations on /dev/ge.
++
+ source "drivers/misc/c2port/Kconfig"
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -58,2 +58,3 @@ obj-$(CONFIG_UACCE) 		+= uacce/
+ obj-$(CONFIG_XILINX_SDFEC)	+= xilinx_sdfec.o
+ obj-$(CONFIG_HISI_HIKEY_USB)	+= hisi_hikey_usb.o
++obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
+--- /dev/null
++++ b/drivers/misc/sf2000-ge.c
+@@ -0,0 +1,261 @@
++// SPDX-License-Identifier: GPL-2.0+
++/* Hichip HC15xx/SF2000 command-queue graphics engine. */
++
++#include <linux/completion.h>
++#include <linux/delay.h>
++#include <linux/dma-mapping.h>
++#include <linux/fs.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/miscdevice.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/uaccess.h>
++
++#define SF2000_GE_QUEUE_SIZE	0x3c000u
++#define SF2000_GE_MINOR		243
++#define SF2000_GE_CTRL		0x00
++#define SF2000_GE_START		0x04
++#define SF2000_GE_STATUS		0x08
++#define SF2000_GE_HQ_FIRST	0x10
++#define SF2000_GE_HQ_LAST	0x14
++
++#define SF2000_GE_CTRL_SW_MEMORY	BIT(31)
++#define SF2000_GE_CTRL_HQ_IRQ	BIT(17)
++#define SF2000_GE_START_HQ	BIT(1)
++#define SF2000_GE_STATUS_BUSY	BIT(31)
++
++#define SF2000_SYS_CLK		0x7c
++#define SF2000_SYS_RESET		0x80
++#define SF2000_SYS_GE_RESET	BIT(4)
++#define SF2000_SYS_GE_CLK_SHIFT	18
++
++#define HCGE_IOCBASE		35
++#define HCGE_REQUEST_IRQ	_IO(HCGE_IOCBASE, 0x01)
++#define HCGE_FREE_IRQ		_IO(HCGE_IOCBASE, 0x02)
++#define HCGE_RESET		_IO(HCGE_IOCBASE, 0x03)
++#define HCGE_SYNC_TIMEOUT	_IO(HCGE_IOCBASE, 0x04)
++#define HCGE_GET_CMDQ_BUFINFO	_IO(HCGE_IOCBASE, 0x05)
++#define HCGE_SET_CLOCK		_IO(HCGE_IOCBASE, 0x06)
++#define HCGE_GET_GE_REGISTER	_IO(HCGE_IOCBASE, 0x07)
++
++struct hcge_cmdq_buf_info {
++	u32 addr;
++	u32 size;
++};
++
++struct hcge_cmdq_node_ctx {
++	u32 phy_addr_min;
++	u32 phy_addr_max;
++	u32 is_finish;
++	u32 serial_num;
++	u32 is_reset;
++	u32 point_wrap_addr;
++	u32 phy_addr_start;
++	u32 reserved;
++	u32 clut_tbl[256];
++} __aligned(8);
++
++struct sf2000_ge {
++	struct device *dev;
++	void __iomem *regs;
++	void __iomem *sys;
++	void *queue;
++	dma_addr_t queue_dma;
++	struct completion done;
++	struct miscdevice misc;
++	int irq;
++	bool irq_requested;
++};
++
++static void sf2000_ge_hw_reset(struct sf2000_ge *ge)
++{
++	u32 value = readl(ge->sys + SF2000_SYS_RESET);
++
++	writel(value | SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
++	udelay(10);
++	writel(value & ~SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
++}
++
++static irqreturn_t sf2000_ge_irq(int irq, void *data)
++{
++	struct sf2000_ge *ge = data;
++	struct hcge_cmdq_node_ctx *ctx = ge->queue;
++	u32 status = readl(ge->regs + SF2000_GE_STATUS);
++
++	if (!status)
++		return IRQ_NONE;
++	writel(status, ge->regs + SF2000_GE_STATUS);
++	ctx->serial_num++;
++	ctx->is_finish = 1;
++	complete(&ge->done);
++	return IRQ_HANDLED;
++}
++
++static int sf2000_ge_open(struct inode *inode, struct file *file)
++{
++	struct miscdevice *misc = file->private_data;
++	struct sf2000_ge *ge = container_of(misc, struct sf2000_ge, misc);
++
++	file->private_data = ge;
++	return 0;
++}
++
++static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
++			    unsigned long arg)
++{
++	struct sf2000_ge *ge = file->private_data;
++	struct hcge_cmdq_node_ctx *ctx = ge->queue;
++	u32 value;
++
++	switch (cmd) {
++	case HCGE_REQUEST_IRQ:
++		if (ge->irq_requested)
++			return 0;
++		value = request_irq(ge->irq, sf2000_ge_irq, 0,
++				    dev_name(ge->dev), ge);
++		if (value)
++			return (int)value;
++		ge->irq_requested = true;
++		return 0;
++	case HCGE_FREE_IRQ:
++		if (ge->irq_requested) {
++			free_irq(ge->irq, ge);
++			ge->irq_requested = false;
++		}
++		return 0;
++	case HCGE_RESET:
++		sf2000_ge_hw_reset(ge);
++		memset(ge->queue, 0, SF2000_GE_QUEUE_SIZE);
++		ctx->phy_addr_min = (u32)ge->queue_dma + sizeof(*ctx);
++		ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
++		ctx->phy_addr_start = ctx->phy_addr_min;
++		ctx->is_reset = 1;
++		return 0;
++	case HCGE_SYNC_TIMEOUT: {
++		unsigned long timeout = msecs_to_jiffies(arg ? arg : 1000);
++
++		if (!(readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY))
++			return 0;
++		return wait_for_completion_interruptible_timeout(&ge->done, timeout) > 0 ?
++			0 : -ETIMEDOUT;
++	}
++	case HCGE_GET_CMDQ_BUFINFO: {
++		struct hcge_cmdq_buf_info info = {
++			.addr = (u32)ge->queue_dma,
++			.size = SF2000_GE_QUEUE_SIZE,
++		};
++
++		return copy_to_user((void __user *)arg, &info, sizeof(info)) ?
++			-EFAULT : 0;
++	}
++	case HCGE_SET_CLOCK:
++		value = readl(ge->sys + SF2000_SYS_CLK);
++		value &= ~(3u << SF2000_SYS_GE_CLK_SHIFT);
++		value |= (arg & 3u) << SF2000_SYS_GE_CLK_SHIFT;
++		writel(value, ge->sys + SF2000_SYS_CLK);
++		return 0;
++	case HCGE_GET_GE_REGISTER:
++		value = 0x18806000u;
++		return copy_to_user((void __user *)arg, &value, sizeof(value)) ?
++			-EFAULT : 0;
++	default:
++		return -ENOTTY;
++	}
++}
++
++static const struct file_operations sf2000_ge_fops = {
++	.owner = THIS_MODULE,
++	.open = sf2000_ge_open,
++	.unlocked_ioctl = sf2000_ge_ioctl,
++	.llseek = no_llseek,
++};
++
++static int sf2000_ge_probe(struct platform_device *pdev)
++{
++	struct sf2000_ge *ge;
++	struct resource sys_res;
++	struct hcge_cmdq_node_ctx *ctx;
++	u32 ctrl;
++	int ret;
++
++	ge = devm_kzalloc(&pdev->dev, sizeof(*ge), GFP_KERNEL);
++	if (!ge)
++		return -ENOMEM;
++	ge->dev = &pdev->dev;
++	ge->regs = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(ge->regs))
++		return PTR_ERR(ge->regs);
++	ret = of_address_to_resource(pdev->dev.of_node, 1, &sys_res);
++	if (ret)
++		return ret;
++	ge->sys = devm_ioremap(&pdev->dev, sys_res.start,
++				resource_size(&sys_res));
++	if (!ge->sys)
++		return -ENOMEM;
++
++	ge->queue = dmam_alloc_coherent(&pdev->dev, SF2000_GE_QUEUE_SIZE,
++					 &ge->queue_dma, GFP_KERNEL);
++	if (!ge->queue)
++		return -ENOMEM;
++	if (upper_32_bits(ge->queue_dma))
++		return -ERANGE;
++
++	ctx = ge->queue;
++	ctx->phy_addr_min = (u32)ge->queue_dma + sizeof(*ctx);
++	ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
++	ctx->phy_addr_start = ctx->phy_addr_min;
++	ctx->is_finish = 1;
++	init_completion(&ge->done);
++
++	ge->irq = platform_get_irq(pdev, 0);
++	if (ge->irq < 0)
++		return ge->irq;
++	sf2000_ge_hw_reset(ge);
++	ctrl = readl(ge->regs + SF2000_GE_CTRL);
++	ctrl |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
++	writel(ctrl, ge->regs + SF2000_GE_CTRL);
++
++	/* Keep /dev/ge stable on the static-device NOMMU root filesystem. */
++	ge->misc.minor = SF2000_GE_MINOR;
++	ge->misc.name = "ge";
++	ge->misc.fops = &sf2000_ge_fops;
++	ge->misc.parent = &pdev->dev;
++	ret = misc_register(&ge->misc);
++	if (ret)
++		return ret;
++
++	platform_set_drvdata(pdev, ge);
++	dev_info(&pdev->dev, "HC15xx GE queue at %pad size %#x\n",
++		 &ge->queue_dma, SF2000_GE_QUEUE_SIZE);
++	return 0;
++}
++
++static int sf2000_ge_remove(struct platform_device *pdev)
++{
++	struct sf2000_ge *ge = platform_get_drvdata(pdev);
++
++	if (ge->irq_requested)
++		free_irq(ge->irq, ge);
++	misc_deregister(&ge->misc);
++	return 0;
++}
++
++static const struct of_device_id sf2000_ge_of_match[] = {
++	{ .compatible = "hichip,hc15xx-ge" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, sf2000_ge_of_match);
++
++static struct platform_driver sf2000_ge_driver = {
++	.probe = sf2000_ge_probe,
++	.remove = sf2000_ge_remove,
++	.driver = {
++		.name = "sf2000-ge",
++		.of_match_table = sf2000_ge_of_match,
++	},
++};
++module_platform_driver(sf2000_ge_driver);
++
++MODULE_DESCRIPTION("Hichip HC15xx graphics engine");
++MODULE_LICENSE("GPL");

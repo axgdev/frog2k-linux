@@ -26,6 +26,9 @@ CC_MIPS := $(CROSS_COMPILE)gcc
 LD_MIPS := $(CROSS_COMPILE)ld
 OBJCOPY_MIPS := $(CROSS_COMPILE)objcopy
 STRIP_MIPS := $(CROSS_COMPILE)strip
+OBJDUMP_MIPS := $(CROSS_COMPILE)objdump
+READELF_MIPS := $(CROSS_COMPILE)readelf
+NM_MIPS := $(CROSS_COMPILE)nm
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 ROOTFS ?= tiny
 LINUX_VERSION := 5.12.4
@@ -164,6 +167,8 @@ MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
 UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
 MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
+GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libge.a
+GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
@@ -193,7 +198,7 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
-	smoke-linux-buildroot-reset-restore clean
+	smoke-linux-buildroot-reset-restore reverse-ge clean
 
 all: status
 
@@ -220,6 +225,17 @@ status:
 	@test -f '$(BUILDROOT_CPIO)' && printf 'yes\n' || printf 'no\n'
 	@printf '  bugfix ROM exists: '
 	@test -f '$(BOOTROM_BUGFIX)' && printf 'yes\n' || printf 'no\n'
+
+reverse-ge:
+	test -f '$(GE_VENDOR_ARCHIVE)'
+	rm -rf '$(GE_REVERSE_DIR)'
+	mkdir -p '$(GE_REVERSE_DIR)'
+	cd '$(GE_REVERSE_DIR)' && ar x '$(GE_VENDOR_ARCHIVE)'
+	for obj in '$(GE_REVERSE_DIR)'/*.o; do \
+		'$(OBJDUMP_MIPS)' -dr "$$obj" > "$$obj.dis"; \
+		'$(READELF_MIPS)' --debug-dump=info "$$obj" > "$$obj.dwarf"; \
+		'$(NM_MIPS)' -C --defined-only "$$obj" > "$$obj.symbols"; \
+	done
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
@@ -415,6 +431,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
+		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -659,6 +676,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable SND_PCM \
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
+		--enable SF2000_GE \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
 		--disable SND_PCM_OSS \
@@ -929,6 +947,8 @@ smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-ge .*HC15xx GE queue at' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 1' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 2' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'IRQ mc not found' '$(BUILD_DIR)'/logs/linux-asd.log
