@@ -1915,7 +1915,7 @@ static void panel_push_frame(int switch_to_rgb)
 	panel_bus_idle();
 	panel_restart_frame();
 	for (i = 0; i < WIDTH * HEIGHT; i++) {
-		if ((i & 0xffu) == 0)
+		if ((i & 7u) == 0)
 			watchdog_pet();
 		panel_data(fb[i]);
 	}
@@ -1955,7 +1955,7 @@ static void panel_fill_solid_direct(uint16_t color)
 	panel_bus_idle();
 	panel_restart_frame();
 	for (i = 0; i < WIDTH * HEIGHT; i++) {
-		if ((i & 0xffu) == 0)
+		if ((i & 7u) == 0)
 			watchdog_pet();
 		panel_data(color);
 	}
@@ -2739,9 +2739,14 @@ static void run_direct_console(unsigned *frame)
 	console_input_init_fds(input_fds);
 	console_input_open_fds(input_fds);
 	draw_console_screen(++*frame);
+	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
+	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	progress_mark("screen-rgb-handoff-begin", 0x3fu, SCREEN_TAG);
 	panel_prepare_rgb_frame();
+	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	present_frame();
+	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	log_gma_ready();
 
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
