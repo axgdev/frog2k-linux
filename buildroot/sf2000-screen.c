@@ -1412,11 +1412,14 @@ static void panel_rgb_clock_enable(void)
 	gate1 &= ~(1u << 2);  /* DE_CLK */
 	gate1 &= ~(1u << 18); /* VOU_HD_EXT_CLK */
 	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate1);
+	progress_mark("screen-rgb-gate1", 0x3fu,
+		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
 }
 
 static void panel_rgb_output_mux_enable(void)
 {
 	uint32_t strap;
+	uint32_t value;
 
 	panel_rgb_clock_enable();
 
@@ -1426,13 +1429,38 @@ static void panel_rgb_output_mux_enable(void)
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF, strap);
 	progress_mark("screen-rgb-strap", 0x3fu, strap);
 
-	uint32_t value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
-	value &= 0xffffffcfu; /* RGB source: FXDE */
+	/*
+	 * HC15's RGB/VPO setup also clears the shared clock-control bit 19.  The
+	 * stock trace shows this transition (0x00083700 -> 0x00003700); leaving
+	 * the inherited bit set gates the RGB timing path even though VPO and GMA
+	 * report an enabled state.
+	 */
+	value = mmio_read32(sysio, SYS_CLK_CTR_OFF);
+	value &= ~(1u << 19);
+	mmio_write32(sysio, SYS_CLK_CTR_OFF, value);
+	progress_mark("screen-rgb-sysclk", 0x3fu,
+		mmio_read32(sysio, SYS_CLK_CTR_OFF));
+
+	/*
+	 * The source selectors are shared with PQ, HDMI, MIPI and LVDS.  The
+	 * original RGB helper only updates the RGB fields, which is sufficient
+	 * after a cold reset but leaves a stale route selected when Linux follows
+	 * the vendor bootloader.  PQ's own setup clears every competing output
+	 * route before selecting FXDE (enum value zero).  Do the same here while
+	 * retaining unrelated SYSIO bits.
+	 */
+	value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
+	value &= ~((3u << 4) | (3u << 20));
 	mmio_write32(sysio, SYS_VIDEO_SRC0_OFF, value);
+	progress_mark("screen-rgb-src0", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF));
 
 	value = mmio_read32(sysio, SYS_VIDEO_SRC1_OFF);
-	value &= 0xfff3ffffu; /* RGB source mirror: FXDE */
+	value &= ~((3u << 0) | (3u << 4) | (0xfu << 12) |
+		(3u << 16) | (3u << 18));
 	mmio_write32(sysio, SYS_VIDEO_SRC1_OFF, value);
+	progress_mark("screen-rgb-src1", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC1_OFF));
 
 	value = mmio_read32(sysio, SYS_VIDEO_SRC2_OFF);
 	/*
@@ -1442,6 +1470,19 @@ static void panel_rgb_output_mux_enable(void)
 	 */
 	value &= ~0x70000777u;
 	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
+	progress_mark("screen-rgb-src2", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
+
+	/* The SF2000 panel samples the RGB clock on its non-inverted edge. */
+	value = mmio_read32(sysio, SYS_RGB_CLK_INV_OFF);
+	value &= ~(1u << 30);
+	mmio_write32(sysio, SYS_RGB_CLK_INV_OFF, value);
+	progress_mark("screen-rgb-clk-inv", 0x3fu,
+		mmio_read32(sysio, SYS_RGB_CLK_INV_OFF));
+	progress_mark("screen-rgb-output-mux-done", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF) ^
+		mmio_read32(sysio, SYS_VIDEO_SRC1_OFF) ^
+		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
 
 	/*
 	 * Do not touch the 0x18860000 PHY window here. Physical SF2000 logs
