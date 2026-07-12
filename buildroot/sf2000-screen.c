@@ -61,6 +61,8 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_CTL_HW 0xb00u
 #define GMA_DMBA 0x304u
 #define GMA_DMBA_ALT 0x384u
+#define GMA_CTL_ALT 0x380u
+#define GMA_K_ALT 0x388u
 #define GMA_K 0x308u
 #define GMA_MASK 0x350u
 #define GMA_MASK_ALT 0x3d0u
@@ -99,6 +101,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define VOU_VPO_FORMAT 0x19cu
 #define VOU_VPO_WIDTH 0x1b8u
 #define VOU_VPO_AUX 0x1dcu
+#define VOU_RGB_ENABLE 0x1ecu
 #define PINMUX_L_OFF 0x4a0u
 #define PINMUX_B_OFF 0x4c0u
 #define PINMUX_R_OFF 0x4e0u
@@ -1473,75 +1476,46 @@ static void runtime_watchdog_disable(void)
 
 static void panel_vou_rgb_enable(void)
 {
-	uint32_t value;
-	unsigned phase;
 	uint32_t inherited = mmio_read32(gma, VOU_VPO_CTRL);
 
 	progress_mark("screen-vpo-before-90", 0x3fu, inherited);
 	progress_mark("screen-vpo-before-94", 0x3fu,
 		mmio_read32(gma, VOU_VPO_PHASE));
-	/* Preserve the complete ROM-configured timing and VPO state. */
-	if ((inherited & (1u << 21)) &&
-			(mmio_read32(gma, VOU_HD_MODE) & 1u)) {
-		progress_mark("screen-vpo-inherited", 0x3fu, inherited);
-		return;
-	}
-
+	/* Exact final HC15 state captured immediately before stock GMA use. */
 	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
-	mmio_write32(gma, VOU_HD_TIMING1, 0x00650000u);
+	mmio_write32(gma, 0x030u, 0x000a0038u);
 	mmio_write32(gma, VOU_HD_TIMING2, 0x01300378u);
-	mmio_write32(gma, VOU_HD_TIMING3, 0x00020702u);
-	mmio_write32(gma, VOU_HD_CTRL, 0x00127002u);
-	mmio_write32(gma, VOU_HD_TIMING4, 0x00108080u);
-	mmio_write32(gma, VOU_HD_TIMING5, 0x00000004u);
-
-	/*
-	 * libviddrv's FXDE open path initializes the VPO block after loading
-	 * the timing generator.  These registers are distinct from the GMA
-	 * layer registers at 0x300 and were missing from the Linux bring-up.
-	 */
-	value = mmio_read32(gma, VOU_VPO_CTRL);
-	value |= 1u;          /* vendor begins an atomic VPO update */
-	value &= ~(1u << 22); /* non-4K output */
-	value |= 1u << 23;    /* progressive RGB output */
-	value &= ~(1u << 24);
-	value &= ~(1u << 16);
-	value &= ~(1u << 21);
-	mmio_write32(gma, VOU_VPO_CTRL, value);
-
-	value = mmio_read32(gma, VOU_VPO_FORMAT);
-	value &= ~0x000080ffu;
-	mmio_write32(gma, VOU_VPO_FORMAT, value);
-
-	/* Exact vendor phase-table strobe sequence (phases 8 through 15). */
-	for (phase = 8; phase < 16; phase++) {
-		value = mmio_read32(gma, VOU_VPO_PHASE);
-		value &= ~0x00000f00u;
-		value |= phase << 8;
-		mmio_write32(gma, VOU_VPO_PHASE, value);
-		value = mmio_read32(gma, VOU_VPO_COEF);
-		value &= ~0xffu;
-		value |= 0x0fu;
-		mmio_write32(gma, VOU_VPO_COEF, value);
-	}
-	value = mmio_read32(gma, VOU_VPO_PHASE);
-	value &= ~0x00000ffeu;
-	value |= 1u << 16;
-	mmio_write32(gma, VOU_VPO_PHASE, value);
-
-	value = mmio_read32(gma, VOU_VPO_WIDTH);
-	value &= ~0x1fffu;
-	value |= WIDTH;
-	mmio_write32(gma, VOU_VPO_WIDTH, value);
+	mmio_write32(gma, 0x010u, 0x00040378u);
+	mmio_write32(gma, 0x040u, 0x00040378u);
+	mmio_write32(gma, 0x014u, 0x028e000au);
+	mmio_write32(gma, 0x044u, 0x028e000au);
+	mmio_write32(gma, 0x018u, 0x00240130u);
+	mmio_write32(gma, 0x048u, 0x00240130u);
+	mmio_write32(gma, 0x01cu, 0x07ff07ffu);
+	mmio_write32(gma, 0x04cu, 0x07ff07ffu);
+	mmio_write32(gma, 0x020u, 0x00001fffu);
+	mmio_write32(gma, 0x050u, 0x00001fffu);
+	mmio_write32(gma, 0x024u, 0x011e002eu);
+	mmio_write32(gma, 0x054u, 0x011e002eu);
+	mmio_write32(gma, 0x028u, 0x07ff07ffu);
+	mmio_write32(gma, 0x058u, 0x07ff07ffu);
+	mmio_write32(gma, 0x02cu, 0x013007ffu);
+	mmio_write32(gma, 0x05cu, 0x013007ffu);
+	mmio_write32(gma, 0x064u, 0x0037012au);
+	mmio_write32(gma, 0x068u, 0x021d0089u);
+	mmio_write32(gma, 0x06cu, 0x000001cbu);
+	mmio_write32(gma, 0x07cu, 0x00010000u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030702u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, 0x094u, 0x00000140u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x04210000u);
+	mmio_write32(gma, VOU_VPO_PHASE, 0);
+	mmio_write32(gma, VOU_VPO_WIDTH, WIDTH);
 	mmio_write32(gma, VOU_VPO_AUX, 0);
-
-	value = mmio_read32(gma, VOU_VPO_CTRL);
-	/* The display-on lifecycle restores these after the vendor open stage. */
-	value |= (1u << 21) | (1u << 16);
-	value &= ~1u;         /* vendor commits the VPO update */
-	mmio_write32(gma, VOU_VPO_CTRL, value);
-	progress_mark("screen-vpo-after-90", 0x3fu, value);
+	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
+	progress_mark("screen-vpo-after-90", 0x3fu,
+		mmio_read32(gma, VOU_VPO_CTRL));
 	progress_mark("screen-vpo-after-94", 0x3fu,
 		mmio_read32(gma, VOU_VPO_PHASE));
 	progress_mark("screen-vpo-after-b8", 0x3fu,
@@ -2734,8 +2708,12 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 	linebuf = mmio_read32(gma, GMA_LINEBUF);
 	linebuf = (linebuf & ~0x1fu) | (profile->linebuf & 0x1fu);
+	linebuf |= 0x00020000u;
 	mmio_write32(gma, GMA_LINEBUF, linebuf);
 	mmio_write32(gma, GMA_K, 0xff);
+	mmio_write32(gma, GMA_CTL_ALT,
+		mmio_read32(gma, GMA_CTL_ALT) | (1u << 18));
+	mmio_write32(gma, GMA_K_ALT, 0xff);
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
 		mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
