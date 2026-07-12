@@ -368,10 +368,17 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_INIT): $(BUILDROOT_INIT_SOURCE) Makefile
+
+# The panel-probe targets deliberately override BUILDROOT_INIT_SOURCE to run
+# sf2000-screen as /init.  A later normal build must restore the real init
+# binary; without a content check, make sees the same destination and silently
+# leaves the probe executable in the rootfs (and therefore in the ASD image).
+$(BUILDROOT_INIT): FORCE $(BUILDROOT_INIT_SOURCE) Makefile
 	mkdir -p '$(dir $@)'
-	cp '$(BUILDROOT_INIT_SOURCE)' '$@'
-	chmod 0755 '$@'
+	if ! cmp -s '$(BUILDROOT_INIT_SOURCE)' '$@' 2>/dev/null; then \
+		cp '$(BUILDROOT_INIT_SOURCE)' '$@'; \
+		chmod 0755 '$@'; \
+	fi
 
 $(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) $(BUILDROOT_INIT_CLONE) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'

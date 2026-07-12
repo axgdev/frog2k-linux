@@ -116,6 +116,15 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GPIO_R_DIR_OFF 0xf8u
 #define GPIO_OUTPUT_OFF 0x10u
 #define GPIO_DIR_OFF 0x14u
+/* GPIO-L's interrupt registers are in the SYSIO block, not in the
+ * per-bank data register window. Linux polls the panel TE input from
+ * userspace, so the inherited bootloader IRQ must be masked. */
+#define GPIO_L_IER_OFF 0x044u
+#define GPIO_L_RIS_IER_OFF 0x048u
+#define GPIO_L_ISR_OFF 0x05cu
+#define SYS_IRQ_ENABLE1_OFF 0x038u
+#define SYS_IRQ_GPIO_BIT (1u << 0)
+#define SYS_IRQ_IRC_BIT (1u << 19)
 #define PIN_R05 5u
 #define BACKLIGHT_R05 (1u << PIN_R05)
 #define WDT_BASE_PHYS 0x18818000u
@@ -286,7 +295,22 @@ static unsigned display_ge_frames;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
+/*
+ * The ST7789 keeps the RAM write window alive only until the next tearing
+ * effect (TE) edge.  HCRTOS services that edge by briefly returning the
+ * shared RGB pins to the 8080 GPIO bus, issuing CASET/RASET/RAMWR, and then
+ * selecting PRGB again.  Linux has no panel driver interrupt in this small
+ * userspace image, so the state is serviced from the existing millisecond
+ * watchdog loop and has a timeout fallback for panels which do not expose TE.
+ */
+static int panel_rgb_streaming;
+static int panel_te_busy;
+static int panel_te_last;
+static unsigned panel_te_age_ms;
+static unsigned panel_te_rearms;
 static void panel_restart_frame(void);
+static void panel_te_service_tick(void);
+static void panel_te_irq_disable(void);
 
 struct glyph {
 	char ch;
@@ -935,6 +959,9 @@ static void sleep_ms(unsigned msec)
 			watchdog_pet();
 		for (spin = 0; spin < 18000u; spin++)
 			__asm__ volatile ("" ::: "memory");
+		/* Keep the panel-control delay path identical to the vendor path. */
+		if (panel_rgb_streaming)
+			panel_te_service_tick();
 	}
 	watchdog_pet();
 }
@@ -1424,9 +1451,14 @@ static void panel_rgb_output_mux_enable(void)
 	panel_rgb_clock_enable();
 
 	strap = mmio_read32(sysio, SYS_LCD_SETUP_OFF);
-	strap &= 0x0fffffffu;
-	/* HC15 TTL selector 2 is the RGB565 electrical format. */
-	strap |= 2u << 28;
+	/*
+	 * lcd_pinmux_rgb() in the vendor ST7789 driver does not rewrite the
+	 * board's high strap selector.  That selector is latched by the board
+	 * boot ROM (the stock SF2000 value is 0x000d0000); forcing a guessed
+	 * value here changes the electrical mode on some revisions and leaves
+	 * the panel showing only its last retained colour.  Keep every inherited
+	 * strap bit and only assert the documented LCD setup enable.
+	 */
 	strap |= 1u << 16;
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF, strap);
 	progress_mark("screen-rgb-strap", 0x3fu, strap);
@@ -1618,6 +1650,38 @@ static int gpio_get_pad(unsigned pad)
 	return !!(mmio_read32(sysio, base + GPIO_INPUT_OFF) & gpio_bit_for_pad(pad));
 }
 
+static void panel_te_irq_disable(void)
+{
+	static int logged;
+	uint32_t bit = gpio_bit_for_pad(PINPAD_L08);
+	uint32_t ier = mmio_read32(sysio, GPIO_L_IER_OFF);
+	uint32_t ris_ier = mmio_read32(sysio, GPIO_L_RIS_IER_OFF);
+	uint32_t intc_enable;
+
+	/* A stale bootloader GPIO-L08 IRQ otherwise starves Linux in EIRQ3. */
+	mmio_write32(sysio, GPIO_L_IER_OFF, ier & ~bit);
+	mmio_write32(sysio, GPIO_L_RIS_IER_OFF, ris_ier & ~bit);
+	/* GPIO ISR is write-one-to-clear on HC15xx. */
+	mmio_write32(sysio, GPIO_L_ISR_OFF, bit);
+	/*
+	 * The ROM also leaves the unsupported infrared source enabled in the
+	 * cascaded system interrupt controller.  Linux has no IRC child driver;
+	 * masking it (and the GPIO aggregate now owned by this poller) prevents a
+	 * level IRQ from starving userspace during the first panel delay.
+	 */
+	intc_enable = mmio_read32(sysio, SYS_IRQ_ENABLE1_OFF);
+	intc_enable &= ~(SYS_IRQ_IRC_BIT | SYS_IRQ_GPIO_BIT);
+	mmio_write32(sysio, SYS_IRQ_ENABLE1_OFF, intc_enable);
+	if (!logged) {
+		progress_mark("screen-te-irq-disabled", 0x3fu,
+			((mmio_read32(sysio, GPIO_L_IER_OFF) & bit) << 16) |
+			(mmio_read32(sysio, GPIO_L_RIS_IER_OFF) & bit));
+		progress_mark("screen-intc-sanitized", 0x3fu,
+			mmio_read32(sysio, SYS_IRQ_ENABLE1_OFF));
+		logged = 1;
+	}
+}
+
 static void gpio_config_output(unsigned pad)
 {
 	uint32_t base = gpio_base_for_pad(pad);
@@ -1690,16 +1754,47 @@ static void panel_control_pinmux(void)
 {
 	unsigned i;
 
+	panel_rgb_streaming = 0;
+	panel_te_irq_disable();
 	panel_lcd_setup_enable();
+	/*
+	 * This is the non-RGB half of HCRTOS's lcd_pinmux_rgb(0).  The RGB
+	 * signals overlap only part of the 8080 bus; clearing the remaining
+	 * signal pads is still required when returning from scanout.  Leaving
+	 * L09/T07/T08/L11 in PRGB mode makes the following GPIO transaction
+	 * race the VOU and is enough to leave the panel on one retained colour.
+	 */
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x00000000u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x08,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0xff00ffffu);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x08,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x08) & 0x000000ffu);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x0c,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x0c) & 0xff000000u);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x00,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x00) & 0x0000ffffu);
+	mmio_write32(sysio, PINMUX_T_OFF + 0x04,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x04) & 0xff000000u);
 	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++)
 		pinmux_set_pad(panel_control_pads[i], PINMUX_GPIO);
 }
 
-static void panel_rgb_pinmux(void)
+static void panel_rgb_reset_release(void)
 {
-	panel_lcd_setup_enable();
-	panel_rgb_output_mux_enable();
-	panel_vou_rgb_enable();
+	uint32_t value = mmio_read32(sysio, SYS_RESET1_OFF);
+
+	/* The vendor's RGB handoff begins by releasing the VOU reset (bit 8). */
+	value &= ~(1u << 8);
+	mmio_write32(sysio, SYS_RESET1_OFF, value);
+	progress_mark("screen-rgb-reset-release", 0x3fu,
+		mmio_read32(sysio, SYS_RESET1_OFF));
+}
+
+static void panel_rgb_pad_mux_only(void)
+{
+	static int logged;
 	/*
 	 * L09 is the PRGB VSYNC pad.  It is already selected by the stock
 	 * bootloader on most units, which made preserving the byte appear to
@@ -1710,7 +1805,13 @@ static void panel_rgb_pinmux(void)
 	 */
 	pinmux_set_pad(PINPAD_L09, PINMUX_PRGB_VSYNC);
 
-	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x06060606u);
+	/*
+	 * Exact vendor drive-strength word: the high byte (0xb6) selects the
+	 * PRGB clock pad.  The lower three bytes are the RGB data drive fields.
+	 * Omitting that byte still lets VOU/GMA report a completed frame but the
+	 * physical ST7789 receives no valid pixel clock and retains one colour.
+	 */
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu) |
 		0x06060000u);
@@ -1729,6 +1830,35 @@ static void panel_rgb_pinmux(void)
 	mmio_write32(sysio, PINMUX_L_OFF + 0x08,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0xff00ffffu) |
 		0x00060000u);
+	if (!logged) {
+		progress_mark("screen-rgb-pad-clock", 0x3fu,
+			mmio_read32(sysio, PINMUX_L_OFF + 0x04));
+		logged = 1;
+	}
+}
+
+static void panel_rgb_stream_begin(void)
+{
+	panel_rgb_streaming = 1;
+	panel_te_age_ms = 0;
+	panel_te_last = gpio_get_pad(PINPAD_L08);
+	/* A TE re-arm also enters here; only record the full handoff, not every
+	 * frame boundary, or the retained progress ring would fill with noise. */
+	if (panel_te_rearms == 0u)
+		progress_mark("screen-rgb-stream-on", 0x3fu,
+			((uint32_t)panel_te_last << 31) |
+			(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu));
+}
+
+static void panel_rgb_pinmux(void)
+{
+	panel_lcd_setup_enable();
+	panel_rgb_reset_release();
+	panel_rgb_output_mux_enable();
+	panel_vou_rgb_enable();
+	panel_rgb_pad_mux_only();
+	panel_te_rearms = 0;
+	panel_rgb_stream_begin();
 }
 
 static void panel_config_outputs(void)
@@ -1920,6 +2050,63 @@ static void panel_restart_frame(void)
 	panel_data((HEIGHT - 1u) >> 8);
 	panel_data((HEIGHT - 1u) & 0xffu);
 	panel_cmd(ST7789_RAMWR);
+}
+
+static void panel_te_rearm(int from_edge)
+{
+	unsigned rearm;
+
+	if (!panel_enabled || !panel_rgb_streaming || panel_te_busy)
+		return;
+
+	panel_te_busy = 1;
+	panel_rgb_streaming = 0;
+	/*
+	 * This ordering is the HCRTOS vsync_irq() contract.  In particular, do
+	 * not rerun the VOU/GMA setup here: only the panel's GPIO/RGB pad owner
+	 * changes at a TE boundary, so the scanout engine can keep its descriptor
+	 * and frame address.
+	 */
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_restart_frame();
+	panel_bus_idle();
+	panel_rgb_pad_mux_only();
+	rearm = ++panel_te_rearms;
+	panel_rgb_stream_begin();
+	panel_te_busy = 0;
+	if (rearm <= 4u)
+		progress_mark(from_edge ? "screen-te-rearm-edge" :
+			"screen-te-rearm-timeout", 0x3fu,
+			((uint32_t)rearm << 16) | (uint32_t)panel_te_last);
+}
+
+static void panel_te_service_tick(void)
+{
+	int level;
+
+	if (!panel_rgb_streaming || panel_te_busy)
+		return;
+
+	level = gpio_get_pad(PINPAD_L08);
+	panel_te_age_ms++;
+	if (level && !panel_te_last) {
+		panel_te_rearm(1);
+		return;
+	}
+	/*
+	 * A few panels leave TE disabled in their bootloader configuration.  A
+	 * 24 ms watchdog is longer than the 60 Hz frame period but short enough
+	 * that the panel cannot remain on a stale RAMWR window.  If TE is present,
+	 * the rising edge above always wins and this branch is never on the normal
+	 * path.
+	 */
+	if (panel_te_age_ms >= 24u) {
+		panel_te_rearm(0);
+		return;
+	}
+	panel_te_last = level;
 }
 
 static void panel_reset(void)
@@ -3310,6 +3497,9 @@ int main(int argc, char **argv, char **envp)
 	}
 	map_framebuffer_device();
 	ge_display_open();
+	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
+	 * Linux before the first control-bus handoff. */
+	panel_te_irq_disable();
 
 	{
 #ifdef PANEL_PROBE_INIT
