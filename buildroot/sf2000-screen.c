@@ -61,6 +61,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_CTL 0x300u
 #define GMA_CTL_HW 0xb00u
 #define GMA_DMBA 0x304u
+#define GMA_DMBA_HW 0xb04u
 #define GMA_DMBA_ALT 0x384u
 #define GMA_CTL_ALT 0x380u
 #define GMA_K_ALT 0x388u
@@ -3036,10 +3037,30 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 
 	ge_copy_render_to_scanout();
 	flush_present_memory();
+	/*
+	 * Once the layer is running, match hc16xx_fb:gma_update_screen()
+	 * exactly.  Line-buffer, CSC, K and layer-enable programming belongs to
+	 * initialization; rewriting those registers (and the unused alternate
+	 * layer) around every DMBA update can prevent the primary shadow state
+	 * from latching even though the software DMBA register reads back.
+	 */
+	if (gma_taken_over) {
+		if (profile->doorbells & GMA_DOORBELL_PRIMARY) {
+			mask0 = mmio_read32(gma, GMA_MASK);
+			mmio_write32(gma, GMA_MASK, mask0 | 1u);
+			mmio_write32(gma, GMA_DMBA, gma_desc_phys);
+			mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+		}
+		if (profile->doorbells & GMA_DOORBELL_ALT) {
+			mask1 = mmio_read32(gma, GMA_MASK_ALT);
+			mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+			mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
+			mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+		}
+		return;
+	}
 	mask0 = mmio_read32(gma, GMA_MASK);
-	mask1 = mmio_read32(gma, GMA_MASK_ALT);
 	mmio_write32(gma, GMA_MASK, mask0 | 1u);
-	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 	linebuf = mmio_read32(gma, GMA_LINEBUF);
 	linebuf = (linebuf & ~0x1fu) | (profile->linebuf & 0x1fu);
 	linebuf |= 0x00020000u;
@@ -3066,15 +3087,15 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	else
 		ctl |= 1u;
 	mmio_write32(gma, GMA_CTL, ctl);
-	mmio_write32(gma, GMA_CTL_ALT,
-		(mmio_read32(gma, GMA_CTL_ALT) | (1u << 18)) & ~1u);
-	mmio_write32(gma, GMA_K_ALT, 0xff);
 	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
 		mmio_write32(gma, GMA_DMBA, gma_desc_phys);
-	if (profile->doorbells & GMA_DOORBELL_ALT)
-		mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
 	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
-	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+	if (profile->doorbells & GMA_DOORBELL_ALT) {
+		mask1 = mmio_read32(gma, GMA_MASK_ALT);
+		mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+		mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
+		mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+	}
 	if (!gma_taken_over) {
 		gma_set_bit(GMA_CTL, 1u, 1);
 		gma_taken_over = 1;
@@ -3127,6 +3148,12 @@ static void present_frame(void)
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-dmba", 0x3fu,
 			mmio_read32(gma, GMA_DMBA));
+	if (presents <= 4u) {
+		progress_mark("screen-gma-present-ctl-hw", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+		progress_mark("screen-gma-present-dmba-hw", 0x3fu,
+			mmio_read32(gma, GMA_DMBA_HW));
+	}
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
