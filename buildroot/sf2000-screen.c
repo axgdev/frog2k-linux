@@ -28,8 +28,8 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
-#define SCAN_WIDTH WIDTH
-#define SCAN_HEIGHT HEIGHT
+#define SCAN_WIDTH 640u
+#define SCAN_HEIGHT 480u
 #define SCAN_PITCH (SCAN_WIDTH * 2u)
 #define SCAN_BYTES (SCAN_PITCH * SCAN_HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
@@ -1470,11 +1470,47 @@ static void runtime_watchdog_disable(void)
 
 static void panel_vou_rgb_enable(void)
 {
+	static const uint32_t stock_vpo_commands[] = {
+		0x00000010u, 0x01000011u, 0x00000012u, 0x00000013u,
+		0x00000014u, 0x01000015u, 0x00000016u, 0x01000017u,
+		0x00000018u, 0x01000019u,
+	};
+	static const uint32_t stock_vpo_coef_indexes[] = {
+		0x00000800u, 0x00000900u, 0x00000a00u, 0x00000b00u,
+		0x00000c00u, 0x00000d00u, 0x00000e00u, 0x00000f00u,
+	};
 	uint32_t inherited = mmio_read32(gma, VOU_VPO_CTRL);
+	unsigned i;
 
 	progress_mark("screen-vpo-before-90", 0x3fu, inherited);
 	progress_mark("screen-vpo-before-94", 0x3fu,
 		mmio_read32(gma, VOU_VPO_PHASE));
+	/* Reproduce libviddrv's complete RGB/VPO setup, including write ports. */
+	mmio_write32(gma, VOU_RGB_ENABLE, 0x00010000u);
+	mmio_write32(gma, 0x1e4u, 0x016c6800u);
+	mmio_write32(gma, 0x1e4u, 0x016ca000u);
+	mmio_write32(gma, 0x234u, 0xa13c7c00u);
+	mmio_write32(gma, 0x234u, 0xa13c7b00u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00000001u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800001u);
+	mmio_write32(gma, VOU_VPO_FORMAT, 0x00000000u);
+	for (i = 0; i < ARRAY_SIZE(stock_vpo_commands); i++)
+		mmio_write32(gma, 0x14cu, stock_vpo_commands[i]);
+	progress_mark("screen-vpo-command-last", 0x3fu,
+		mmio_read32(gma, 0x14cu));
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800101u);
+	mmio_write32(gma, VOU_VPO_WIDTH, WIDTH);
+	mmio_write32(gma, 0x188u, 0x00108080u);
+	mmio_write32(gma, 0x18cu, 0x00000000u);
+	for (i = 0; i < ARRAY_SIZE(stock_vpo_coef_indexes); i++) {
+		mmio_write32(gma, VOU_VPO_PHASE, stock_vpo_coef_indexes[i]);
+		mmio_write32(gma, VOU_VPO_COEF, 0x0000000fu);
+	}
+	mmio_write32(gma, VOU_VPO_PHASE, 0x00000000u);
+	mmio_write32(gma, VOU_VPO_PHASE, 0x00010000u);
+	mmio_write32(gma, VOU_VPO_AUX, 0x00000000u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800100u);
+
 	/* Exact final HC15 state captured immediately before stock GMA use. */
 	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
@@ -1503,15 +1539,15 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_HD_TIMING3, 0x00030702u);
 	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
 	mmio_write32(gma, 0x094u, 0x00000140u);
-	mmio_write32(gma, VOU_VPO_CTRL, 0x04210000u);
-	mmio_write32(gma, VOU_VPO_PHASE, 0);
-	mmio_write32(gma, VOU_VPO_WIDTH, WIDTH);
-	mmio_write32(gma, VOU_VPO_AUX, 0);
 	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
 	progress_mark("screen-vpo-after-90", 0x3fu,
 		mmio_read32(gma, VOU_VPO_CTRL));
 	progress_mark("screen-vpo-after-94", 0x3fu,
 		mmio_read32(gma, VOU_VPO_PHASE));
+	progress_mark("screen-vpo-after-98", 0x3fu,
+		mmio_read32(gma, VOU_VPO_COEF));
+	progress_mark("screen-vpo-after-9c", 0x3fu,
+		mmio_read32(gma, VOU_VPO_FORMAT));
 	progress_mark("screen-vpo-after-b8", 0x3fu,
 		mmio_read32(gma, VOU_VPO_WIDTH));
 }
@@ -2497,13 +2533,38 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
 	(void)variant;
+	d0 |= 1u;       /* is_last_block */
+	d0 |= 1u << 2;  /* HC15 stock RGB565 always enables the scaler */
 	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
+	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
+	d0 |= 1u << 11; /* HC15 stock RGB565 descriptor semantics */
 	return d0;
 }
 
 static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	uint32_t pitch)
 {
+	static const uint32_t scaler_coefficients[32][2] = {
+		{ 0x0088003cu, 0x0000003cu }, { 0x00860036u, 0x00010043u },
+		{ 0x0085002fu, 0x0002004au }, { 0x00840029u, 0x00030050u },
+		{ 0x00810023u, 0x00050057u }, { 0x007d001eu, 0x0007005eu },
+		{ 0x00790019u, 0x000a0064u }, { 0x00740015u, 0x000d006au },
+		{ 0x00700010u, 0x00100070u }, { 0x006a000du, 0x00150074u },
+		{ 0x0064000au, 0x00190079u }, { 0x005e0007u, 0x001e007du },
+		{ 0x00570005u, 0x00230081u }, { 0x00500003u, 0x00290084u },
+		{ 0x004a0002u, 0x002f0085u }, { 0x00430001u, 0x00360086u },
+		{ 0x00800080u, 0x00000000u }, { 0x00880075u, 0x00000003u },
+		{ 0x008e006bu, 0x00000007u }, { 0x00940060u, 0x0000000cu },
+		{ 0x00990056u, 0x00000011u }, { 0x009c004cu, 0x00000018u },
+		{ 0x009f0042u, 0x0000001fu }, { 0x00a20038u, 0x00000026u },
+		{ 0x00a2002fu, 0x0000002fu }, { 0x00a10027u, 0x00000038u },
+		{ 0x00a0001fu, 0x00000041u }, { 0x009d0018u, 0x0000004bu },
+		{ 0x00990011u, 0x00000056u }, { 0x0094000cu, 0x00000060u },
+		{ 0x008e0007u, 0x0000006bu }, { 0x00880003u, 0x00000075u },
+	};
+	static const int32_t bt709[12] = {
+		93, 314, 32, 0, -52, -173, 225, 0, 225, -204, -21, 0
+	};
 	unsigned i;
 
 	(void)pitch;
@@ -2520,10 +2581,17 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
 	write_desc32(4, (SCAN_HEIGHT << 16) | SCAN_WIDTH);
-	/* Match the native descriptor proven visible during early Linux boot. */
-	write_desc32(5, 0xffu | (SCAN_PITCH << 16));
+	write_desc32(5, 0x0fu | (SCAN_PITCH << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
+	write_desc32(9, 0x20002000u);
+	/* HC15 fetches two scaler taps every four words for each phase. */
+	for (i = 0; i < ARRAY_SIZE(scaler_coefficients); i++) {
+		write_desc32(16u + i * 4u, scaler_coefficients[i][0]);
+		write_desc32(17u + i * 4u, scaler_coefficients[i][1]);
+	}
+	for (i = 0; i < ARRAY_SIZE(bt709); i++)
+		write_desc32(144u + i, (uint32_t)bt709[i]);
 }
 
 static void build_gma_descriptor_variant(unsigned variant)
@@ -2751,6 +2819,10 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 			mmio_read32(gma, GMA_LINEBUF));
 		progress_mark("screen-gma-desc0", 0x3fu,
 			((volatile uint32_t *)(gma_ram + gma_desc_off))[0]);
+		progress_mark("screen-gma-scale0", 0x3fu,
+			((volatile uint32_t *)(gma_ram + gma_desc_off))[16]);
+		progress_mark("screen-gma-scale31", 0x3fu,
+			((volatile uint32_t *)(gma_ram + gma_desc_off))[140]);
 		progress_mark("screen-gma-csc0", 0x3fu,
 			((volatile uint32_t *)(gma_ram + gma_desc_off))[144]);
 		logged_hw_state = 1;
