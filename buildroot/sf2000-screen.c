@@ -1464,18 +1464,6 @@ static void panel_rgb_output_mux_enable(void)
 	progress_mark("screen-rgb-strap", 0x3fu, strap);
 
 	/*
-	 * HC15's RGB/VPO setup also clears the shared clock-control bit 19.  The
-	 * stock trace shows this transition (0x00083700 -> 0x00003700); leaving
-	 * the inherited bit set gates the RGB timing path even though VPO and GMA
-	 * report an enabled state.
-	 */
-	value = mmio_read32(sysio, SYS_CLK_CTR_OFF);
-	value &= ~(1u << 19);
-	mmio_write32(sysio, SYS_CLK_CTR_OFF, value);
-	progress_mark("screen-rgb-sysclk", 0x3fu,
-		mmio_read32(sysio, SYS_CLK_CTR_OFF));
-
-	/*
 	 * The source selectors are shared with PQ, HDMI, MIPI and LVDS.  The
 	 * original RGB helper only updates the RGB fields, which is sufficient
 	 * after a cold reset but leaves a stale route selected when Linux follows
@@ -1558,6 +1546,7 @@ static void panel_vou_rgb_enable(void)
 		0x00000c00u, 0x00000d00u, 0x00000e00u, 0x00000f00u,
 	};
 	uint32_t inherited = mmio_read32(gma, VOU_VPO_CTRL);
+	uint32_t clock;
 	unsigned i;
 
 	progress_mark("screen-vpo-before-90", 0x3fu, inherited);
@@ -1589,10 +1578,64 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_VPO_AUX, 0x00000000u);
 	mmio_write32(gma, VOU_VPO_CTRL, 0x00800100u);
 
-	/* Exact final HC15 state captured immediately before stock GMA use. */
-	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
+	/*
+	 * These are not redundant writes.  libviddrv moves the HD/VPO block
+	 * through reset, timing-load and output-enable states before loading the
+	 * final RGB timings.  Writing only the final values leaves readable
+	 * registers that look correct, but the compositor remains unlatched and
+	 * the RGB port emits VPO's constant 0x00108080 background.
+	 */
+	mmio_write32(gma, VOU_HD_MODE, 0x00000011u);
+	mmio_write32(gma, VOU_HD_MODE, 0x00000001u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127002u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127002u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127102u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00020502u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00020102u);
+	mmio_write32(gma, 0x07cu, 0x00000000u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00020102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00127102u);
+	mmio_write32(gma, 0x07cu, 0x00010000u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, 0x07cu, 0x00010000u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
 	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
+	mmio_write32(gma, 0x030u, 0x00000038u);
 	mmio_write32(gma, 0x030u, 0x000a0038u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_MODE, 0x00000011u);
+	mmio_write32(gma, 0x064u, 0x0037012au);
+	mmio_write32(gma, 0x068u, 0x021d0089u);
+	mmio_write32(gma, 0x06cu, 0x000001cbu);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030302u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030702u);
+	mmio_write32(gma, 0x094u, 0x00000140u);
+	mmio_write32(gma, VOU_HD_TIMING3, 0x00030702u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
+	/*
+	 * At precisely this arm-to-timing boundary libviddrv pulses SYS_CLK_CTR
+	 * bit 19 (0x00083700 -> 0x00003700).  Linux inherits zero on a cold
+	 * path, so merely clearing the bit produces no edge and the RGB timing
+	 * generator never latches.  Preserve unrelated clock fields while
+	 * reproducing both writes and the observed RGB divider/source bits.
+	 */
+	clock = mmio_read32(sysio, SYS_CLK_CTR_OFF) | 0x00083700u;
+	mmio_write32(sysio, SYS_CLK_CTR_OFF, clock);
+	clock &= ~(1u << 19);
+	mmio_write32(sysio, SYS_CLK_CTR_OFF, clock);
+	progress_mark("screen-rgb-sysclk", 0x3fu,
+		mmio_read32(sysio, SYS_CLK_CTR_OFF));
+
+	/* Exact final HC15 timing state captured immediately before GMA use. */
 	mmio_write32(gma, VOU_HD_TIMING2, 0x01300378u);
 	mmio_write32(gma, 0x010u, 0x00040378u);
 	mmio_write32(gma, 0x040u, 0x00040378u);
@@ -1610,14 +1653,14 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, 0x058u, 0x07ff07ffu);
 	mmio_write32(gma, 0x02cu, 0x013007ffu);
 	mmio_write32(gma, 0x05cu, 0x013007ffu);
-	mmio_write32(gma, 0x064u, 0x0037012au);
-	mmio_write32(gma, 0x068u, 0x021d0089u);
-	mmio_write32(gma, 0x06cu, 0x000001cbu);
-	mmio_write32(gma, 0x07cu, 0x00010000u);
-	mmio_write32(gma, VOU_HD_TIMING3, 0x00030702u);
-	mmio_write32(gma, VOU_HD_CTRL, 0x00137102u);
-	mmio_write32(gma, 0x094u, 0x00000140u);
+	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
+	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
+	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
+	progress_mark("screen-vou-latch-done", 0x3fu,
+		mmio_read32(gma, VOU_HD_MODE) ^
+		mmio_read32(gma, VOU_HD_TIMING3) ^
+		mmio_read32(gma, VOU_HD_CTRL));
 	progress_mark("screen-vpo-after-90", 0x3fu,
 		mmio_read32(gma, VOU_VPO_CTRL));
 	progress_mark("screen-vpo-after-94", 0x3fu,
@@ -2968,9 +3011,13 @@ static void ge_copy_render_to_scanout(void)
 				unsigned di = (sy * 2u) * SCAN_WIDTH + sx * 2u;
 				uint16_t expected = src[si];
 
-				if (dst[di] != expected || dst[di + 1u] != expected ||
-					dst[di + SCAN_WIDTH] != expected ||
-					dst[di + SCAN_WIDTH + 1u] != expected) {
+				/*
+				 * The vendor stretch filter interpolates the three pixels
+				 * between source anchors; they are deliberately not nearest-
+				 * neighbour duplicates.  Validate DMA placement at each exact
+				 * 2x anchor instead of rejecting correct filtered output.
+				 */
+				if (dst[di] != expected) {
 					verified = 0;
 					verify_detail = ((uint32_t)i << 24) |
 						((uint32_t)expected << 16) |
