@@ -48,6 +48,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
+#define GMA_DESC_STRIDE 0x00000280u
 #define GMA_FRAME_PHYS (GMA_RAM_PHYS + 0x00010000u)
 #define GMA_RENDER_PHYS (GMA_RAM_PHYS + 0x000a8000u)
 #define GMA_DESC_OFF (GMA_DESC_PHYS - GMA_RAM_PHYS)
@@ -282,6 +283,9 @@ static uint16_t *framebuffer(void);
 static hcge_context *display_ge;
 static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
+static unsigned gma_desc_slot;
+static uint32_t gma_desc_phys = GMA_DESC_PHYS;
+static uint32_t gma_desc_off = GMA_DESC_OFF;
 static void panel_restart_frame(void);
 
 struct glyph {
@@ -2495,7 +2499,7 @@ static int console_handle_held_buttons(uint32_t held_buttons)
 
 static void write_desc32(unsigned idx, uint32_t value)
 {
-	((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[idx] = value;
+	((volatile uint32_t *)(gma_ram + gma_desc_off))[idx] = value;
 }
 
 static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
@@ -2520,6 +2524,10 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	unsigned i;
 
 	(void)pitch;
+	/* Never rewrite the descriptor currently scanned by the HC15 GMA. */
+	gma_desc_slot ^= 1u;
+	gma_desc_off = GMA_DESC_OFF + gma_desc_slot * GMA_DESC_STRIDE;
+	gma_desc_phys = GMA_DESC_PHYS + gma_desc_slot * GMA_DESC_STRIDE;
 
 	for (i = 0; i < GMA_DESC_BYTES / sizeof(uint32_t); i++)
 		write_desc32(i, 0);
@@ -2551,7 +2559,7 @@ static void build_gma_descriptor(void)
 
 static void flush_present_memory(void)
 {
-	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), GMA_DESC_BYTES, BCACHE);
+	(void)cacheflush((void *)(gma_ram + gma_desc_off), GMA_DESC_BYTES, BCACHE);
 	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), SCAN_BYTES, BCACHE);
 }
 
@@ -2696,9 +2704,11 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
 	static int logged_hw_state;
+	static int gma_taken_over;
 	uint32_t mask0;
 	uint32_t mask1;
 	uint32_t linebuf;
+	uint32_t ctl;
 
 	ge_copy_render_to_scanout();
 	flush_present_memory();
@@ -2711,18 +2721,42 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	linebuf |= 0x00020000u;
 	mmio_write32(gma, GMA_LINEBUF, linebuf);
 	mmio_write32(gma, GMA_K, 0xff);
+	/*
+	 * The boot diagnostic leaves descriptor slot 0 active.  Do not modify
+	 * that slot or change its base while the fetcher is running: the stock
+	 * firmware prepares a new list with the layer disabled, rings DMBA, and
+	 * enables the layer in a second masked transaction.  The descriptor
+	 * builder alternates two 0x280-byte slots, so this first handoff and all
+	 * subsequent updates always point the fetcher at a complete list.
+	 */
+	ctl = mmio_read32(gma, GMA_CTL);
+	ctl &= ~((1u << 19) | 1u);
+	if (profile->sdk_enhance)
+		ctl |= 1u << 18;
+	else {
+		ctl &= ~(1u << 18);
+		ctl |= 1u << 19;
+	}
+	if (!gma_taken_over)
+		progress_mark("screen-gma-takeover-off", 0x3fu, ctl);
+	else
+		ctl |= 1u;
+	mmio_write32(gma, GMA_CTL, ctl);
 	mmio_write32(gma, GMA_CTL_ALT,
-		mmio_read32(gma, GMA_CTL_ALT) | (1u << 18));
+		(mmio_read32(gma, GMA_CTL_ALT) | (1u << 18)) & ~1u);
 	mmio_write32(gma, GMA_K_ALT, 0xff);
-	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
-		mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
+		mmio_write32(gma, GMA_DMBA, gma_desc_phys);
 	if (profile->doorbells & GMA_DOORBELL_ALT)
-		mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
+		mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
 	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
 	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
-	gma_set_bit(GMA_CTL, 1u << 19, !profile->sdk_enhance);
-	gma_set_bit(GMA_CTL, 1u << 18, profile->sdk_enhance);
+	if (!gma_taken_over) {
+		gma_set_bit(GMA_CTL, 1u, 1);
+		gma_taken_over = 1;
+		progress_mark("screen-gma-takeover-on", 0x3fu,
+			mmio_read32(gma, GMA_CTL));
+	}
 	if (!logged_hw_state) {
 		progress_mark("screen-gma-ctl", 0x3fu,
 			mmio_read32(gma, GMA_CTL));
@@ -2737,9 +2771,9 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 		progress_mark("screen-gma-linebuf", 0x3fu,
 			mmio_read32(gma, GMA_LINEBUF));
 		progress_mark("screen-gma-desc0", 0x3fu,
-			((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[0]);
+			((volatile uint32_t *)(gma_ram + gma_desc_off))[0]);
 		progress_mark("screen-gma-csc0", 0x3fu,
-			((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[144]);
+			((volatile uint32_t *)(gma_ram + gma_desc_off))[144]);
 		logged_hw_state = 1;
 	}
 }
@@ -2770,7 +2804,7 @@ static void run_rgb_probe_matrix(unsigned *frame)
 		console_add_line(probes[i].label);
 		draw_console_screen(++*frame);
 		build_gma_descriptor();
-		d0 = ((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[0];
+		d0 = ((volatile uint32_t *)(gma_ram + gma_desc_off))[0];
 		d0 &= ~probes[i].clear;
 		d0 |= probes[i].set;
 		write_desc32(0, d0);
@@ -2842,7 +2876,7 @@ static void log_gma_ready(void)
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: gma console ready desc=0x%08x fb=0x%08x %ux%u pitch=%u\n",
-		GMA_DESC_PHYS, GMA_FRAME_PHYS, WIDTH, HEIGHT, PITCH);
+		gma_desc_phys, GMA_FRAME_PHYS, WIDTH, HEIGHT, PITCH);
 	log_line(line);
 	append_file_log(line);
 }
