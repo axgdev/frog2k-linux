@@ -28,6 +28,10 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
+#define SCAN_WIDTH 640u
+#define SCAN_HEIGHT 480u
+#define SCAN_PITCH (SCAN_WIDTH * 2u)
+#define SCAN_BYTES (SCAN_PITCH * SCAN_HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define CONSOLE_COLS 52u
 #define CONSOLE_ROWS 28u
@@ -45,7 +49,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
 #define GMA_FRAME_PHYS (GMA_RAM_PHYS + 0x00010000u)
-#define GMA_RENDER_PHYS (GMA_RAM_PHYS + 0x00040000u)
+#define GMA_RENDER_PHYS (GMA_RAM_PHYS + 0x000a8000u)
 #define GMA_DESC_OFF (GMA_DESC_PHYS - GMA_RAM_PHYS)
 #define GMA_DESC_BYTES 640u
 #define GMA_FRAME_OFF (GMA_FRAME_PHYS - GMA_RAM_PHYS)
@@ -2545,6 +2549,8 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	};
 	unsigned i;
 
+	(void)pitch;
+
 	for (i = 0; i < GMA_DESC_BYTES / sizeof(uint32_t); i++)
 		write_desc32(i, 0);
 
@@ -2552,13 +2558,13 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	write_desc32(1, 0);
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
-	write_desc32(4, (HEIGHT << 16) | WIDTH);
+	write_desc32(4, (SCAN_HEIGHT << 16) | SCAN_WIDTH);
 	/* HC15 uses the four-bit alpha range seen in the stock RGB565 blocks. */
-	write_desc32(5, 0x0fu | (pitch << 16));
+	write_desc32(5, 0x0fu | (SCAN_PITCH << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
-	/* Explicit unity horizontal and vertical scaler increments (12.4). */
-	write_desc32(9, 0x10001000u);
+	/* Stock maps its 640x480 RGB565 surface onto the 320x240 panel. */
+	write_desc32(9, 0x20002000u);
 	for (i = 0; i < ARRAY_SIZE(bt709); i++)
 		write_desc32(144u + i, (uint32_t)bt709[i]);
 }
@@ -2576,7 +2582,7 @@ static void build_gma_descriptor(void)
 static void flush_present_memory(void)
 {
 	(void)cacheflush((void *)(gma_ram + GMA_DESC_OFF), GMA_DESC_BYTES, BCACHE);
-	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), SCAN_BYTES, BCACHE);
 }
 
 static void ge_display_open(void)
@@ -2602,12 +2608,28 @@ static void ge_copy_render_to_scanout(void)
 {
 	hcge_state *state;
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
+	HCGERectangle destination = { 0, 0, SCAN_WIDTH, SCAN_HEIGHT };
 	bool submitted;
 	int sync_ret = -1;
 	int verified = 1;
 
-	if (!display_ge)
+	if (!display_ge) {
+		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+		unsigned y;
+
+		for (y = 0; y < HEIGHT; y++) {
+			unsigned x;
+			for (x = 0; x < WIDTH; x++) {
+				uint16_t pixel = src[y * WIDTH + x];
+				unsigned out = (y * 2u) * SCAN_WIDTH + x * 2u;
+				dst[out] = dst[out + 1u] = pixel;
+				dst[out + SCAN_WIDTH] =
+					dst[out + SCAN_WIDTH + 1u] = pixel;
+			}
+		}
 		return;
+	}
 	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
 	state = &display_ge->state;
 	memset(state, 0, sizeof(*state));
@@ -2615,18 +2637,20 @@ static void ge_copy_render_to_scanout(void)
 	state->drawingflags = HCGE_DSDRAW_NOFX;
 	state->blittingflags = HCGE_DSBLIT_NOFX;
 	state->destination.config.format = HCGE_DSPF_RGB16;
-	state->destination.config.size.w = WIDTH;
-	state->destination.config.size.h = HEIGHT;
-	state->source = state->destination;
+	state->destination.config.size.w = SCAN_WIDTH;
+	state->destination.config.size.h = SCAN_HEIGHT;
+	state->source.config.format = HCGE_DSPF_RGB16;
+	state->source.config.size.w = WIDTH;
+	state->source.config.size.h = HEIGHT;
 	state->dst.phys = GMA_FRAME_PHYS;
-	state->dst.pitch = PITCH;
+	state->dst.pitch = SCAN_PITCH;
 	state->src.phys = GMA_RENDER_PHYS;
 	state->src.pitch = PITCH;
-	state->accel = HCGE_DFXL_BLIT;
+	state->accel = HCGE_DFXL_STRETCHBLIT;
 	hcge_set_state(display_ge, state, state->accel);
 	if (!display_ge_frames)
 		progress_mark("screen-ge-submit", 0x3fu, SCREEN_TAG);
-	submitted = hcge_blit(display_ge, &source, 0, 0);
+	submitted = hcge_stretch_blit(display_ge, &source, &destination);
 	if (!display_ge_frames)
 		progress_mark(submitted ? "screen-ge-submit-ok" :
 			"screen-ge-submit-fail", 0x3fu, SCREEN_TAG);
@@ -2638,15 +2662,33 @@ static void ge_copy_render_to_scanout(void)
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
 		if (sync_ret == 0 && !display_ge_frames) {
-			verified = memcmp((void *)(gma_ram + GMA_FRAME_OFF),
-				(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES) == 0;
+			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+			uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+
+			verified = dst[0] == src[0] &&
+				dst[SCAN_WIDTH - 1u] == src[WIDTH - 1u] &&
+				dst[(SCAN_HEIGHT - 1u) * SCAN_WIDTH] ==
+					src[(HEIGHT - 1u) * WIDTH];
 			progress_mark(verified ? "screen-ge-verify-ok" :
 				"screen-ge-verify-fail", 0x3fu, SCREEN_TAG);
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
-		memcpy((void *)(gma_ram + GMA_FRAME_OFF),
-			(void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
+		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+		unsigned y;
+
+		for (y = 0; y < HEIGHT; y++) {
+			unsigned x;
+			for (x = 0; x < WIDTH; x++) {
+				uint16_t pixel = src[y * WIDTH + x];
+				unsigned out = (y * 2u) * SCAN_WIDTH + x * 2u;
+				dst[out] = pixel;
+				dst[out + 1u] = pixel;
+				dst[out + SCAN_WIDTH] = pixel;
+				dst[out + SCAN_WIDTH + 1u] = pixel;
+			}
+		}
 		log_line(verified ?
 			"sf2000-screen: GE present failed, copied on CPU\n" :
 			"sf2000-screen: GE copy mismatch, disabling acceleration\n");
