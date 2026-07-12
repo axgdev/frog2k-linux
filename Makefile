@@ -1147,12 +1147,11 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00060000 name=screen-te-framed' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-capture' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-edge-latched' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-te-no-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-te-rearm' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'panel-cmd cmd=0x2c .*count=3[5-9]' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
