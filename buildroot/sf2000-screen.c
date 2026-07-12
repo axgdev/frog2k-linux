@@ -1540,8 +1540,13 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, 0x234u, 0xa13c7c00u);
 	mmio_write32(gma, 0x234u, 0xa13c7b00u);
 	mmio_write32(gma, VOU_VPO_CTRL, 0x00000001u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00000001u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800001u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800001u);
 	mmio_write32(gma, VOU_VPO_CTRL, 0x00800001u);
 	mmio_write32(gma, VOU_VPO_FORMAT, 0x00000000u);
+	mmio_write32(gma, VOU_VPO_FORMAT, 0x00000000u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800001u);
 	for (i = 0; i < ARRAY_SIZE(stock_vpo_commands); i++)
 		mmio_write32(gma, 0x14cu, stock_vpo_commands[i]);
 	progress_mark("screen-vpo-command-last", 0x3fu,
@@ -1550,6 +1555,7 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_VPO_WIDTH, WIDTH);
 	mmio_write32(gma, 0x188u, 0x00108080u);
 	mmio_write32(gma, 0x18cu, 0x00000000u);
+	mmio_write32(gma, VOU_VPO_CTRL, 0x00800101u);
 	for (i = 0; i < ARRAY_SIZE(stock_vpo_coef_indexes); i++) {
 		mmio_write32(gma, VOU_VPO_PHASE, stock_vpo_coef_indexes[i]);
 		mmio_write32(gma, VOU_VPO_COEF, 0x0000000fu);
@@ -1900,7 +1906,7 @@ static void panel_rgb_bus_connect(void)
 	panel_rgb_stream_begin();
 }
 
-static int panel_wait_gma_raster(void)
+static int panel_wait_gma_raster(uint32_t expected_dmba)
 {
 	uint32_t ctl_hw = 0;
 	uint32_t dmba_hw = 0;
@@ -1911,17 +1917,16 @@ static int panel_wait_gma_raster(void)
 	 * a VOU frame boundary, so readback from the staging side is not evidence
 	 * that a pixel raster exists.  In particular, selecting ST7789 RAMCTRL
 	 * RGB mode before this transition leaves a cold panel holding the last MCU
-	 * frame.  Wait for the same hardware state that hc16xx_fb waits for through
-	 * its update interrupt before transferring ownership of the shared pins.
+	 * frame.  Require the exact descriptor transition observed through the HC15
+	 * hardware mirrors before transferring ownership of the shared pins.
 	 */
 	progress_mark("screen-raster-wait-begin", 0x3fu,
 		mmio_read32(gma, GMA_CTL_HW));
+	progress_mark("screen-raster-expected", 0x3fu, expected_dmba);
 	for (elapsed = 0; elapsed < 200u && !stopping; elapsed++) {
 		ctl_hw = mmio_read32(gma, GMA_CTL_HW);
 		dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
-		if ((ctl_hw & 1u) &&
-			(dmba_hw == GMA_DESC_PHYS ||
-			 dmba_hw == GMA_DESC_PHYS + GMA_DESC_STRIDE))
+		if ((ctl_hw & 1u) && dmba_hw == expected_dmba)
 			break;
 		sleep_ms(1);
 	}
@@ -1941,6 +1946,62 @@ static int panel_wait_gma_raster(void)
 	}
 	progress_mark("screen-raster-wait-ok", 0x3fu, dmba_hw);
 	return 0;
+}
+
+static void mark_hc15_display_state(int post)
+{
+	/*
+	 * Retain a safe MMIO-only display dump across the watchdog reboot.  These
+	 * are the HC15 SYSIO, pinmux, VOU and GMA registers that can be compared
+	 * directly with the original firmware/UniFrog; deliberately exclude the
+	 * 0x18860000 PHY window which faults on the physical SF2000.
+	 */
+	progress_mark(post ? "screen-post-sysclk" : "screen-pre-sysclk", 0x3fu,
+		mmio_read32(sysio, SYS_CLK_CTR_OFF));
+	progress_mark(post ? "screen-post-gate1" : "screen-pre-gate1", 0x3fu,
+		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
+	progress_mark(post ? "screen-post-reset1" : "screen-pre-reset1", 0x3fu,
+		mmio_read32(sysio, SYS_RESET1_OFF));
+	progress_mark(post ? "screen-post-lcdsetup" : "screen-pre-lcdsetup", 0x3fu,
+		mmio_read32(sysio, SYS_LCD_SETUP_OFF));
+	progress_mark(post ? "screen-post-rgbsource" : "screen-pre-rgbsource", 0x3fu,
+		mmio_read32(sysio, SYS_RGB_SOURCE_OFF));
+	progress_mark(post ? "screen-post-src0" : "screen-pre-src0", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF));
+	progress_mark(post ? "screen-post-src1" : "screen-pre-src1", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC1_OFF));
+	progress_mark(post ? "screen-post-src2" : "screen-pre-src2", 0x3fu,
+		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
+	progress_mark(post ? "screen-post-pin-l00" : "screen-pre-pin-l00", 0x3fu,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x00u));
+	progress_mark(post ? "screen-post-pin-l04" : "screen-pre-pin-l04", 0x3fu,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x04u));
+	progress_mark(post ? "screen-post-pin-l08" : "screen-pre-pin-l08", 0x3fu,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x08u));
+	progress_mark(post ? "screen-post-pin-t00" : "screen-pre-pin-t00", 0x3fu,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x00u));
+	progress_mark(post ? "screen-post-pin-t04" : "screen-pre-pin-t04", 0x3fu,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x04u));
+	progress_mark(post ? "screen-post-pin-t08" : "screen-pre-pin-t08", 0x3fu,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x08u));
+	progress_mark(post ? "screen-post-pin-t0c" : "screen-pre-pin-t0c", 0x3fu,
+		mmio_read32(sysio, PINMUX_T_OFF + 0x0cu));
+	progress_mark(post ? "screen-post-vou-mode" : "screen-pre-vou-mode", 0x3fu,
+		mmio_read32(gma, VOU_HD_MODE));
+	progress_mark(post ? "screen-post-vou-total" : "screen-pre-vou-total", 0x3fu,
+		mmio_read32(gma, VOU_HD_TIMING2));
+	progress_mark(post ? "screen-post-vou-ctrl" : "screen-pre-vou-ctrl", 0x3fu,
+		mmio_read32(gma, VOU_HD_CTRL));
+	progress_mark(post ? "screen-post-rgb-enable" : "screen-pre-rgb-enable", 0x3fu,
+		mmio_read32(gma, VOU_RGB_ENABLE));
+	progress_mark(post ? "screen-post-gma-ctl" : "screen-pre-gma-ctl", 0x3fu,
+		mmio_read32(gma, GMA_CTL));
+	progress_mark(post ? "screen-post-gma-ctl-hw" : "screen-pre-gma-ctl-hw", 0x3fu,
+		mmio_read32(gma, GMA_CTL_HW));
+	progress_mark(post ? "screen-post-gma-dmba" : "screen-pre-gma-dmba", 0x3fu,
+		mmio_read32(gma, GMA_DMBA));
+	progress_mark(post ? "screen-post-gma-dmba-hw" : "screen-pre-gma-dmba-hw", 0x3fu,
+		mmio_read32(gma, GMA_DMBA_HW));
 }
 
 static void panel_rgb_pinmux(void)
@@ -3100,34 +3161,36 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	ge_copy_render_to_scanout();
 	flush_present_memory();
 	/*
-	 * Once the layer is running, match hc16xx_fb:gma_update_screen()
-	 * exactly.  Line-buffer, CSC, K and layer-enable programming belongs to
-	 * initialization; rewriting those registers (and the unused alternate
-	 * layer) around every DMBA update can prevent the primary shadow state
-	 * from latching even though the software DMBA register reads back.
+	 * The captured HC15 frontend masks both compositor banks around every
+	 * primary DMBA update.  0x3d0 is not optional HC16-style layer state on
+	 * this chip: leaving it unmasked produces readable primary shadows without
+	 * proving that the complete HC15 compositor transaction was accepted.
 	 */
 	if (gma_taken_over) {
 		if (profile->doorbells & GMA_DOORBELL_PRIMARY) {
 			mask0 = mmio_read32(gma, GMA_MASK);
+			mask1 = mmio_read32(gma, GMA_MASK_ALT);
 			mmio_write32(gma, GMA_MASK, mask0 | 1u);
+			mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 			mmio_write32(gma, GMA_DMBA, gma_desc_phys);
 			mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+			mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 		}
 		if (profile->doorbells & GMA_DOORBELL_ALT) {
+			mask0 = mmio_read32(gma, GMA_MASK);
 			mask1 = mmio_read32(gma, GMA_MASK_ALT);
+			mmio_write32(gma, GMA_MASK, mask0 | 1u);
 			mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 			mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
+			mmio_write32(gma, GMA_MASK, mask0 & ~1u);
 			mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 		}
 		return;
 	}
-	mask0 = mmio_read32(gma, GMA_MASK);
-	mmio_write32(gma, GMA_MASK, mask0 | 1u);
 	linebuf = mmio_read32(gma, GMA_LINEBUF);
 	linebuf = (linebuf & ~0x1fu) | (profile->linebuf & 0x1fu);
 	linebuf |= 0x00020000u;
 	mmio_write32(gma, GMA_LINEBUF, linebuf);
-	mmio_write32(gma, GMA_K, 0xff);
 	/*
 	 * The boot diagnostic leaves descriptor slot 0 active.  Do not modify
 	 * that slot or change its base while the fetcher is running: the stock
@@ -3144,26 +3207,51 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 		ctl &= ~(1u << 18);
 		ctl |= 1u << 19;
 	}
-	if (!gma_taken_over)
-		progress_mark("screen-gma-takeover-off", 0x3fu, ctl);
-	else
-		ctl |= 1u;
+	progress_mark("screen-gma-takeover-off", 0x3fu, ctl);
+	/* Initialize primary exactly as HC15 gma_open(): disabled, K=0xff. */
 	mmio_write32(gma, GMA_CTL, ctl);
+	mmio_write32(gma, GMA_K, 0xffu);
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+	mmio_write32(gma, GMA_CTL, ctl);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+
+	/* HC15 initializes the otherwise unused alternate bank in lockstep. */
+	mmio_write32(gma, GMA_CTL_ALT, ctl);
+	mmio_write32(gma, GMA_K_ALT, 0xffu);
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+	mmio_write32(gma, GMA_CTL_ALT, ctl);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+
+	/* Commit the first descriptor as a separate stock HC15 transaction. */
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
 		mmio_write32(gma, GMA_DMBA, gma_desc_phys);
 	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 	if (profile->doorbells & GMA_DOORBELL_ALT) {
+		mask0 = mmio_read32(gma, GMA_MASK);
 		mask1 = mmio_read32(gma, GMA_MASK_ALT);
+		mmio_write32(gma, GMA_MASK, mask0 | 1u);
 		mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 		mmio_write32(gma, GMA_DMBA_ALT, gma_desc_phys);
+		mmio_write32(gma, GMA_MASK, mask0 & ~1u);
 		mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 	}
-	if (!gma_taken_over) {
-		gma_set_bit(GMA_CTL, 1u, 1);
-		gma_taken_over = 1;
-		progress_mark("screen-gma-takeover-on", 0x3fu,
-			mmio_read32(gma, GMA_CTL));
-	}
+	gma_set_bit(GMA_CTL, 1u, 1);
+	gma_taken_over = 1;
+	progress_mark("screen-gma-takeover-on", 0x3fu,
+		mmio_read32(gma, GMA_CTL));
 	if (!logged_hw_state) {
 		progress_mark("screen-gma-ctl", 0x3fu,
 			mmio_read32(gma, GMA_CTL));
@@ -3205,7 +3293,7 @@ static void present_frame(void)
 		build_gma_descriptor();
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-desc", 0x3fu, gma_desc_phys);
-	/* hc16xx_fb uses CSC mode with enhancement enabled for RGB565. */
+	/* The captured HC15 RGB565 frontend uses CSC enhancement mode. */
 	present_frame_profile(&gma_scanout_profiles[3]);
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-dmba", 0x3fu,
@@ -3358,11 +3446,16 @@ static void run_rgb_diag(unsigned *frame)
 		draw_diag_screen("GMA RGB SCANOUT", variant->name,
 			variant->madctl[0], *frame);
 		if (i == 0) {
+			mark_hc15_display_state(0);
 			panel_rgb_engine_prepare();
 			present_frame();
-			if (panel_wait_gma_raster() < 0)
+			if (panel_wait_gma_raster(gma_desc_phys) < 0)
+				break;
+			present_frame();
+			if (panel_wait_gma_raster(gma_desc_phys) < 0)
 				break;
 			panel_commit_rgb_handoff();
+			mark_hc15_display_state(1);
 		}
 		present_frame();
 		sleep_ms(350);
@@ -3377,6 +3470,7 @@ static void run_direct_console(unsigned *frame)
 	uint32_t evdev_held = 0;
 	unsigned idle = 0;
 	unsigned input_retry = 0;
+	int rgb_active = 0;
 
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
@@ -3401,31 +3495,48 @@ static void run_direct_console(unsigned *frame)
 	 * both zero when RAMCTRL transferred the display to RGB.
 	 */
 	progress_mark("screen-rgb-handoff-begin", 0x3fu, SCREEN_TAG);
+	mark_hc15_display_state(0);
 	progress_mark("screen-rgb-engine-prepare", 0x3fu, SCREEN_TAG);
 	panel_rgb_engine_prepare();
 	progress_mark("screen-rgb-engine-ready", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-prime-begin", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-rgb-prime-done", 0x3fu, SCREEN_TAG);
-	if (panel_wait_gma_raster() < 0) {
+	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		/* Preserve the working direct frame and retained failure snapshot. */
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
-		goto console_loop;
+		goto handoff_complete;
+	}
+	/*
+	 * One matching shadow can still be inherited from a previous owner.  Make
+	 * HC15 consume the alternate descriptor as a second independent proof that
+	 * its live fetcher is responding to Linux before the panel changes mode.
+	 */
+	progress_mark("screen-rgb-prime2-begin", 0x3fu, SCREEN_TAG);
+	present_frame();
+	progress_mark("screen-rgb-prime2-done", 0x3fu, SCREEN_TAG);
+	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
+		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		goto handoff_complete;
 	}
 	panel_commit_rgb_handoff();
+	rgb_active = 1;
+	mark_hc15_display_state(1);
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
-	present_frame();
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	log_gma_ready();
 
+handoff_complete:
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		console_add_line("open /dev/kmsg failed");
 		draw_console_screen(++*frame);
-		present_frame();
+		if (rgb_active)
+			present_frame();
+		else
+			panel_push_frame(0);
 	}
 
-console_loop:
 	publish_screen_ready_and_storage("direct-console\n");
 	progress_mark("screen-loop-enter", 0x3fu, *frame);
 
@@ -3466,7 +3577,10 @@ console_loop:
 			draw_console_screen(++*frame);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present", 0x3fu, *frame);
-			present_frame();
+			if (rgb_active)
+				present_frame();
+			else
+				panel_push_frame(0);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present-done", 0x3fu, *frame);
 			idle = 0;
