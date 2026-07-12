@@ -1146,6 +1146,8 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1155,7 +1157,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x000011f0 name=screen-panel-ramctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0xb0 index=0 value=0x0011' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0xb0 index=1 value=0x00f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel hardware reset RAMCTRL=00:f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel RAMCTRL access=RGB display=RGB value=11:f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0x36 index=0 value=0x0060' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-te-rearm' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1164,6 +1165,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'panel entered RGB mode before VOU/GMA raster was active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm

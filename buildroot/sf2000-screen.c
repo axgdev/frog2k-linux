@@ -1886,14 +1886,24 @@ static void panel_rgb_stream_begin(void)
 	progress_mark("screen-rgb-vsync", 0x3fu, mux);
 }
 
-static void panel_rgb_pinmux(void)
+static void panel_rgb_engine_prepare(void)
 {
 	panel_lcd_setup_enable();
 	panel_rgb_reset_release();
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
+}
+
+static void panel_rgb_bus_connect(void)
+{
 	panel_rgb_pad_mux_only();
 	panel_rgb_stream_begin();
+}
+
+static void panel_rgb_pinmux(void)
+{
+	panel_rgb_engine_prepare();
+	panel_rgb_bus_connect();
 }
 
 static void panel_config_outputs(void)
@@ -2296,6 +2306,18 @@ static void panel_prepare_rgb_frame(void)
 	if (!panel_enabled)
 		return;
 	watchdog_pet();
+	/*
+	 * The stock HC15 stack starts RGB/VOU (module priority 1) before the
+	 * ST7789 driver selects its external interface (module priorities 2/3).
+	 * Keep a complete raster running behind the shared GPIO control bus, then
+	 * connect the pads only after B0/B1/COLMOD are committed.  ST7789 derives
+	 * its RGB-mode controller from DOTCLK and latches its address on VSYNC;
+	 * selecting RGB while that clock domain is stopped can leave the last MCU
+	 * frame displayed indefinitely even though later register reads are sane.
+	 */
+	progress_mark("screen-rgb-engine-prepare", 0x3fu, SCREEN_TAG);
+	panel_rgb_engine_prepare();
+	progress_mark("screen-rgb-engine-ready", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-control-mux", 0x3fu, SCREEN_TAG);
 	panel_control_pinmux();
 	progress_mark("screen-rgb-output-config", 0x3fu, SCREEN_TAG);
@@ -2316,7 +2338,7 @@ static void panel_prepare_rgb_frame(void)
 		((uint32_t)profile->b1[1] << 8) | profile->colmod);
 	progress_mark("screen-panel-command-final", 0x3fu, ST7789_DISPON);
 	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
-	panel_rgb_pinmux();
+	panel_rgb_bus_connect();
 	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
 	watchdog_pet();
 }
@@ -3335,6 +3357,10 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	/* Arm GMA with a valid frame before ST7789 enters external RGB mode. */
+	progress_mark("screen-rgb-prime-begin", 0x3fu, SCREEN_TAG);
+	present_frame();
+	progress_mark("screen-rgb-prime-done", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-handoff-begin", 0x3fu, SCREEN_TAG);
 	panel_prepare_rgb_frame();
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
