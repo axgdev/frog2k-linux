@@ -292,6 +292,7 @@ static uint16_t *framebuffer(void);
 static hcge_context *display_ge;
 static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
+static unsigned display_ge_attempts;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
@@ -2877,6 +2878,8 @@ static void ge_copy_render_to_scanout(void)
 	int sync_ret = -1;
 	int verified = 1;
 	uint32_t verify_detail = 0;
+	unsigned attempt = ++display_ge_attempts;
+	int trace_attempt = attempt <= 4u;
 
 	if (!display_ge) {
 		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
@@ -2913,17 +2916,17 @@ static void ge_copy_render_to_scanout(void)
 	state->src.pitch = PITCH;
 	state->accel = HCGE_DFXL_STRETCHBLIT;
 	hcge_set_state(display_ge, state, state->accel);
-	if (!display_ge_frames)
-		progress_mark("screen-ge-submit", 0x3fu, SCREEN_TAG);
+	if (trace_attempt)
+		progress_mark("screen-ge-submit", 0x3fu, attempt);
 	submitted = hcge_stretch_blit(display_ge, &source, &destination);
-	if (!display_ge_frames)
+	if (trace_attempt)
 		progress_mark(submitted ? "screen-ge-submit-ok" :
-			"screen-ge-submit-fail", 0x3fu, SCREEN_TAG);
+			"screen-ge-submit-fail", 0x3fu, attempt);
 	if (submitted) {
-		if (!display_ge_frames)
-			progress_mark("screen-ge-sync", 0x3fu, SCREEN_TAG);
+		if (trace_attempt)
+			progress_mark("screen-ge-sync", 0x3fu, attempt);
 		sync_ret = hcge_engine_sync(display_ge);
-		if (!display_ge_frames)
+		if (trace_attempt)
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
 		if (sync_ret == 0 && !display_ge_frames) {
@@ -3290,6 +3293,7 @@ static void run_direct_console(unsigned *frame)
 		present_frame();
 	}
 	publish_screen_ready_and_storage("direct-console\n");
+	progress_mark("screen-loop-enter", 0x3fu, *frame);
 
 	while (!stopping) {
 		ssize_t got = -1;
@@ -3323,8 +3327,14 @@ static void run_direct_console(unsigned *frame)
 		}
 
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
+			if (*frame < 4u)
+				progress_mark("screen-loop-draw", 0x3fu, *frame + 1u);
 			draw_console_screen(++*frame);
+			if (*frame <= 4u)
+				progress_mark("screen-loop-present", 0x3fu, *frame);
 			present_frame();
+			if (*frame <= 4u)
+				progress_mark("screen-loop-present-done", 0x3fu, *frame);
 			idle = 0;
 		} else {
 			idle++;

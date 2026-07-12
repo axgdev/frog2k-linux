@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,362 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -33,6 +33,7 @@
 +#include <linux/io.h>
 +#include <linux/miscdevice.h>
 +#include <linux/module.h>
++#include <linux/mutex.h>
 +#include <linux/of.h>
 +#include <linux/of_address.h>
 +#include <linux/platform_device.h>
@@ -98,6 +99,9 @@
 +	dma_addr_t queue_dma;
 +	struct completion done;
 +	struct miscdevice misc;
++	struct mutex submit_lock;
++	u32 queue_next;
++	bool queue_started;
 +	int irq;
 +	bool irq_requested;
 +};
@@ -134,8 +138,11 @@
 +		return IRQ_NONE;
 +	writel(status, ge->regs + SF2000_GE_STATUS);
 +	ctx->serial_num++;
-+	ctx->is_finish = 1;
-+	complete(&ge->done);
++	if (readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++	    (ctx->phy_addr_start & ~1u)) {
++		ctx->is_finish = 1;
++		complete(&ge->done);
++	}
 +	return IRQ_HANDLED;
 +}
 +
@@ -181,11 +188,18 @@
 +		ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
 +		ctx->phy_addr_start = ctx->phy_addr_min;
 +		ctx->is_reset = 1;
++		ge->queue_next = ctx->phy_addr_min;
++		ge->queue_started = false;
++		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_FIRST);
++		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_LAST);
 +		return 0;
 +	case HCGE_SYNC_TIMEOUT: {
 +		unsigned long timeout = msecs_to_jiffies(arg ? arg : 1000);
++		u32 first = readl(ge->regs + SF2000_GE_HQ_FIRST);
 +
-+		if (!(readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY))
++		if (ctx->is_finish ||
++		    (!(readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY) &&
++		     first == (ctx->phy_addr_start & ~1u)))
 +			return 0;
 +		return wait_for_completion_interruptible_timeout(&ge->done, timeout) > 0 ?
 +			0 : -ETIMEDOUT;
@@ -214,27 +228,58 @@
 +		u32 offset = sizeof(*ctx);
 +		u32 first;
 +		u32 last;
++		u32 queue_end = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
++		bool wrapped = false;
++		long ret = 0;
 +
 +		if (copy_from_user(&submit, (void __user *)arg, sizeof(submit)))
 +			return -EFAULT;
 +		if (!submit.data || (submit.length & 3u) || !submit.length ||
 +		    submit.length > SF2000_GE_QUEUE_SIZE - offset)
 +			return -EINVAL;
++		mutex_lock(&ge->submit_lock);
++		/*
++		 * HQ_FIRST is the queue consumer, not a reusable descriptor base.
++		 * Hardware advances it after each node.  Keep the producer monotonic
++		 * exactly like vendor hcge_feed_nodes()/hcge_start(); rewinding it on
++		 * every submission leaves real HC15xx hardware with no new work.
++		 */
++		if (readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY) {
++			ret = -EBUSY;
++			goto submit_out;
++		}
++		if (!ge->queue_next || ge->queue_next < (u32)ge->queue_dma + offset ||
++		    ge->queue_next > queue_end)
++			ge->queue_next = (u32)ge->queue_dma + offset;
++		if (submit.length > queue_end - ge->queue_next) {
++			ge->queue_next = (u32)ge->queue_dma + offset;
++			wrapped = true;
++		}
++		first = ge->queue_next;
++		offset = first - (u32)ge->queue_dma;
 +		if (copy_from_user((u8 *)ge->queue + offset,
 +				   (void __user *)(unsigned long)submit.data,
-+				   submit.length))
-+			return -EFAULT;
-+		first = (u32)ge->queue_dma + offset;
++				   submit.length)) {
++			ret = -EFAULT;
++			goto submit_out;
++		}
 +		last = first + submit.length - sizeof(u32);
++		ge->queue_next = first + submit.length;
 +		reinit_completion(&ge->done);
 +		ctx->is_finish = 0;
++		ctx->is_reset = 0;
++		ctx->phy_addr_start = ge->queue_next;
 +		wmb();
-+		writel(first, ge->regs + SF2000_GE_HQ_FIRST);
++		if (!ge->queue_started || wrapped)
++			writel(first, ge->regs + SF2000_GE_HQ_FIRST);
 +		writel(last, ge->regs + SF2000_GE_HQ_LAST);
 +		value = readl(ge->regs + SF2000_GE_START);
-+		writel(value | SF2000_GE_START_HQ,
++		writel((value & ~3u) | SF2000_GE_START_HQ,
 +		       ge->regs + SF2000_GE_START);
-+		return 0;
++		ge->queue_started = true;
++submit_out:
++		mutex_unlock(&ge->submit_lock);
++		return ret;
 +	}
 +	default:
 +		return -ENOTTY;
@@ -283,7 +328,9 @@
 +	ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
 +	ctx->phy_addr_start = ctx->phy_addr_min;
 +	ctx->is_finish = 1;
++	ge->queue_next = ctx->phy_addr_min;
 +	init_completion(&ge->done);
++	mutex_init(&ge->submit_lock);
 +
 +	ge->irq = platform_get_irq(pdev, 0);
 +	if (ge->irq < 0)
