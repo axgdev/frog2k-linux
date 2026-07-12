@@ -1143,6 +1143,8 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000004 name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

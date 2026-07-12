@@ -2589,6 +2589,9 @@ static void draw_console_screen(unsigned frame)
 	snprintf(title, sizeof(title), "SF2000 LOG %06u +%03u/%03u",
 		frame, console_view_offset, console_max_view_offset());
 	draw_text(2, 2, title, rgb565(31, 63, 20), bar, 1);
+	/* Dynamic anchor proving that the GE copied this specific frame. */
+	fill_rect(WIDTH - 2u, HEIGHT - 2u, 2u, 2u,
+		(uint16_t)(0x8000u | (frame & 0x7fffu)));
 	for (row = 0; row < visible; row++) {
 		unsigned y = 16u + row * 8u;
 		const char *line = console_line_at(start + row);
@@ -2929,7 +2932,7 @@ static void ge_copy_render_to_scanout(void)
 		if (trace_attempt)
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
-		if (sync_ret == 0 && !display_ge_frames) {
+		if (sync_ret == 0 && trace_attempt) {
 			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 			uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
 			static const uint16_t samples[][2] = {
@@ -2971,7 +2974,7 @@ static void ge_copy_render_to_scanout(void)
 			}
 			progress_mark(verified ? "screen-ge-verify-ok" :
 				"screen-ge-verify-fail", 0x3fu,
-				verified ? SCREEN_TAG : verify_detail);
+				verified ? attempt : verify_detail);
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
@@ -3105,8 +3108,25 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 
 static void present_frame(void)
 {
+	static unsigned presents;
+
+	/*
+	 * HC15xx latches the DMBA block on a new descriptor address.  The vendor
+	 * hcfb driver builds block[sw_block_id], rings DMBA, then flips between its
+	 * two blocks.  Keep the descriptor currently owned by hardware untouched
+	 * and prepare the other slot before every presentation after the initial
+	 * boot handoff.
+	 */
+	presents++;
+	if (presents > 1u)
+		build_gma_descriptor();
+	if (presents <= 4u)
+		progress_mark("screen-gma-present-desc", 0x3fu, gma_desc_phys);
 	/* hc16xx_fb uses CSC mode with enhancement enabled for RGB565. */
 	present_frame_profile(&gma_scanout_profiles[3]);
+	if (presents <= 4u)
+		progress_mark("screen-gma-present-dmba", 0x3fu,
+			mmio_read32(gma, GMA_DMBA));
 }
 
 static int env_is(const char *const *envp, const char *name, const char *value)
