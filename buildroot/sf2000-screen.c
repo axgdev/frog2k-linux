@@ -569,7 +569,14 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 };
 
 static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
-	{ "SF2000-RTOS-565", 0, { 0x00, 0x00 }, { 0x40, 0x04, 0x14 }, 0x55 },
+	/*
+	 * A hardware reset restores ST7789 RAMCTRL to 00:f0 (MCU RAM access
+	 * and MCU display operation).  RM=1 plus DM=01 is required before the
+	 * panel will consume the live RGB stream; B1 configures its timing but
+	 * does not transfer that ownership.
+	 */
+	{ "SF2000-RGB-RAM-565", 1, { 0x11, 0xf0 },
+		{ 0x40, 0x04, 0x14 }, 0x55 },
 	{ "HCLINUX-RAMCTRL-666", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x66 },
 	{ "RAMCTRL-SF2000-565", 1, { 0x11, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
 	{ "RAMCTRL-HCLINUX-565", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x55 },
@@ -2011,6 +2018,8 @@ static void panel_apply_rgb_mode_profile(
 		panel_cmd(ST7789_RAMCTRL);
 		panel_data(profile->b0[0]);
 		panel_data(profile->b0[1]);
+		progress_mark("screen-panel-ramctrl", 0x3fu,
+			((uint32_t)profile->b0[0] << 8) | profile->b0[1]);
 	}
 	panel_cmd(ST7789_RGBCTRL);
 	panel_data(profile->b1[0]);

@@ -1152,12 +1152,18 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x000011f0 name=screen-panel-ramctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel-data cmd=0xb0 index=0 value=0x0011' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel-data cmd=0xb0 index=1 value=0x00f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel hardware reset RAMCTRL=00:f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel RAMCTRL access=RGB display=RGB value=11:f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0x36 index=0 value=0x0060' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-te-rearm' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'panel-cmd cmd=0x2c .*count=3[5-9]' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
