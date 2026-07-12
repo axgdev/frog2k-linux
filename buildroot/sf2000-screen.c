@@ -1425,6 +1425,8 @@ static void panel_rgb_output_mux_enable(void)
 
 	strap = mmio_read32(sysio, SYS_LCD_SETUP_OFF);
 	strap &= 0x0fffffffu;
+	/* HC15 TTL selector 2 is the RGB565 electrical format. */
+	strap |= 2u << 28;
 	strap |= 1u << 16;
 	mmio_write32(sysio, SYS_LCD_SETUP_OFF, strap);
 	progress_mark("screen-rgb-strap", 0x3fu, strap);
@@ -1464,11 +1466,14 @@ static void panel_rgb_output_mux_enable(void)
 
 	value = mmio_read32(sysio, SYS_VIDEO_SRC2_OFF);
 	/*
-	 * Match the vendor PQ setup mask.  Bits 0:10 select the source bit for
-	 * each RGB lane and bits 28:30 select high-to-low ordering.  The old
-	 * 0xf000f888 mask also destroyed unrelated bits 16:27.
+	 * Match the vendor RGB helper and explicitly select the normal RGB lane
+	 * order.  Bits 0:10 select each lane's FXDE source, bits 16:27 select
+	 * the R/G/B lane mapping, and bits 28:30 select high-to-low ordering.
+	 * All three groups must be cleared when the bootloader left a different
+	 * output mode behind; preserving them can produce a valid clock carrying
+	 * one constant colour.
 	 */
-	value &= ~0x70000777u;
+	value &= ~0x7fff0777u;
 	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
 	progress_mark("screen-rgb-src2", 0x3fu,
 		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
@@ -1695,6 +1700,15 @@ static void panel_rgb_pinmux(void)
 	panel_lcd_setup_enable();
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
+	/*
+	 * L09 is the PRGB VSYNC pad.  It is already selected by the stock
+	 * bootloader on most units, which made preserving the byte appear to
+	 * work, but Linux must not depend on that inherited state: panel control
+	 * and RGB handoff are allowed after a warm reset as well.  If this pad is
+	 * left as GPIO the VOU can run and GMA can complete while the panel sees
+	 * only its retained solid level.
+	 */
+	pinmux_set_pad(PINPAD_L09, PINMUX_PRGB_VSYNC);
 
 	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x06060606u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
@@ -2095,6 +2109,9 @@ static void panel_fill_solid_direct(uint16_t color)
 
 static void panel_prepare_rgb_frame(void)
 {
+	const struct panel_rgb_mode_profile *profile =
+		&panel_rgb_mode_profiles[0];
+
 	if (!panel_enabled)
 		return;
 	watchdog_pet();
@@ -2104,8 +2121,18 @@ static void panel_prepare_rgb_frame(void)
 	panel_config_outputs();
 	progress_mark("screen-rgb-bus-idle", 0x3fu, SCREEN_TAG);
 	panel_bus_idle();
-	progress_mark("screen-rgb-ramwr", 0x3fu, SCREEN_TAG);
-	panel_restart_frame();
+	/*
+	 * MCU/8080 writes and RGB scanout share the same ST7789 RAM.  Reassert
+	 * the SF2000's RGB565 interface contract immediately before changing the
+	 * pad mux.  Without this ordered B1/COLMOD/RAMWR handoff, the first direct
+	 * frame is visible and the subsequent VOU scanout is accepted as a
+	 * constant panel level on physical units.
+	 */
+	progress_mark("screen-rgb-panel-mode", 0x3fu, SCREEN_TAG);
+	panel_apply_rgb_mode_profile(profile);
+	progress_mark("screen-rgb-panel-mode-done", 0x3fu,
+		((uint32_t)profile->b1[0] << 16) |
+		((uint32_t)profile->b1[1] << 8) | profile->colmod);
 	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
 	panel_rgb_pinmux();
 	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
@@ -2678,6 +2705,7 @@ static void ge_copy_render_to_scanout(void)
 	bool submitted;
 	int sync_ret = -1;
 	int verified = 1;
+	uint32_t verify_detail = 0;
 
 	if (!display_ge) {
 		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
@@ -2730,13 +2758,42 @@ static void ge_copy_render_to_scanout(void)
 		if (sync_ret == 0 && !display_ge_frames) {
 			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 			uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+			static const uint16_t samples[][2] = {
+				{ 0, 0 }, { WIDTH / 2u, 0 }, { WIDTH - 1u, 0 },
+				{ 0, HEIGHT / 2u }, { WIDTH / 2u, HEIGHT / 2u },
+				{ WIDTH - 1u, HEIGHT / 2u }, { 0, HEIGHT - 1u },
+				{ WIDTH / 2u, HEIGHT - 1u }, { WIDTH - 1u, HEIGHT - 1u },
+				{ WIDTH / 4u, HEIGHT / 4u },
+				{ (WIDTH * 3u) / 4u, HEIGHT / 4u },
+				{ WIDTH / 4u, (HEIGHT * 3u) / 4u },
+				{ (WIDTH * 3u) / 4u, (HEIGHT * 3u) / 4u },
+				{ 32u, 32u }, { 160u, 80u }, { 288u, 208u },
+			};
+			unsigned i;
 
-			verified = dst[0] == src[0] &&
-				dst[SCAN_WIDTH - 1u] == src[WIDTH - 1u] &&
-				dst[(SCAN_HEIGHT - 1u) * SCAN_WIDTH] ==
-					src[(HEIGHT - 1u) * WIDTH];
+			/* The GE is a DMA master; invalidate any stale CPU lines first. */
+			(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF),
+				SCAN_BYTES, BCACHE);
+			for (i = 0; i < ARRAY_SIZE(samples); i++) {
+				unsigned sx = samples[i][0];
+				unsigned sy = samples[i][1];
+				unsigned si = sy * WIDTH + sx;
+				unsigned di = (sy * 2u) * SCAN_WIDTH + sx * 2u;
+				uint16_t expected = src[si];
+
+				if (dst[di] != expected || dst[di + 1u] != expected ||
+					dst[di + SCAN_WIDTH] != expected ||
+					dst[di + SCAN_WIDTH + 1u] != expected) {
+					verified = 0;
+					verify_detail = ((uint32_t)i << 24) |
+						((uint32_t)expected << 16) |
+						dst[di];
+					break;
+				}
+			}
 			progress_mark(verified ? "screen-ge-verify-ok" :
-				"screen-ge-verify-fail", 0x3fu, SCREEN_TAG);
+				"screen-ge-verify-fail", 0x3fu,
+				verified ? SCREEN_TAG : verify_detail);
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
@@ -2757,10 +2814,8 @@ static void ge_copy_render_to_scanout(void)
 		}
 		log_line(verified ?
 			"sf2000-screen: GE present failed, copied on CPU\n" :
-			"sf2000-screen: GE copy mismatch, disabling acceleration\n");
+			"sf2000-screen: GE copy mismatch, copied on CPU and retained GE\n");
 		progress_mark("screen-ge-present-fail", 0x3fu, SCREEN_TAG);
-		if (!verified)
-			display_ge = NULL;
 	} else {
 		display_ge_frames++;
 		if (display_ge_frames == 1u) {
