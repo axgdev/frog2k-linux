@@ -294,8 +294,21 @@ static unsigned display_ge_frames;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
+/*
+ * The stock VOU uses the 9 MHz clock with a 444 x 304 raster, while the panel
+ * controller's internal frame generator is configured near 60 Hz.  The two
+ * frame phases therefore drift unless each panel TE edge reopens its RGB RAM
+ * window, exactly as the recovered HCRTOS vsync_irq() handler does.
+ */
+static int panel_rgb_streaming;
+static int panel_te_busy;
+static int panel_te_last;
+static unsigned panel_te_age_ms;
+static unsigned panel_te_rearms;
 static void panel_restart_frame(void);
+static void panel_te_service_tick(void);
 static void panel_te_irq_disable(void);
+static void gpio_config_input(unsigned pad);
 
 struct glyph {
 	char ch;
@@ -943,6 +956,8 @@ static void sleep_ms(unsigned msec)
 			watchdog_pet();
 		for (spin = 0; spin < 18000u; spin++)
 			__asm__ volatile ("" ::: "memory");
+		if (panel_rgb_streaming)
+			panel_te_service_tick();
 	}
 	watchdog_pet();
 }
@@ -1719,6 +1734,28 @@ static void panel_te_irq_disable(void)
 	}
 }
 
+static void panel_te_capture_enable(void)
+{
+	uint32_t bit = gpio_bit_for_pad(PINPAD_L08);
+
+	/*
+	 * Keep the unsupported GPIO aggregate masked at the system interrupt
+	 * controller, but enable the GPIO child's rising-edge latch.  Polling only
+	 * the electrical L08 level can miss the panel's short TE pulse; polling
+	 * ISR preserves it until userspace has restarted the ST7789 RAM window.
+	 */
+	gpio_config_input(PINPAD_L08);
+	mmio_write32(sysio, GPIO_L_ISR_OFF, bit);
+	mmio_write32(sysio, GPIO_L_RIS_IER_OFF,
+		mmio_read32(sysio, GPIO_L_RIS_IER_OFF) | bit);
+	mmio_write32(sysio, GPIO_L_IER_OFF,
+		mmio_read32(sysio, GPIO_L_IER_OFF) | bit);
+	mmio_write32(sysio, GPIO_L_ISR_OFF, bit);
+	progress_mark("screen-te-capture", 0x3fu,
+		((mmio_read32(sysio, GPIO_L_IER_OFF) & bit) << 16) |
+		(mmio_read32(sysio, GPIO_L_RIS_IER_OFF) & bit));
+}
+
 static void gpio_config_output(unsigned pad)
 {
 	uint32_t base = gpio_base_for_pad(pad);
@@ -1791,7 +1828,6 @@ static void panel_control_pinmux(void)
 {
 	unsigned i;
 
-	panel_te_irq_disable();
 	panel_lcd_setup_enable();
 	/*
 	 * This is the non-RGB half of HCRTOS's lcd_pinmux_rgb(0).  The RGB
@@ -1865,14 +1901,16 @@ static void panel_rgb_pad_mux_only(void)
 
 static void panel_rgb_stream_begin(void)
 {
-	int te_level;
-
-	te_level = gpio_get_pad(PINPAD_L08);
-	progress_mark("screen-rgb-stream-on", 0x3fu,
-		((uint32_t)te_level << 31) |
-		(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu));
-	progress_mark("screen-de-only", 0x3fu,
-		mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu);
+	panel_rgb_streaming = 1;
+	panel_te_age_ms = 0;
+	panel_te_last = gpio_get_pad(PINPAD_L08);
+	if (panel_te_rearms == 0u) {
+		progress_mark("screen-rgb-stream-on", 0x3fu,
+			((uint32_t)panel_te_last << 31) |
+			(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu));
+		progress_mark("screen-te-framed", 0x3fu,
+			mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu);
+	}
 }
 
 static void panel_rgb_pinmux(void)
@@ -1882,6 +1920,8 @@ static void panel_rgb_pinmux(void)
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
 	panel_rgb_pad_mux_only();
+	panel_te_rearms = 0;
+	panel_te_capture_enable();
 	panel_rgb_stream_begin();
 }
 
@@ -2074,6 +2114,57 @@ static void panel_restart_frame(void)
 	panel_data((HEIGHT - 1u) >> 8);
 	panel_data((HEIGHT - 1u) & 0xffu);
 	panel_cmd(ST7789_RAMWR);
+}
+
+static void panel_te_rearm(void)
+{
+	uint32_t bit = gpio_bit_for_pad(PINPAD_L08);
+	unsigned rearm;
+
+	if (!panel_enabled || !panel_rgb_streaming || panel_te_busy)
+		return;
+
+	panel_te_busy = 1;
+	panel_rgb_streaming = 0;
+	/* Exact HCRTOS vsync_irq() ownership transition.  VOU and GMA continue
+	 * running; only the shared panel bus pads change owner. */
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_restart_frame();
+	panel_rgb_pad_mux_only();
+	mmio_write32(sysio, GPIO_L_ISR_OFF, bit);
+	rearm = ++panel_te_rearms;
+	panel_rgb_stream_begin();
+	panel_te_busy = 0;
+	if (rearm <= 8u)
+		progress_mark("screen-te-rearm-edge", 0x3fu,
+			(rearm << 16) | (uint32_t)panel_te_last);
+}
+
+static void panel_te_service_tick(void)
+{
+	uint32_t bit = gpio_bit_for_pad(PINPAD_L08);
+	uint32_t isr;
+	int level;
+
+	if (!panel_rgb_streaming || panel_te_busy)
+		return;
+
+	isr = mmio_read32(sysio, GPIO_L_ISR_OFF);
+	level = gpio_get_pad(PINPAD_L08);
+	panel_te_age_ms++;
+	if ((isr & bit) || (level && !panel_te_last)) {
+		if (panel_te_rearms == 0u)
+			progress_mark("screen-te-edge-latched", 0x3fu,
+				((isr & bit) << 16) | (uint32_t)level);
+		panel_te_rearm();
+		return;
+	}
+	panel_te_last = level;
+	if (panel_te_age_ms == 100u && panel_te_rearms == 0u)
+		progress_mark("screen-te-no-edge", 0x3fu,
+			((isr & bit) << 16) | (uint32_t)level);
 }
 
 static void panel_reset(void)
