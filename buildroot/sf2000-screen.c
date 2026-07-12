@@ -28,8 +28,8 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
-#define SCAN_WIDTH 640u
-#define SCAN_HEIGHT 480u
+#define SCAN_WIDTH WIDTH
+#define SCAN_HEIGHT HEIGHT
 #define SCAN_PITCH (SCAN_WIDTH * 2u)
 #define SCAN_BYTES (SCAN_PITCH * SCAN_HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
@@ -1452,16 +1452,6 @@ static void panel_rgb_output_mux_enable(void)
 	 */
 }
 
-static void panel_rgb_source_select(unsigned source)
-{
-	uint32_t value = mmio_read32(sysio, SYS_VIDEO_SRC1_OFF);
-
-	/* Vendor E_VIDEO_SRC_SEL: 0=FXDE, 1=4KDE, 3=HDMI/PQ. */
-	value &= ~(3u << 18);
-	value |= (source & 3u) << 18;
-	mmio_write32(sysio, SYS_VIDEO_SRC1_OFF, value);
-}
-
 static void runtime_watchdog_arm(void)
 {
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
@@ -2507,20 +2497,13 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
 
 	(void)variant;
-	d0 |= 1u;       /* is_last_block */
-	d0 |= 1u << 2;  /* HC15 stock RGB565 always enables the scaler */
 	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
-	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
-	d0 |= 1u << 11; /* HC15 stock RGB565 descriptor semantics */
 	return d0;
 }
 
 static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	uint32_t pitch)
 {
-	static const int32_t bt709[12] = {
-		93, 314, 32, 0, -52, -173, 225, 0, 225, -204, -21, 0
-	};
 	unsigned i;
 
 	(void)pitch;
@@ -2537,14 +2520,10 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
 	write_desc32(4, (SCAN_HEIGHT << 16) | SCAN_WIDTH);
-	/* HC15 uses the four-bit alpha range seen in the stock RGB565 blocks. */
-	write_desc32(5, 0x0fu | (SCAN_PITCH << 16));
+	/* Match the native descriptor proven visible during early Linux boot. */
+	write_desc32(5, 0xffu | (SCAN_PITCH << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
-	/* Stock maps its 640x480 RGB565 surface onto the 320x240 panel. */
-	write_desc32(9, 0x20002000u);
-	for (i = 0; i < ARRAY_SIZE(bt709); i++)
-		write_desc32(144u + i, (uint32_t)bt709[i]);
 }
 
 static void build_gma_descriptor_variant(unsigned variant)
@@ -2784,60 +2763,6 @@ static void present_frame(void)
 	present_frame_profile(&gma_scanout_profiles[3]);
 }
 
-static void run_rgb_probe_matrix(unsigned *frame)
-{
-	static const struct {
-		const char *label;
-		uint32_t set;
-		uint32_t clear;
-	} probes[] = {
-		{ "A0 VENDOR RGB565", 0, (1u << 1) | (1u << 11) },
-		{ "A1 ALPHA CLOSED", 1u << 1, 1u << 11 },
-		{ "A2 NO COLOR BY COLOR", 0, (1u << 8) | (1u << 11) },
-		{ "A3 PREMULTIPLY", 1u << 11, 1u << 1 },
-	};
-	unsigned i;
-
-	for (i = 0; i < ARRAY_SIZE(probes) && !stopping; i++) {
-		uint32_t d0;
-
-		console_add_line(probes[i].label);
-		draw_console_screen(++*frame);
-		build_gma_descriptor();
-		d0 = ((volatile uint32_t *)(gma_ram + gma_desc_off))[0];
-		d0 &= ~probes[i].clear;
-		d0 |= probes[i].set;
-		write_desc32(0, d0);
-		panel_rgb_pinmux();
-		panel_rgb_source_select(0);
-		progress_mark("screen-rgb-probe", 0x3fu,
-			d0);
-		present_frame();
-		watchdog_pet();
-		sleep_ms(2200);
-	}
-
-	/*
-	 * An observable control experiment independent of DE/GMA: reclaim the
-	 * multiplexed bus and rewrite the panel GRAM from the CPU after the RGB
-	 * probes.  If this appears, execution and the panel remain healthy.
-	 */
-	console_add_line("CPU RECOVERY AFTER RGB");
-	draw_console_screen(++*frame);
-	progress_mark("screen-cpu-recovery-begin", 0x3fu, SCREEN_TAG);
-	panel_push_frame(0);
-	progress_mark("screen-cpu-recovery-done", 0x3fu, SCREEN_TAG);
-	sleep_ms(2200);
-
-	panel_rgb_source_select(0);
-	console_add_line("RGB PROBE COMPLETE");
-	draw_console_screen(++*frame);
-	build_gma_descriptor();
-	panel_rgb_pinmux();
-	present_frame();
-	progress_mark("screen-rgb-probe-done", 0x3fu, SCREEN_TAG);
-}
-
 static int env_is(const char *const *envp, const char *name, const char *value)
 {
 	size_t name_len = strlen(name);
@@ -3013,7 +2938,6 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
-	run_rgb_probe_matrix(frame);
 	log_gma_ready();
 
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
