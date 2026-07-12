@@ -86,7 +86,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define SYS_VIDEO_SRC0_OFF 0x444u
 #define SYS_VIDEO_SRC1_OFF 0x448u
 #define SYS_VIDEO_SRC2_OFF 0x44cu
-#define SYS_RGB_CLK_INV_OFF 0x71cu
+#define SYS_RGB_SOURCE_OFF 0x3c8u
 #define VOU_HD_MODE 0x000u
 #define VOU_HD_TIMING0 0x004u
 #define VOU_HD_TIMING1 0x008u
@@ -1446,11 +1446,9 @@ static void panel_rgb_output_mux_enable(void)
 
 	/*
 	 * The source selectors are shared with PQ, HDMI, MIPI and LVDS.  The
-	 * original RGB helper only updates the RGB fields, which is sufficient
-	 * after a cold reset but leaves a stale route selected when Linux follows
-	 * the vendor bootloader.  PQ's own setup clears every competing output
-	 * route before selecting FXDE (enum value zero).  Do the same here while
-	 * retaining unrelated SYSIO bits.
+	 * original RGB helper only updates the RGB fields.  Retain every other
+	 * field: in particular, bits 16:27 of SRC2 are not RGB lane selectors in
+	 * libviddrv and changing them was an unsupported inference.
 	 */
 	value = mmio_read32(sysio, SYS_VIDEO_SRC0_OFF);
 	value &= ~((3u << 4) | (3u << 20));
@@ -1467,24 +1465,14 @@ static void panel_rgb_output_mux_enable(void)
 
 	value = mmio_read32(sysio, SYS_VIDEO_SRC2_OFF);
 	/*
-	 * Match the vendor RGB helper and explicitly select the normal RGB lane
-	 * order.  Bits 0:10 select each lane's FXDE source, bits 16:27 select
-	 * the R/G/B lane mapping, and bits 28:30 select high-to-low ordering.
-	 * All three groups must be cleared when the bootloader left a different
-	 * output mode behind; preserving them can produce a valid clock carrying
-	 * one constant colour.
+	 * Only bits 0:2, 4:6 and 8:10 are the three documented video-source
+	 * selectors.  Bits 28:30 are the corresponding direction controls.
 	 */
-	value &= ~0x7fff0777u;
+	value &= ~0x70000777u;
 	mmio_write32(sysio, SYS_VIDEO_SRC2_OFF, value);
 	progress_mark("screen-rgb-src2", 0x3fu,
 		mmio_read32(sysio, SYS_VIDEO_SRC2_OFF));
 
-	/* The SF2000 panel samples the RGB clock on its non-inverted edge. */
-	value = mmio_read32(sysio, SYS_RGB_CLK_INV_OFF);
-	value &= ~(1u << 30);
-	mmio_write32(sysio, SYS_RGB_CLK_INV_OFF, value);
-	progress_mark("screen-rgb-clk-inv", 0x3fu,
-		mmio_read32(sysio, SYS_RGB_CLK_INV_OFF));
 	progress_mark("screen-rgb-output-mux-done", 0x3fu,
 		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF) ^
 		mmio_read32(sysio, SYS_VIDEO_SRC1_OFF) ^
@@ -1528,6 +1516,7 @@ static void panel_vou_rgb_enable(void)
 	};
 	uint32_t inherited = mmio_read32(gma, VOU_VPO_CTRL);
 	uint32_t clock;
+	uint32_t source;
 	unsigned i;
 
 	progress_mark("screen-vpo-before-90", 0x3fu, inherited);
@@ -1609,12 +1598,30 @@ static void panel_vou_rgb_enable(void)
 	 * generator never latches.  Preserve unrelated clock fields while
 	 * reproducing both writes and the observed RGB divider/source bits.
 	 */
-	clock = mmio_read32(sysio, SYS_CLK_CTR_OFF) | 0x00083700u;
+	clock = mmio_read32(sysio, SYS_CLK_CTR_OFF);
+	progress_mark("screen-rgb-sysclk-before", 0x3fu, clock);
+	clock |= 0x00083700u;
 	mmio_write32(sysio, SYS_CLK_CTR_OFF, clock);
 	clock &= ~(1u << 19);
 	mmio_write32(sysio, SYS_CLK_CTR_OFF, clock);
 	progress_mark("screen-rgb-sysclk", 0x3fu,
 		mmio_read32(sysio, SYS_CLK_CTR_OFF));
+
+	/*
+	 * The stock SF2000 trace writes SYSIO+0x3c8 at this exact boundary.
+	 * Reverse engineering gEBtxmNvcpqDReQnckPKMYdltzlKuamg in libviddrv
+	 * identifies bits 0:2, 4:6 and 8:10 as a replicated RGB-channel source
+	 * selector.  Source zero is the VPO/FXDE stream.  Linux previously left
+	 * the bootloader's inherited selection untouched, which can emit a valid
+	 * raster filled with unrelated data even though every VOU readback is
+	 * correct.
+	 */
+	source = mmio_read32(sysio, SYS_RGB_SOURCE_OFF);
+	progress_mark("screen-rgb-source-before", 0x3fu, source);
+	source &= ~0x00000777u;
+	mmio_write32(sysio, SYS_RGB_SOURCE_OFF, source);
+	progress_mark("screen-rgb-source", 0x3fu,
+		mmio_read32(sysio, SYS_RGB_SOURCE_OFF));
 
 	/* Exact final HC15 timing state captured immediately before GMA use. */
 	mmio_write32(gma, VOU_HD_TIMING2, 0x01300378u);
@@ -1638,6 +1645,12 @@ static void panel_vou_rgb_enable(void)
 	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
 	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
+	progress_mark("screen-vou-total", 0x3fu,
+		mmio_read32(gma, VOU_HD_TIMING2));
+	progress_mark("screen-vou-hactive", 0x3fu,
+		mmio_read32(gma, 0x014u));
+	progress_mark("screen-vou-vactive", 0x3fu,
+		mmio_read32(gma, 0x024u));
 	progress_mark("screen-vou-latch-done", 0x3fu,
 		mmio_read32(gma, VOU_HD_MODE) ^
 		mmio_read32(gma, VOU_HD_TIMING3) ^
