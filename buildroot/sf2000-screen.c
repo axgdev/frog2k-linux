@@ -1489,6 +1489,17 @@ static void panel_vou_rgb_enable(void)
 		mmio_read32(gma, VOU_VPO_CTRL));
 	progress_mark("screen-vpo-before-94", 0x3fu,
 		mmio_read32(gma, VOU_VPO_PHASE));
+	/*
+	 * The ROM leaves the SF2000 VPO live (0x190 bit 21 and DE bit 0).
+	 * Preserve that panel-specific state.  libviddrv's generic open sequence
+	 * below is only needed for a genuinely uninitialized/cold VPO.
+	 */
+	if ((mmio_read32(gma, VOU_VPO_CTRL) & (1u << 21)) &&
+			(mmio_read32(gma, VOU_HD_MODE) & 1u)) {
+		progress_mark("screen-vpo-inherited", 0x3fu,
+			mmio_read32(gma, VOU_VPO_CTRL));
+		return;
+	}
 
 	value = mmio_read32(gma, VOU_VPO_CTRL);
 	value |= 1u;          /* vendor begins an atomic VPO update */
@@ -2519,9 +2530,10 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 
 	(void)variant;
 	d0 |= 1u;       /* is_last_block */
+	d0 |= 1u << 2;  /* HC15 stock RGB565 always enables the scaler */
 	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
 	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
-	d0 |= 1u << 12; /* BT.709 enhancement coefficients */
+	d0 |= 1u << 11; /* HC15 stock RGB565 descriptor semantics */
 	return d0;
 }
 
@@ -2541,9 +2553,12 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
 	write_desc32(4, (HEIGHT << 16) | WIDTH);
-	write_desc32(5, 0xffu | (pitch << 16));
+	/* HC15 uses the four-bit alpha range seen in the stock RGB565 blocks. */
+	write_desc32(5, 0x0fu | (pitch << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
+	/* Explicit unity horizontal and vertical scaler increments (12.4). */
+	write_desc32(9, 0x10001000u);
 	for (i = 0; i < ARRAY_SIZE(bt709); i++)
 		write_desc32(144u + i, (uint32_t)bt709[i]);
 }
