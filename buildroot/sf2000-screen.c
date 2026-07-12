@@ -233,7 +233,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PINMUX_PRGB_B6 6u
 #define PINMUX_PRGB_B7 6u
 #define PINMUX_PRGB_CLK 6u
-#define PINMUX_PRGB_VSYNC 6u
 #define PINMUX_PRGB_DE 6u
 
 #define ST7789_SLPOUT 0x11u
@@ -295,21 +294,7 @@ static unsigned display_ge_frames;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
-/*
- * The ST7789 keeps the RAM write window alive only until the next tearing
- * effect (TE) edge.  HCRTOS services that edge by briefly returning the
- * shared RGB pins to the 8080 GPIO bus, issuing CASET/RASET/RAMWR, and then
- * selecting PRGB again.  Linux has no panel driver interrupt in this small
- * userspace image, so the state is serviced from the existing millisecond
- * watchdog loop and has a timeout fallback for panels which do not expose TE.
- */
-static int panel_rgb_streaming;
-static int panel_te_busy;
-static int panel_te_last;
-static unsigned panel_te_age_ms;
-static unsigned panel_te_rearms;
 static void panel_restart_frame(void);
-static void panel_te_service_tick(void);
 static void panel_te_irq_disable(void);
 
 struct glyph {
@@ -487,7 +472,6 @@ static const uint8_t st7789_dy12_init[] = {
 static const uint8_t st7789_sf2000_init[] = {
 	0, 1, ST7789_SLPOUT,
 	99, 2, ST7789_MADCTL, 0x70,
-	0, 2, ST7789_TEON, 0x00,
 	0, 2, ST7789_COLMOD, 0x55,
 	0, 4, 0xb1, 0x40, 0x04, 0x14,
 	0, 6, 0xb2, 0x0c, 0x0c, 0x00, 0x33, 0x33,
@@ -959,9 +943,6 @@ static void sleep_ms(unsigned msec)
 			watchdog_pet();
 		for (spin = 0; spin < 18000u; spin++)
 			__asm__ volatile ("" ::: "memory");
-		/* Keep the panel-control delay path identical to the vendor path. */
-		if (panel_rgb_streaming)
-			panel_te_service_tick();
 	}
 	watchdog_pet();
 }
@@ -1797,15 +1778,12 @@ static void panel_control_pinmux(void)
 {
 	unsigned i;
 
-	panel_rgb_streaming = 0;
 	panel_te_irq_disable();
 	panel_lcd_setup_enable();
 	/*
 	 * This is the non-RGB half of HCRTOS's lcd_pinmux_rgb(0).  The RGB
 	 * signals overlap only part of the 8080 bus; clearing the remaining
-	 * signal pads is still required when returning from scanout.  Leaving
-	 * L09/T07/T08/L11 in PRGB mode makes the following GPIO transaction
-	 * race the VOU and is enough to leave the panel on one retained colour.
+	 * signal pads is still required when returning from scanout.
 	 */
 	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x00000000u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x08,
@@ -1820,6 +1798,8 @@ static void panel_control_pinmux(void)
 		mmio_read32(sysio, PINMUX_T_OFF + 0x00) & 0x0000ffffu);
 	mmio_write32(sysio, PINMUX_T_OFF + 0x04,
 		mmio_read32(sysio, PINMUX_T_OFF + 0x04) & 0xff000000u);
+	/* The LCD-specific stock handoff is DE-only; L09 VSYNC is not connected. */
+	pinmux_set_pad(PINPAD_L09, PINMUX_GPIO);
 	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++)
 		pinmux_set_pad(panel_control_pads[i], PINMUX_GPIO);
 }
@@ -1838,16 +1818,6 @@ static void panel_rgb_reset_release(void)
 static void panel_rgb_pad_mux_only(void)
 {
 	static int logged;
-	/*
-	 * L09 is the PRGB VSYNC pad.  It is already selected by the stock
-	 * bootloader on most units, which made preserving the byte appear to
-	 * work, but Linux must not depend on that inherited state: panel control
-	 * and RGB handoff are allowed after a warm reset as well.  If this pad is
-	 * left as GPIO the VOU can run and GMA can complete while the panel sees
-	 * only its retained solid level.
-	 */
-	pinmux_set_pad(PINPAD_L09, PINMUX_PRGB_VSYNC);
-
 	/*
 	 * Exact vendor drive-strength word: the high byte (0xb6) selects the
 	 * PRGB clock pad.  The lower three bytes are the RGB data drive fields.
@@ -1882,15 +1852,14 @@ static void panel_rgb_pad_mux_only(void)
 
 static void panel_rgb_stream_begin(void)
 {
-	panel_rgb_streaming = 1;
-	panel_te_age_ms = 0;
-	panel_te_last = gpio_get_pad(PINPAD_L08);
-	/* A TE re-arm also enters here; only record the full handoff, not every
-	 * frame boundary, or the retained progress ring would fill with noise. */
-	if (panel_te_rearms == 0u)
-		progress_mark("screen-rgb-stream-on", 0x3fu,
-			((uint32_t)panel_te_last << 31) |
-			(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu));
+	int te_level;
+
+	te_level = gpio_get_pad(PINPAD_L08);
+	progress_mark("screen-rgb-stream-on", 0x3fu,
+		((uint32_t)te_level << 31) |
+		(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu));
+	progress_mark("screen-de-only", 0x3fu,
+		mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0x00ffffffu);
 }
 
 static void panel_rgb_pinmux(void)
@@ -1900,7 +1869,6 @@ static void panel_rgb_pinmux(void)
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
 	panel_rgb_pad_mux_only();
-	panel_te_rearms = 0;
 	panel_rgb_stream_begin();
 }
 
@@ -2093,63 +2061,6 @@ static void panel_restart_frame(void)
 	panel_data((HEIGHT - 1u) >> 8);
 	panel_data((HEIGHT - 1u) & 0xffu);
 	panel_cmd(ST7789_RAMWR);
-}
-
-static void panel_te_rearm(int from_edge)
-{
-	unsigned rearm;
-
-	if (!panel_enabled || !panel_rgb_streaming || panel_te_busy)
-		return;
-
-	panel_te_busy = 1;
-	panel_rgb_streaming = 0;
-	/*
-	 * This ordering is the HCRTOS vsync_irq() contract.  In particular, do
-	 * not rerun the VOU/GMA setup here: only the panel's GPIO/RGB pad owner
-	 * changes at a TE boundary, so the scanout engine can keep its descriptor
-	 * and frame address.
-	 */
-	panel_control_pinmux();
-	panel_config_outputs();
-	panel_bus_idle();
-	panel_restart_frame();
-	panel_bus_idle();
-	panel_rgb_pad_mux_only();
-	rearm = ++panel_te_rearms;
-	panel_rgb_stream_begin();
-	panel_te_busy = 0;
-	if (rearm <= 4u)
-		progress_mark(from_edge ? "screen-te-rearm-edge" :
-			"screen-te-rearm-timeout", 0x3fu,
-			((uint32_t)rearm << 16) | (uint32_t)panel_te_last);
-}
-
-static void panel_te_service_tick(void)
-{
-	int level;
-
-	if (!panel_rgb_streaming || panel_te_busy)
-		return;
-
-	level = gpio_get_pad(PINPAD_L08);
-	panel_te_age_ms++;
-	if (level && !panel_te_last) {
-		panel_te_rearm(1);
-		return;
-	}
-	/*
-	 * A few panels leave TE disabled in their bootloader configuration.  A
-	 * 24 ms watchdog is longer than the 60 Hz frame period but short enough
-	 * that the panel cannot remain on a stale RAMWR window.  If TE is present,
-	 * the rising edge above always wins and this branch is never on the normal
-	 * path.
-	 */
-	if (panel_te_age_ms >= 24u) {
-		panel_te_rearm(0);
-		return;
-	}
-	panel_te_last = level;
 }
 
 static void panel_reset(void)
