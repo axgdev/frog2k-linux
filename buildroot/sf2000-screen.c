@@ -1900,6 +1900,49 @@ static void panel_rgb_bus_connect(void)
 	panel_rgb_stream_begin();
 }
 
+static int panel_wait_gma_raster(void)
+{
+	uint32_t ctl_hw = 0;
+	uint32_t dmba_hw = 0;
+	unsigned elapsed;
+
+	/*
+	 * GMA_CTL/DMBA are staging registers.  Their *_HW mirrors only change at
+	 * a VOU frame boundary, so readback from the staging side is not evidence
+	 * that a pixel raster exists.  In particular, selecting ST7789 RAMCTRL
+	 * RGB mode before this transition leaves a cold panel holding the last MCU
+	 * frame.  Wait for the same hardware state that hc16xx_fb waits for through
+	 * its update interrupt before transferring ownership of the shared pins.
+	 */
+	progress_mark("screen-raster-wait-begin", 0x3fu,
+		mmio_read32(gma, GMA_CTL_HW));
+	for (elapsed = 0; elapsed < 200u && !stopping; elapsed++) {
+		ctl_hw = mmio_read32(gma, GMA_CTL_HW);
+		dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
+		if ((ctl_hw & 1u) &&
+			(dmba_hw == GMA_DESC_PHYS ||
+			 dmba_hw == GMA_DESC_PHYS + GMA_DESC_STRIDE))
+			break;
+		sleep_ms(1);
+	}
+	progress_mark("screen-raster-wait-ms", 0x3fu, elapsed);
+	progress_mark("screen-raster-ctl-hw", 0x3fu, ctl_hw);
+	progress_mark("screen-raster-dmba-hw", 0x3fu, dmba_hw);
+	progress_mark("screen-raster-vou-mode", 0x3fu,
+		mmio_read32(gma, VOU_HD_MODE));
+	progress_mark("screen-raster-vou-ctrl", 0x3fu,
+		mmio_read32(gma, VOU_HD_CTRL));
+	progress_mark("screen-raster-rgb-enable", 0x3fu,
+		mmio_read32(gma, VOU_RGB_ENABLE));
+
+	if (elapsed == 200u || stopping) {
+		progress_mark("screen-raster-wait-fail", 0x3fu, dmba_hw);
+		return -1;
+	}
+	progress_mark("screen-raster-wait-ok", 0x3fu, dmba_hw);
+	return 0;
+}
+
 static void panel_rgb_pinmux(void)
 {
 	panel_rgb_engine_prepare();
@@ -2298,7 +2341,7 @@ static void panel_fill_solid_direct(uint16_t color)
 	watchdog_pet();
 }
 
-static void panel_prepare_rgb_frame(void)
+static void panel_commit_rgb_handoff(void)
 {
 	const struct panel_rgb_mode_profile *profile =
 		&panel_rgb_mode_profiles[0];
@@ -2306,18 +2349,6 @@ static void panel_prepare_rgb_frame(void)
 	if (!panel_enabled)
 		return;
 	watchdog_pet();
-	/*
-	 * The stock HC15 stack starts RGB/VOU (module priority 1) before the
-	 * ST7789 driver selects its external interface (module priorities 2/3).
-	 * Keep a complete raster running behind the shared GPIO control bus, then
-	 * connect the pads only after B0/B1/COLMOD are committed.  ST7789 derives
-	 * its RGB-mode controller from DOTCLK and latches its address on VSYNC;
-	 * selecting RGB while that clock domain is stopped can leave the last MCU
-	 * frame displayed indefinitely even though later register reads are sane.
-	 */
-	progress_mark("screen-rgb-engine-prepare", 0x3fu, SCREEN_TAG);
-	panel_rgb_engine_prepare();
-	progress_mark("screen-rgb-engine-ready", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-control-mux", 0x3fu, SCREEN_TAG);
 	panel_control_pinmux();
 	progress_mark("screen-rgb-output-config", 0x3fu, SCREEN_TAG);
@@ -3326,7 +3357,13 @@ static void run_rgb_diag(unsigned *frame)
 		(*frame)++;
 		draw_diag_screen("GMA RGB SCANOUT", variant->name,
 			variant->madctl[0], *frame);
-		panel_prepare_rgb_frame();
+		if (i == 0) {
+			panel_rgb_engine_prepare();
+			present_frame();
+			if (panel_wait_gma_raster() < 0)
+				break;
+			panel_commit_rgb_handoff();
+		}
 		present_frame();
 		sleep_ms(350);
 	}
@@ -3336,7 +3373,7 @@ static void run_direct_console(unsigned *frame)
 {
 	char buf[768];
 	int input_fds[CONSOLE_INPUT_FDS];
-	int fd;
+	int fd = -1;
 	uint32_t evdev_held = 0;
 	unsigned idle = 0;
 	unsigned input_retry = 0;
@@ -3357,12 +3394,25 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
-	/* Arm GMA with a valid frame before ST7789 enters external RGB mode. */
+	/*
+	 * Start the VOU timing generator while the panel still owns the GPIO bus,
+	 * then submit and observe a real GMA hardware latch.  The former ordering
+	 * submitted before VOU existed; log43 proves its CTL_HW and DMBA_HW were
+	 * both zero when RAMCTRL transferred the display to RGB.
+	 */
+	progress_mark("screen-rgb-handoff-begin", 0x3fu, SCREEN_TAG);
+	progress_mark("screen-rgb-engine-prepare", 0x3fu, SCREEN_TAG);
+	panel_rgb_engine_prepare();
+	progress_mark("screen-rgb-engine-ready", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-prime-begin", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-rgb-prime-done", 0x3fu, SCREEN_TAG);
-	progress_mark("screen-rgb-handoff-begin", 0x3fu, SCREEN_TAG);
-	panel_prepare_rgb_frame();
+	if (panel_wait_gma_raster() < 0) {
+		/* Preserve the working direct frame and retained failure snapshot. */
+		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		goto console_loop;
+	}
+	panel_commit_rgb_handoff();
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
@@ -3374,6 +3424,8 @@ static void run_direct_console(unsigned *frame)
 		draw_console_screen(++*frame);
 		present_frame();
 	}
+
+console_loop:
 	publish_screen_ready_and_storage("direct-console\n");
 	progress_mark("screen-loop-enter", 0x3fu, *frame);
 
