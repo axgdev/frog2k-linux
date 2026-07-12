@@ -295,6 +295,7 @@ static unsigned display_ge_frames;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
+static void panel_set_window(void);
 static void panel_restart_frame(void);
 static void panel_te_irq_disable(void);
 
@@ -472,7 +473,7 @@ static const uint8_t st7789_dy12_init[] = {
 
 static const uint8_t st7789_sf2000_init[] = {
 	0, 1, ST7789_SLPOUT,
-	99, 2, ST7789_MADCTL, 0x70,
+	99, 2, ST7789_MADCTL, 0x60,
 	0, 2, ST7789_COLMOD, 0x55,
 	0, 4, 0xb1, 0x40, 0x04, 0x14,
 	0, 6, 0xb2, 0x0c, 0x0c, 0x00, 0x33, 0x33,
@@ -548,7 +549,7 @@ struct panel_rgb_mode_profile {
 };
 
 static const struct panel_variant panel_variants[] = {
-	{ "SF2000", st7789_sf2000_init, { 0x70, 0x00, 0x80, 0xc0 } },
+	{ "SF2000", st7789_sf2000_init, { 0x60, 0x00, 0x80, 0xc0 } },
 	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
 	{ "X60 NEW", st7789_x60_new_init, { 0xe8, 0x88, 0x28, 0x68 } },
 	{ "Q19", st7789_q19_init, { 0x28, 0x68, 0xa8, 0xe8 } },
@@ -2015,7 +2016,16 @@ static void panel_apply_rgb_mode_profile(
 	panel_data(profile->b1[2]);
 	panel_cmd(ST7789_COLMOD);
 	panel_data(profile->colmod);
-	panel_restart_frame();
+	/*
+	 * End in the original firmware's external-RGB command state.  RAMWR is
+	 * the MCU/system-interface memory-write command; leaving it active while
+	 * switching the shared pads to RGB was an inferred handoff that the stock
+	 * binary never performs.  The stock sequence ends with CASET, RASET,
+	 * INVON and DISPON, after which VSYNC starts the RGB address counter.
+	 */
+	panel_set_window();
+	panel_cmd(ST7789_INVON);
+	panel_cmd(ST7789_DISPON);
 }
 
 static uint16_t panel_read_data(void)
@@ -2062,7 +2072,7 @@ static uint32_t panel_read_id(void)
 	return ((uint32_t)id[1] << 16) | ((uint32_t)id[2] << 8) | id[3];
 }
 
-static void panel_restart_frame(void)
+static void panel_set_window(void)
 {
 	panel_cmd(ST7789_CASET);
 	panel_data(0);
@@ -2074,6 +2084,11 @@ static void panel_restart_frame(void)
 	panel_data(0);
 	panel_data((HEIGHT - 1u) >> 8);
 	panel_data((HEIGHT - 1u) & 0xffu);
+}
+
+static void panel_restart_frame(void)
+{
+	panel_set_window();
 	panel_cmd(ST7789_RAMWR);
 }
 
@@ -2288,6 +2303,7 @@ static void panel_prepare_rgb_frame(void)
 	progress_mark("screen-rgb-panel-mode-done", 0x3fu,
 		((uint32_t)profile->b1[0] << 16) |
 		((uint32_t)profile->b1[1] << 8) | profile->colmod);
+	progress_mark("screen-panel-command-final", 0x3fu, ST7789_DISPON);
 	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
 	panel_rgb_pinmux();
 	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
