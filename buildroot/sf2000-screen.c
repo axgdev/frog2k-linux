@@ -63,6 +63,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_DMBA_ALT 0x384u
 #define GMA_K 0x308u
 #define GMA_MASK 0x350u
+#define GMA_MASK_ALT 0x3d0u
 #define GMA_LINEBUF 0x3b8u
 #define GMA_DOORBELL_PRIMARY 0x01u
 #define GMA_DOORBELL_ALT 0x02u
@@ -1474,6 +1475,17 @@ static void panel_vou_rgb_enable(void)
 {
 	uint32_t value;
 	unsigned phase;
+	uint32_t inherited = mmio_read32(gma, VOU_VPO_CTRL);
+
+	progress_mark("screen-vpo-before-90", 0x3fu, inherited);
+	progress_mark("screen-vpo-before-94", 0x3fu,
+		mmio_read32(gma, VOU_VPO_PHASE));
+	/* Preserve the complete ROM-configured timing and VPO state. */
+	if ((inherited & (1u << 21)) &&
+			(mmio_read32(gma, VOU_HD_MODE) & 1u)) {
+		progress_mark("screen-vpo-inherited", 0x3fu, inherited);
+		return;
+	}
 
 	mmio_write32(gma, VOU_HD_MODE, 0x00000015u);
 	mmio_write32(gma, VOU_HD_TIMING0, 0x00122914u);
@@ -1489,22 +1501,6 @@ static void panel_vou_rgb_enable(void)
 	 * the timing generator.  These registers are distinct from the GMA
 	 * layer registers at 0x300 and were missing from the Linux bring-up.
 	 */
-	progress_mark("screen-vpo-before-90", 0x3fu,
-		mmio_read32(gma, VOU_VPO_CTRL));
-	progress_mark("screen-vpo-before-94", 0x3fu,
-		mmio_read32(gma, VOU_VPO_PHASE));
-	/*
-	 * The ROM leaves the SF2000 VPO live (0x190 bit 21 and DE bit 0).
-	 * Preserve that panel-specific state.  libviddrv's generic open sequence
-	 * below is only needed for a genuinely uninitialized/cold VPO.
-	 */
-	if ((mmio_read32(gma, VOU_VPO_CTRL) & (1u << 21)) &&
-			(mmio_read32(gma, VOU_HD_MODE) & 1u)) {
-		progress_mark("screen-vpo-inherited", 0x3fu,
-			mmio_read32(gma, VOU_VPO_CTRL));
-		return;
-	}
-
 	value = mmio_read32(gma, VOU_VPO_CTRL);
 	value |= 1u;          /* vendor begins an atomic VPO update */
 	value &= ~(1u << 22); /* non-4K output */
@@ -2707,31 +2703,46 @@ static void ge_copy_render_to_scanout(void)
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 {
 	uint32_t value = mmio_read32(gma, off);
+	uint32_t mask0;
+	uint32_t mask1;
 
 	if (on)
 		value |= bit;
 	else
 		value &= ~bit;
-	mmio_write32(gma, GMA_MASK, 1);
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
 	mmio_write32(gma, off, value);
-	mmio_write32(gma, GMA_MASK, 0);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 }
 
 static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
 	static int logged_hw_state;
+	uint32_t mask0;
+	uint32_t mask1;
+	uint32_t linebuf;
 
 	ge_copy_render_to_scanout();
 	flush_present_memory();
-	mmio_write32(gma, GMA_MASK, 1);
-	mmio_write32(gma, GMA_LINEBUF, profile->linebuf);
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+	linebuf = mmio_read32(gma, GMA_LINEBUF);
+	linebuf = (linebuf & ~0x1fu) | (profile->linebuf & 0x1fu);
+	mmio_write32(gma, GMA_LINEBUF, linebuf);
 	mmio_write32(gma, GMA_K, 0xff);
 	mmio_write32(gma, GMA_CTL, mmio_read32(gma, GMA_CTL) | 1u);
 	if (profile->doorbells & GMA_DOORBELL_PRIMARY)
 		mmio_write32(gma, GMA_DMBA, GMA_DESC_PHYS);
 	if (profile->doorbells & GMA_DOORBELL_ALT)
 		mmio_write32(gma, GMA_DMBA_ALT, GMA_DESC_PHYS);
-	mmio_write32(gma, GMA_MASK, 0);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 	gma_set_bit(GMA_CTL, 1u << 19, !profile->sdk_enhance);
 	gma_set_bit(GMA_CTL, 1u << 18, profile->sdk_enhance);
 	if (!logged_hw_state) {
@@ -2741,6 +2752,12 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 			mmio_read32(gma, GMA_CTL_HW));
 		progress_mark("screen-gma-dmba", 0x3fu,
 			mmio_read32(gma, GMA_DMBA));
+		progress_mark("screen-gma-mask0", 0x3fu,
+			mmio_read32(gma, GMA_MASK));
+		progress_mark("screen-gma-mask1", 0x3fu,
+			mmio_read32(gma, GMA_MASK_ALT));
+		progress_mark("screen-gma-linebuf", 0x3fu,
+			mmio_read32(gma, GMA_LINEBUF));
 		progress_mark("screen-gma-desc0", 0x3fu,
 			((volatile uint32_t *)(gma_ram + GMA_DESC_OFF))[0]);
 		progress_mark("screen-gma-csc0", 0x3fu,
