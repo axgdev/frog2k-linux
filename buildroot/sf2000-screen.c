@@ -56,6 +56,13 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define GMA_FRAME_OFF (GMA_FRAME_PHYS - GMA_RAM_PHYS)
 #define GMA_RENDER_OFF (GMA_RENDER_PHYS - GMA_RAM_PHYS)
 
+_Static_assert(GMA_DESC_OFF + GMA_DESC_STRIDE + GMA_DESC_BYTES <=
+	GMA_RAM_SIZE, "GMA descriptors exceed reserved DMA arena");
+_Static_assert(GMA_FRAME_OFF + SCAN_BYTES <= GMA_RAM_SIZE,
+	"GMA scanout exceeds reserved DMA arena");
+_Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
+	"GE render source exceeds reserved DMA arena");
+
 #define GMA_MMIO_PHYS 0x18808000u
 #define GMA_MMIO_SIZE 0x1000u
 #define GMA_CTL 0x300u
