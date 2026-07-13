@@ -2395,6 +2395,25 @@ static void panel_te_service_sample(void)
 		panel_te_rearm();
 }
 
+static int panel_wait_te_stable(unsigned frames, unsigned timeout_ms)
+{
+	unsigned start = panel_te_rearms;
+	unsigned elapsed;
+
+	progress_mark("screen-te-stable-begin", 0x3fu,
+		(frames << 16) | (start & 0xffffu));
+	for (elapsed = 0; elapsed < timeout_ms && !stopping; elapsed++) {
+		if (panel_te_rearms - start >= frames)
+			break;
+		sleep_ms(1);
+	}
+	progress_mark("screen-te-stable-count", 0x3fu, panel_te_rearms);
+	progress_mark(elapsed < timeout_ms && !stopping ?
+		"screen-te-stable-ok" : "screen-te-stable-fail",
+		0x3fu, elapsed);
+	return elapsed < timeout_ms && !stopping ? 0 : -1;
+}
+
 static void panel_reset(void)
 {
 	panel_bus_idle();
@@ -3907,6 +3926,18 @@ static void run_direct_console(unsigned *frame)
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
+	/*
+	 * Do not start replacing descriptors as soon as the first RGB frame
+	 * latches.  The physical ST7789 needs several complete TE/RAMWR rearms to
+	 * phase-lock to the newly connected VOU stream.  The former G1 diagnostic
+	 * accidentally supplied a long stable hold (203 rearms in log52); removing
+	 * it made the kmsg loop swap descriptors after only one rearm in log53 and
+	 * the panel remained in the familiar rolling/scrambled state.  Count real
+	 * panel frame boundaries instead of retaining a diagnostic delay.
+	 */
+	if (panel_wait_te_stable(16u, 1000u) < 0)
+		progress_mark("screen-rgb-stabilize-timeout", 0x3fu,
+			panel_te_rearms);
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	log_gma_ready();

@@ -1164,6 +1164,9 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-gma-probe-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-te-stable-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-te-stable-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-rgb-stabilize-timeout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
