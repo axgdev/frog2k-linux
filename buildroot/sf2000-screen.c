@@ -297,8 +297,16 @@ static unsigned display_ge_attempts;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
+static int panel_te_streaming;
+static int panel_te_busy;
+static int panel_te_last;
+static int panel_te_rising = 1;
+static unsigned panel_te_rearms;
+static int panel_rgb_vsync_enabled = 1;
+static uint32_t panel_rgb_clock_word = 0xb6060606u;
 static void panel_set_window(void);
 static void panel_restart_frame(void);
+static void panel_te_service_sample(void);
 static void panel_te_irq_disable(void);
 
 struct glyph {
@@ -475,7 +483,8 @@ static const uint8_t st7789_dy12_init[] = {
 
 static const uint8_t st7789_sf2000_init[] = {
 	0, 1, ST7789_SLPOUT,
-	99, 2, ST7789_MADCTL, 0x60,
+	99, 2, ST7789_MADCTL, 0x70,
+	0, 2, ST7789_TEON, 0x00,
 	0, 2, ST7789_COLMOD, 0x55,
 	0, 4, 0xb1, 0x40, 0x04, 0x14,
 	0, 6, 0xb2, 0x0c, 0x0c, 0x00, 0x33, 0x33,
@@ -550,12 +559,18 @@ struct panel_rgb_mode_profile {
 	uint8_t colmod;
 };
 
-struct hc15_rgb_output_profile {
+struct hc15_panel_sync_profile {
 	const char *name;
-	uint32_t gate0;
-	uint32_t gate1;
-	uint32_t sysclk;
+	uint8_t madctl;
+	uint8_t final_ramwr;
+	uint8_t te_mode;
+	uint8_t vsync;
+	uint8_t reset;
+	uint32_t clock_word;
 };
+
+static void panel_apply_sync_profile(
+	const struct hc15_panel_sync_profile *profile);
 
 static const struct panel_variant panel_variants[] = {
 	{ "SF2000", st7789_sf2000_init, { 0x60, 0x00, 0x80, 0xc0 } },
@@ -590,22 +605,22 @@ static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
 };
 
 /*
- * log47 eliminated all meaningful ST7789 input contracts: every phase ran and
- * none reached the glass.  Probe below the panel protocol instead.  C1 is the
- * clock-gate state repeatedly captured from the working HC15 MuFrog frontend;
- * C5 is Linux's former cold state and C7 is the original firmware's write.
- * Bit 15 selects the alternate pixel-clock edge and bit 19's final level is
- * tested independently.  Every phase is labelled in its GMA framebuffer.
+ * log48 eliminates the clock-gate/skew matrix and proves that the narrow L08
+ * panel TE signal is electrically active.  Exercise the exact original and
+ * recovered MuFrog SF2000 ownership transactions, both TE edges, both known
+ * MADCTL values, VSYNC dependence, the recovered L07 pad configuration versus
+ * its lossy selector-only form, and a complete reset/init.  Every phase is
+ * labelled in its GMA framebuffer.
  */
-static const struct hc15_rgb_output_profile hc15_rgb_output_profiles[] = {
-	{ "C1 HC15 G600 CLK3700", 0x00000000u, 0x00000600u, 0x00003700u },
-	{ "C2 HC15 G600 SKEW", 0x00000000u, 0x00000600u, 0x0000b700u },
-	{ "C3 HC15 G600 CLK83700", 0x00000000u, 0x00000600u, 0x00083700u },
-	{ "C4 HC15 G600 8SKEW", 0x00000000u, 0x00000600u, 0x0008b700u },
-	{ "C5 COLD G0 CLK3700", 0x00000000u, 0x00000000u, 0x00003700u },
-	{ "C6 COLD G0 SKEW", 0x00000000u, 0x00000000u, 0x0000b700u },
-	{ "C7 STOCK GATES CLK3700", 0x00000f88u, 0x0bc04040u, 0x00003700u },
-	{ "C8 STOCK GATES SKEW", 0x00000f88u, 0x0bc04040u, 0x0000b700u },
+static const struct hc15_panel_sync_profile hc15_panel_sync_profiles[] = {
+	{ "H1 STOCK DISPON", 0x60, 0, 0, 1, 0, 0xb6060606u },
+	{ "H2 MUFROG PRE-IRQ", 0x70, 1, 0, 1, 0, 0xb6060606u },
+	{ "H3 TE RISE 70", 0x70, 1, 1, 1, 0, 0xb6060606u },
+	{ "H4 TE FALL 70", 0x70, 1, 2, 1, 0, 0xb6060606u },
+	{ "H5 TE RISE 60", 0x60, 1, 1, 1, 0, 0xb6060606u },
+	{ "H6 TE RISE NO VS", 0x70, 1, 1, 0, 0, 0xb6060606u },
+	{ "H7 TE RISE CLK06", 0x70, 1, 1, 1, 0, 0x06060606u },
+	{ "H8 RESET SF TE RISE", 0x70, 1, 1, 1, 1, 0xb6060606u },
 };
 
 struct pinmux_setting {
@@ -978,8 +993,12 @@ static void sleep_ms(unsigned msec)
 	for (i = 0; i < msec && !stopping; i++) {
 		if ((i & 31u) == 0)
 			watchdog_pet();
-		for (spin = 0; spin < 18000u; spin++)
+		for (spin = 0; spin < 18000u; spin++) {
 			__asm__ volatile ("" ::: "memory");
+			/* Four CPU spins remain far shorter than the panel TE pulse. */
+			if (panel_te_streaming && !(spin & 3u))
+				panel_te_service_sample();
+		}
 	}
 	watchdog_pet();
 }
@@ -1838,6 +1857,7 @@ static void panel_control_pinmux(void)
 {
 	unsigned i;
 
+	panel_te_streaming = 0;
 	panel_lcd_setup_enable();
 	/*
 	 * This is the non-RGB half of HCRTOS's lcd_pinmux_rgb(0).  The RGB
@@ -1863,7 +1883,8 @@ static void panel_control_pinmux(void)
 	 * other pins temporarily return to GPIO: ST7789 resets its RGB-mode RAM
 	 * address counter on the falling VSYNC edge.
 	 */
-	pinmux_set_pad(PINPAD_L09, PINMUX_RGB);
+	pinmux_set_pad(PINPAD_L09,
+		panel_rgb_vsync_enabled ? PINMUX_RGB : PINMUX_GPIO);
 	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++)
 		pinmux_set_pad(panel_control_pads[i], PINMUX_GPIO);
 }
@@ -1883,13 +1904,11 @@ static void panel_rgb_pad_mux_only(void)
 {
 	static int logged;
 	/*
-	 * Each byte is an HC15 pin-function selector.  L07, in the high byte, is
-	 * the PRGB pixel clock and its proven stock/UniFrog selector is exactly
-	 * 0x06.  The former 0xb6 value came from a speculative drive-strength
-	 * interpretation; log45 proves it was the sole post-handoff pinmux word
-	 * which differed from the working HC15 state.
+	 * L07 is the PRGB pixel clock.  MuFrog's recovered HC15 implementation
+	 * writes 0xb6060606: selector 6 plus the existing L07 electrical-pad bits
+	 * in the upper nibble.  Writing 0x06060606 silently discarded those bits.
 	 */
-	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x06060606u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, panel_rgb_clock_word);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu) |
 		0x06060000u);
@@ -1907,7 +1926,7 @@ static void panel_rgb_pad_mux_only(void)
 		0x00060606u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x08,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x08) & 0xff0000ffu) |
-		0x00060600u);
+		0x00060000u | (panel_rgb_vsync_enabled ? 0x00000600u : 0));
 	if (!logged) {
 		progress_mark("screen-rgb-pad-clock", 0x3fu,
 			mmio_read32(sysio, PINMUX_L_OFF + 0x04));
@@ -2214,20 +2233,38 @@ static uint16_t panel_read_data(void)
 	return data;
 }
 
-static uint32_t panel_read_id(void)
+static void panel_read_register(uint8_t reg, uint8_t *data, unsigned count)
 {
-	uint8_t id[4];
 	unsigned i;
 
 	panel_control_pinmux();
 	panel_config_outputs();
 	panel_bus_idle();
-	panel_cmd(0x04);
+	panel_cmd(reg);
 	panel_config_data_input();
-	for (i = 0; i < sizeof(id); i++)
-		id[i] = (uint8_t)panel_read_data();
+	for (i = 0; i < count; i++)
+		data[i] = (uint8_t)panel_read_data();
 	panel_config_data_output();
+	panel_bus_idle();
+}
+
+static uint32_t panel_read_id(void)
+{
+	uint8_t id[4];
+
+	panel_read_register(0x04, id, ARRAY_SIZE(id));
 	return ((uint32_t)id[1] << 16) | ((uint32_t)id[2] << 8) | id[3];
+}
+
+static uint32_t panel_read_sf2000_aux_id(void)
+{
+	uint8_t b3[4];
+	uint8_t f2[4];
+
+	panel_read_register(0xb3, b3, ARRAY_SIZE(b3));
+	panel_read_register(0xf2, f2, ARRAY_SIZE(f2));
+	return ((uint32_t)b3[1] << 24) | ((uint32_t)b3[2] << 16) |
+		((uint32_t)f2[1] << 8) | f2[2];
 }
 
 static void panel_set_window(void)
@@ -2250,6 +2287,53 @@ static void panel_restart_frame(void)
 	panel_cmd(ST7789_RAMWR);
 }
 
+static void panel_te_stream_start(int rising)
+{
+	panel_te_rising = rising;
+	panel_te_rearms = 0;
+	panel_te_last = gpio_get_pad(PINPAD_L08);
+	panel_te_streaming = 1;
+	progress_mark("screen-te-stream-start", 0x3fu,
+		((uint32_t)rising << 31) | (uint32_t)panel_te_last);
+}
+
+static void panel_te_rearm(void)
+{
+	unsigned rearm;
+
+	if (!panel_enabled || !panel_te_streaming || panel_te_busy)
+		return;
+	panel_te_busy = 1;
+	/* Exact recovered MuFrog st7789v2:vsync_irq() transaction. */
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_restart_frame();
+	panel_rgb_pad_mux_only();
+	panel_te_last = gpio_get_pad(PINPAD_L08);
+	panel_te_streaming = 1;
+	panel_te_busy = 0;
+	rearm = ++panel_te_rearms;
+	if (rearm <= 4u)
+		progress_mark("screen-te-rearm-edge", 0x3fu,
+			((uint32_t)panel_te_rising << 31) | (rearm << 16) |
+			(uint32_t)panel_te_last);
+}
+
+static void panel_te_service_sample(void)
+{
+	int level;
+	int edge;
+
+	if (!panel_te_streaming || panel_te_busy)
+		return;
+	level = gpio_get_pad(PINPAD_L08);
+	edge = panel_te_rising ? (level && !panel_te_last) :
+		(!level && panel_te_last);
+	panel_te_last = level;
+	if (edge)
+		panel_te_rearm();
+}
+
 static void panel_reset(void)
 {
 	panel_bus_idle();
@@ -2259,6 +2343,18 @@ static void panel_reset(void)
 	sleep_ms(40);
 	gpio_set_pad(PINPAD_L01, 1);
 	sleep_ms(120);
+}
+
+static void panel_reset_sf2000(void)
+{
+	/* Exact reset widths used by the proven MuFrog SF2000 LCD driver. */
+	panel_bus_idle();
+	gpio_set_pad(PINPAD_L01, 1);
+	sleep_ms(500);
+	gpio_set_pad(PINPAD_L01, 0);
+	sleep_ms(500);
+	gpio_set_pad(PINPAD_L01, 1);
+	sleep_ms(500);
 }
 
 static void panel_apply_init_sequence(const uint8_t *sequence)
@@ -2332,6 +2428,7 @@ static int panel_init_variant(const struct panel_variant *variant)
 static int panel_init_sf2000_original_order(void)
 {
 	uint32_t panel_id;
+	uint32_t panel_aux;
 	char line[128];
 	const struct panel_variant *variant = &panel_variants[0];
 
@@ -2349,26 +2446,18 @@ static int panel_init_sf2000_original_order(void)
 	gpio_set_pad(PINPAD_L07, 1);
 	gpio_set_pad(PINPAD_T00, 1);
 	gpio_set_pad(PINPAD_L01, 1);
+	panel_reset_sf2000();
 	sleep_ms(120);
-	panel_apply_init_sequence(st7789_sf2000_init);
-	panel_cmd(ST7789_DISPON);
-	panel_restart_frame();
 	panel_id = panel_read_id();
-	if ((panel_id & 0xffffffu) == 0x009306u) {
-		log_line("sf2000-screen: guarded panel 009306 reinit\n");
-		panel_reset();
-		panel_config_outputs();
-		gpio_set_pad(PINPAD_L10, 1);
-		gpio_set_pad(PINPAD_T01, 1);
-		gpio_set_pad(PINPAD_L07, 1);
-		gpio_set_pad(PINPAD_T00, 1);
-		panel_apply_init_sequence(st7789_009306_init);
-		panel_cmd(ST7789_DISPON);
-		panel_restart_frame();
-	}
+	panel_aux = panel_read_sf2000_aux_id();
+	progress_mark("screen-panel-id", 0x3fu, panel_id);
+	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
+	panel_apply_init_sequence(st7789_sf2000_init);
+	panel_restart_frame();
+	panel_cmd(ST7789_DISPON);
 	snprintf(line, sizeof(line),
-		"sf2000-screen: guarded panel init done id=0x%06x init=%s\n",
-		panel_id & 0xffffffu, variant->name);
+		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
+		panel_id & 0xffffffu, panel_aux, variant->name);
 	log_line(line);
 	append_file_log(line);
 	return 0;
@@ -2435,40 +2524,10 @@ static void panel_fill_solid_direct(uint16_t color)
 	watchdog_pet();
 }
 
-static void panel_commit_rgb_profile(
-	const struct panel_rgb_mode_profile *profile)
-{
-	if (!panel_enabled)
-		return;
-	watchdog_pet();
-	progress_mark("screen-rgb-control-mux", 0x3fu, SCREEN_TAG);
-	panel_control_pinmux();
-	progress_mark("screen-rgb-output-config", 0x3fu, SCREEN_TAG);
-	panel_config_outputs();
-	progress_mark("screen-rgb-bus-idle", 0x3fu, SCREEN_TAG);
-	panel_bus_idle();
-	/*
-	 * MCU/8080 writes and RGB scanout share the same ST7789 RAM.  Reassert
-	 * the SF2000's RGB565 interface contract immediately before changing the
-	 * pad mux.  Without this ordered B1/COLMOD/RAMWR handoff, the first direct
-	 * frame is visible and the subsequent VOU scanout is accepted as a
-	 * constant panel level on physical units.
-	 */
-	progress_mark("screen-rgb-panel-mode", 0x3fu, SCREEN_TAG);
-	panel_apply_rgb_mode_profile(profile);
-	progress_mark("screen-rgb-panel-mode-done", 0x3fu,
-		((uint32_t)profile->b1[0] << 16) |
-		((uint32_t)profile->b1[1] << 8) | profile->colmod);
-	progress_mark("screen-panel-command-final", 0x3fu, ST7789_DISPON);
-	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
-	panel_rgb_bus_connect();
-	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
-	watchdog_pet();
-}
-
 static void panel_commit_rgb_handoff(void)
 {
-	panel_commit_rgb_profile(&panel_rgb_mode_profiles[0]);
+	/* SF2000 production path: recovered MuFrog transaction plus L08 TE rearm. */
+	panel_apply_sync_profile(&hc15_panel_sync_profiles[2]);
 }
 
 static const uint8_t *glyph_for(char ch)
@@ -3498,96 +3557,66 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
-static void hc15_apply_rgb_output_profile(
-	const struct hc15_rgb_output_profile *profile)
+static void panel_apply_sync_profile(
+	const struct hc15_panel_sync_profile *profile)
 {
-	uint32_t target;
-
-	/* Force a real bit-19 edge before selecting its requested final level. */
-	target = (mmio_read32(sysio, SYS_CLK_CTR_OFF) & ~0x0008b700u) |
-		(profile->sysclk & 0x0008b700u);
-	mmio_write32(sysio, SYS_CLK_CTR_OFF, target ^ (1u << 19));
-	mmio_write32(sysio, SYS_CLK_CTR_OFF, target);
-	mmio_write32(sysio, SYS_CLOCK_GATE0_OFF, profile->gate0);
-	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, profile->gate1);
-	/* The stock stack arms RGB once, then enables the external RGB output. */
-	mmio_write32(gma, VOU_RGB_ENABLE, 0x00010000u);
-	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
-}
-
-static void hc15_sample_rgb_pads(unsigned phase)
-{
-	uint32_t prev_l = mmio_read32(sysio, GPIOL_OFF + GPIO_INPUT_OFF);
-	uint32_t prev_t = mmio_read32(sysio, GPIOT_OFF + GPIO_INPUT_OFF);
-	uint32_t seen_l = prev_l;
-	uint32_t seen_t = prev_t;
-	uint32_t always_l = prev_l;
-	uint32_t always_t = prev_t;
-	uint32_t changed_l = 0;
-	uint32_t changed_t = 0;
-	uint32_t clk_edges = 0;
-	uint32_t vs_edges = 0;
-	uint32_t de_edges = 0;
-	unsigned i;
-
-	/*
-	 * Sample the GPIO input receivers while the pads belong to PRGB.  If HC15
-	 * keeps those receivers live in peripheral mode, this distinguishes a valid
-	 * internal GMA shadow from a raster which actually reaches the die pads.  A
-	 * static result across every profile also tells us not to use this readback
-	 * path as evidence.  The edge counts are relative, not frequency meters.
-	 */
-	for (i = 0; i < 65536u; i++) {
-		uint32_t l = mmio_read32(sysio, GPIOL_OFF + GPIO_INPUT_OFF);
-		uint32_t t = mmio_read32(sysio, GPIOT_OFF + GPIO_INPUT_OFF);
-		uint32_t dl = l ^ prev_l;
-		uint32_t dt = t ^ prev_t;
-
-		clk_edges += (dl >> 7) & 1u;
-		vs_edges += (dl >> 9) & 1u;
-		de_edges += (dl >> 10) & 1u;
-		changed_l |= dl;
-		changed_t |= dt;
-		seen_l |= l;
-		seen_t |= t;
-		always_l &= l;
-		always_t &= t;
-		prev_l = l;
-		prev_t = t;
-		if ((i & 0x1fffu) == 0)
-			watchdog_pet();
+	progress_mark("screen-rgb-control-mux", 0x3fu, SCREEN_TAG);
+	panel_te_streaming = 0;
+	panel_rgb_vsync_enabled = profile->vsync;
+	panel_rgb_clock_word = profile->clock_word;
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	if (profile->reset) {
+		panel_reset_sf2000();
+		sleep_ms(120);
+		panel_apply_init_sequence(st7789_sf2000_init);
+	} else {
+		panel_cmd(ST7789_MADCTL);
+		panel_data(profile->madctl);
+		panel_cmd(ST7789_TEON);
+		panel_data(0x00);
+		panel_cmd(ST7789_COLMOD);
+		panel_data(0x55);
+		panel_cmd(ST7789_RGBCTRL);
+		panel_data(0x40);
+		panel_data(0x04);
+		panel_data(0x14);
 	}
-	progress_mark("screen-wave-clock", 0x3fu,
-		(phase << 24) | (clk_edges & 0x00ffffffu));
-	progress_mark("screen-wave-vsync", 0x3fu,
-		(phase << 24) | (vs_edges & 0x00ffffffu));
-	progress_mark("screen-wave-de", 0x3fu,
-		(phase << 24) | (de_edges & 0x00ffffffu));
-	progress_mark("screen-wave-lchange", 0x3fu,
-		(phase << 24) | (changed_l & 0x00ffffffu));
-	progress_mark("screen-wave-tchange", 0x3fu,
-		(phase << 24) | (changed_t & 0x00ffffffu));
-	progress_mark("screen-wave-levels", 0x3fu,
-		(phase << 24) | ((seen_l | seen_t) & 0x00ffffffu));
-	progress_mark("screen-wave-both", 0x3fu,
-		(phase << 24) |
-		(((seen_l & ~always_l) | (seen_t & ~always_t)) & 0x00ffffffu));
+	if (profile->final_ramwr) {
+		/* MuFrog arms RAMWR before DISPON; its first TE IRQ re-arms RAMWR. */
+		panel_restart_frame();
+		panel_cmd(ST7789_DISPON);
+	} else {
+		/* Exact original SF2000 trace: CASET, RASET, INVON, DISPON. */
+		panel_set_window();
+		panel_cmd(ST7789_INVON);
+		panel_cmd(ST7789_DISPON);
+	}
+	progress_mark("screen-panel-command-final", 0x3fu, ST7789_DISPON);
+	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
+	panel_rgb_bus_connect();
+	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
+	if (profile->te_mode)
+		panel_te_stream_start(profile->te_mode == 1);
 }
 
-static int run_hc15_rgb_output_probe(void)
+static int run_hc15_panel_sync_probe(void)
 {
 	unsigned i;
 
-	progress_mark("screen-output-probe-begin", 0x3fu,
-		ARRAY_SIZE(hc15_rgb_output_profiles));
-	for (i = 0; i < ARRAY_SIZE(hc15_rgb_output_profiles) && !stopping; i++) {
-		const struct hc15_rgb_output_profile *profile =
-			&hc15_rgb_output_profiles[i];
-		uint32_t detail = (i << 24) | (profile->gate1 & 0x00ffffffu);
+	progress_mark("screen-sync-probe-begin", 0x3fu,
+		ARRAY_SIZE(hc15_panel_sync_profiles));
+	for (i = 0; i < ARRAY_SIZE(hc15_panel_sync_profiles) && !stopping; i++) {
+		const struct hc15_panel_sync_profile *profile =
+			&hc15_panel_sync_profiles[i];
+		uint32_t detail = (i << 24) | ((uint32_t)profile->madctl << 16) |
+			((uint32_t)profile->te_mode << 8) |
+			((profile->clock_word >> 28) & 0x0fu);
 
 		/* The label and distinct frame number travel through GE/GMA. */
-		draw_diag_screen("HC15 RGB OUTPUT", profile->name,
-			profile->sysclk, 0x200u + i);
+		draw_diag_screen("SF2000 PANEL SYNC", profile->name,
+			profile->madctl, 0x300u + i);
 		progress_mark("screen-probe-phase-render", 0x3fu, detail);
 		present_frame();
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
@@ -3597,24 +3626,17 @@ static int run_hc15_rgb_output_probe(void)
 		}
 
 		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
-		hc15_apply_rgb_output_profile(profile);
-		panel_commit_rgb_profile(&panel_rgb_mode_profiles[0]);
+		panel_apply_sync_profile(profile);
 		progress_mark("screen-probe-phase-live", 0x3fu, detail);
-		progress_mark("screen-probe-phase-clock", 0x3fu,
-			mmio_read32(sysio, SYS_CLK_CTR_OFF));
-		progress_mark("screen-probe-phase-gate1", 0x3fu,
-			mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
-		progress_mark("screen-probe-phase-gate0", 0x3fu,
-			mmio_read32(sysio, SYS_CLOCK_GATE0_OFF));
-		hc15_sample_rgb_pads(i + 1u);
-		/* About 1.5 seconds per output contract on the physical HC15 CPU. */
+		/* sleep_ms samples the narrow electrical TE pulse on every spin. */
 		sleep_ms(1500u);
+		progress_mark("screen-probe-phase-rearms", 0x3fu,
+			(i << 24) | (panel_te_rearms & 0x00ffffffu));
+		panel_te_streaming = 0;
 		progress_mark("screen-probe-phase-done", 0x3fu, detail);
 	}
-	/* Leave the proven HC15/MuFrog clock state selected for normal use. */
-	hc15_apply_rgb_output_profile(&hc15_rgb_output_profiles[0]);
-	progress_mark("screen-output-probe-done", 0x3fu,
-		ARRAY_SIZE(hc15_rgb_output_profiles));
+	progress_mark("screen-sync-probe-done", 0x3fu,
+		ARRAY_SIZE(hc15_panel_sync_profiles));
 	return stopping ? -1 : 0;
 }
 
@@ -3675,8 +3697,8 @@ static void run_direct_console(unsigned *frame)
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/* Exercise HC15 output clocks and measure the physical pads in one run. */
-	if (run_hc15_rgb_output_probe() < 0) {
+	/* Exercise all known SF2000 panel ownership/TE contracts in one run. */
+	if (run_hc15_panel_sync_probe() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}

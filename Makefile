@@ -1156,13 +1156,15 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000008 name=screen-output-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000008 name=screen-sync-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	test "$$(grep -c 'name=screen-wave-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	test "$$(grep -c 'name=screen-wave-de' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	test "$$(grep -c 'name=screen-wave-both' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	grep -q 'value=0x00000600 name=screen-post-gate1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000: HC15 RGB scanout clocks gated gate1=0x00000000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'name=screen-probe-phase-rearms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
+		test $$((gate1 & 0x600)) -eq 1536
+	grep -q 'name=screen-panel-id' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-aux' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-probe-raster-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1170,17 +1172,12 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x06060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0xb6060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x000011f0 name=screen-panel-ramctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-data cmd=0xb0 index=0 value=0x0011' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-data cmd=0xb0 index=1 value=0x00f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel RAMCTRL access=RGB display=RGB value=11:f0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel-cmd cmd=0x2c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0x36 index=0 value=0x0060' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-te-rearm' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'panel-cmd cmd=0x2c .*count=3[5-9]' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 1
 	! grep -q 'GMA scanout with panel pixel clock disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
