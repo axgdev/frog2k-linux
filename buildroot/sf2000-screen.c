@@ -582,6 +582,23 @@ static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
 	{ "RAMCTRL-HCLINUX-565", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x55 },
 };
 
+/*
+ * One physical run exercises the independent ST7789 input contracts which
+ * cannot be distinguished by HC15 MMIO readback.  The framebuffer itself is
+ * labelled for every phase, so any working contract identifies itself on the
+ * panel without UART or a second build.
+ */
+static const struct panel_rgb_mode_profile hc15_rgb_probe_profiles[] = {
+	{ "P1 STOCK MEM CLK+", 1, { 0x11, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
+	{ "P2 STOCK MEM CLK-", 1, { 0x11, 0xf0 }, { 0x42, 0x04, 0x14 }, 0x55 },
+	{ "P3 STOCK MEM DE-", 1, { 0x11, 0xf0 }, { 0x41, 0x04, 0x14 }, 0x55 },
+	{ "P4 DIRECT CLK+", 1, { 0x11, 0xf0 }, { 0xc0, 0x04, 0x14 }, 0x55 },
+	{ "P5 DIRECT CLK-", 1, { 0x11, 0xf0 }, { 0xc2, 0x04, 0x14 }, 0x55 },
+	{ "P6 HCLINUX RGB666", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x66 },
+	{ "P7 MCU RAM RGB DISP", 1, { 0x01, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
+	{ "P8 RGB RAM VSYNC DISP", 1, { 0x12, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
+};
+
 struct pinmux_setting {
 	unsigned pad;
 	unsigned mux;
@@ -2403,11 +2420,9 @@ static void panel_fill_solid_direct(uint16_t color)
 	watchdog_pet();
 }
 
-static void panel_commit_rgb_handoff(void)
+static void panel_commit_rgb_profile(
+	const struct panel_rgb_mode_profile *profile)
 {
-	const struct panel_rgb_mode_profile *profile =
-		&panel_rgb_mode_profiles[0];
-
 	if (!panel_enabled)
 		return;
 	watchdog_pet();
@@ -2434,6 +2449,11 @@ static void panel_commit_rgb_handoff(void)
 	panel_rgb_bus_connect();
 	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
 	watchdog_pet();
+}
+
+static void panel_commit_rgb_handoff(void)
+{
+	panel_commit_rgb_profile(&panel_rgb_mode_profiles[0]);
 }
 
 static const uint8_t *glyph_for(char ch)
@@ -3463,6 +3483,41 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
+static int run_hc15_rgb_contract_probe(void)
+{
+	unsigned i;
+
+	progress_mark("screen-probe-carousel-begin", 0x3fu,
+		ARRAY_SIZE(hc15_rgb_probe_profiles));
+	for (i = 0; i < ARRAY_SIZE(hc15_rgb_probe_profiles) && !stopping; i++) {
+		const struct panel_rgb_mode_profile *profile =
+			&hc15_rgb_probe_profiles[i];
+		uint32_t detail = (i << 24) | ((uint32_t)profile->b0[0] << 16) |
+			((uint32_t)profile->b1[0] << 8) | profile->colmod;
+
+		/* The label and distinct frame number travel through GE/GMA. */
+		draw_diag_screen("HC15 RGB CONTRACT", profile->name,
+			profile->b1[0], 0x100u + i);
+		progress_mark("screen-probe-phase-render", 0x3fu, detail);
+		present_frame();
+		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
+			progress_mark("screen-probe-raster-fail", 0x3fu, detail);
+			panel_control_pinmux();
+			return -1;
+		}
+
+		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
+		panel_commit_rgb_profile(profile);
+		progress_mark("screen-probe-phase-live", 0x3fu, detail);
+		/* About 1.5 seconds per contract on the physical HC15 CPU. */
+		sleep_ms(1500u);
+		progress_mark("screen-probe-phase-done", 0x3fu, detail);
+	}
+	progress_mark("screen-probe-carousel-done", 0x3fu,
+		ARRAY_SIZE(hc15_rgb_probe_profiles));
+	return stopping ? -1 : 0;
+}
+
 static void run_direct_console(unsigned *frame)
 {
 	char buf[768];
@@ -3516,6 +3571,19 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-rgb-prime2-begin", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-rgb-prime2-done", 0x3fu, SCREEN_TAG);
+	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
+		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		goto handoff_complete;
+	}
+	/* Exercise all meaningful panel-side contracts in this one physical run. */
+	if (run_hc15_rgb_contract_probe() < 0) {
+		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		goto handoff_complete;
+	}
+	/* Restore the normal console frame before selecting the production mode. */
+	draw_console_screen(*frame);
+	progress_mark("screen-probe-restore-present", 0x3fu, *frame);
+	present_frame();
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
