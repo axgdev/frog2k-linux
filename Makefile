@@ -1157,9 +1157,13 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000008 name=screen-sync-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000008 name=screen-gma-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
 	test "$$(grep -c 'name=screen-probe-phase-rearms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	grep -q 'value=0xaa201b61 name=screen-probe-d0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00f00140 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x028000ff name=screen-probe-d5' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x01e00280 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
@@ -1176,9 +1180,9 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0xb6060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-cmd cmd=0x2c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-data cmd=0x36 index=0 value=0x0060' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'panel-data cmd=0x36 index=0 value=0x0070' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test "$$(grep -c 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 1
+	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout with panel pixel clock disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

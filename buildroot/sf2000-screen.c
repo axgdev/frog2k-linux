@@ -28,10 +28,14 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define HEIGHT 240u
 #define PITCH (WIDTH * 2u)
 #define FRAME_BYTES (PITCH * HEIGHT)
-#define SCAN_WIDTH 640u
-#define SCAN_HEIGHT 480u
+#define SCAN_WIDTH WIDTH
+#define SCAN_HEIGHT HEIGHT
 #define SCAN_PITCH (SCAN_WIDTH * 2u)
 #define SCAN_BYTES (SCAN_PITCH * SCAN_HEIGHT)
+#define LEGACY_SCAN_WIDTH 640u
+#define LEGACY_SCAN_HEIGHT 480u
+#define LEGACY_SCAN_PITCH (LEGACY_SCAN_WIDTH * 2u)
+#define LEGACY_SCAN_BYTES (LEGACY_SCAN_PITCH * LEGACY_SCAN_HEIGHT)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define CONSOLE_COLS 52u
 #define CONSOLE_ROWS 28u
@@ -58,7 +62,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 
 _Static_assert(GMA_DESC_OFF + GMA_DESC_STRIDE + GMA_DESC_BYTES <=
 	GMA_RAM_SIZE, "GMA descriptors exceed reserved DMA arena");
-_Static_assert(GMA_FRAME_OFF + SCAN_BYTES <= GMA_RAM_SIZE,
+_Static_assert(GMA_FRAME_OFF + LEGACY_SCAN_BYTES <= GMA_RAM_SIZE,
 	"GMA scanout exceeds reserved DMA arena");
 _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 	"GE render source exceeds reserved DMA arena");
@@ -304,6 +308,7 @@ static unsigned display_ge_attempts;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
+static uint32_t gma_frame_flush_bytes = SCAN_BYTES;
 static int panel_te_streaming;
 static int panel_te_busy;
 static int panel_te_last;
@@ -558,6 +563,16 @@ struct gma_scanout_profile {
 	int sdk_enhance;
 };
 
+struct gma_descriptor_profile {
+	const char *name;
+	uint32_t d0;
+	uint16_t src_w;
+	uint16_t src_h;
+	uint16_t pitch;
+	uint32_t d8;
+	uint32_t d9;
+};
+
 struct panel_rgb_mode_profile {
 	const char *name;
 	uint8_t use_b0;
@@ -595,6 +610,29 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB0A PRIMARY SDK", 0x0au, GMA_DOORBELL_PRIMARY, 1 },
 	{ "LB12 ALT SDK", 0x12u, GMA_DOORBELL_ALT, 1 },
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
+};
+
+/*
+ * The first entry is the descriptor emitted by MuFrog's proven SF2000
+ * framebuffer configuration: native 320x240 RGB565, no scale, full alpha.
+ * The remaining entries form a single-boot differential probe.  They isolate
+ * descriptor semantics from the already-proven panel timing/TE transaction;
+ * G8 deliberately reproduces the obsolete Linux 2x source contract which is
+ * visible as the repeating diagonal groups in log50's photograph.
+ */
+static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
+	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G2 NATIVE NO CSC", 0xaa200b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G3 NATIVE MIN LAST", 0xaa200161u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G4 EARLY EXACT", 0xaa200160u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G5 SCALE ONE TO ONE", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
+		0, 0x10001000u },
+	{ "G6 SCALE INC TWO", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
+		0, 0x20002000u },
+	{ "G7 NATIVE PITCH1280", 0xaa201b61u, WIDTH, HEIGHT,
+		LEGACY_SCAN_PITCH, 0, 0 },
+	{ "G8 LEGACY 640X480", 0xaa200b65u, LEGACY_SCAN_WIDTH,
+		LEGACY_SCAN_HEIGHT, LEGACY_SCAN_PITCH, 0, 0x20002000u },
 };
 
 static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
@@ -2999,19 +3037,13 @@ static void write_desc32(unsigned idx, uint32_t value)
 
 static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 {
-	uint32_t d0 = (mode << 4) | (32u << 16) | (170u << 24);
-
 	(void)variant;
-	d0 |= 1u;       /* is_last_block */
-	d0 |= 1u << 2;  /* HC15 stock RGB565 always enables the scaler */
-	d0 |= 1u << 8;  /* color_by_color: vendor !!!global_alpha_on */
-	d0 |= 1u << 9;  /* CLUT DMA mode, also retained for true color */
-	d0 |= 1u << 11; /* HC15 stock RGB565 descriptor semantics */
-	return d0;
+	(void)mode;
+	return gma_descriptor_profiles[0].d0;
 }
 
-static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
-	uint32_t pitch)
+static void build_gma_descriptor_profile(
+	const struct gma_descriptor_profile *profile)
 {
 	static const uint32_t scaler_coefficients[32][2] = {
 		{ 0x0088003cu, 0x0000003cu }, { 0x00860036u, 0x00010043u },
@@ -3035,8 +3067,12 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 		93, 314, 32, 0, -52, -173, 225, 0, 225, -204, -21, 0
 	};
 	unsigned i;
+	uint32_t source_bytes = (uint32_t)profile->pitch * profile->src_h;
 
-	(void)pitch;
+	if (source_bytes > LEGACY_SCAN_BYTES)
+		source_bytes = LEGACY_SCAN_BYTES;
+	gma_frame_flush_bytes = source_bytes;
+
 	/* Never rewrite the descriptor currently scanned by the HC15 GMA. */
 	gma_desc_slot ^= 1u;
 	gma_desc_off = GMA_DESC_OFF + gma_desc_slot * GMA_DESC_STRIDE;
@@ -3045,15 +3081,17 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 	for (i = 0; i < GMA_DESC_BYTES / sizeof(uint32_t); i++)
 		write_desc32(i, 0);
 
-	write_desc32(0, gma_descriptor_d0(variant, mode));
+	write_desc32(0, profile->d0);
 	write_desc32(1, 0);
 	write_desc32(2, ((WIDTH - 1u) << 16) | 0u);
 	write_desc32(3, ((HEIGHT - 1u) << 16) | 0u);
-	write_desc32(4, (SCAN_HEIGHT << 16) | SCAN_WIDTH);
-	write_desc32(5, 0x0fu | (SCAN_PITCH << 16));
+	write_desc32(4, ((uint32_t)profile->src_h << 16) | profile->src_w);
+	/* D5[7:0] is global alpha, not the panel's four-bit alpha range. */
+	write_desc32(5, 0xffu | ((uint32_t)profile->pitch << 16));
 	write_desc32(6, 0);
 	write_desc32(7, GMA_FRAME_PHYS);
-	write_desc32(9, 0x20002000u);
+	write_desc32(8, profile->d8);
+	write_desc32(9, profile->d9);
 	/* HC15 fetches two scaler taps every four words for each phase. */
 	for (i = 0; i < ARRAY_SIZE(scaler_coefficients); i++) {
 		write_desc32(16u + i * 4u, scaler_coefficients[i][0]);
@@ -3065,7 +3103,8 @@ static void build_gma_descriptor_profile(unsigned variant, uint32_t mode,
 
 static void build_gma_descriptor_variant(unsigned variant)
 {
-	build_gma_descriptor_profile(variant, 6u, PITCH);
+	(void)variant;
+	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
 }
 
 static void build_gma_descriptor(void)
@@ -3076,7 +3115,8 @@ static void build_gma_descriptor(void)
 static void flush_present_memory(void)
 {
 	(void)cacheflush((void *)(gma_ram + gma_desc_off), GMA_DESC_BYTES, BCACHE);
-	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), SCAN_BYTES, BCACHE);
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF),
+		gma_frame_flush_bytes, BCACHE);
 }
 
 static void ge_display_open(void)
@@ -3102,7 +3142,6 @@ static void ge_copy_render_to_scanout(void)
 {
 	hcge_state *state;
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
-	HCGERectangle destination = { 0, 0, SCAN_WIDTH, SCAN_HEIGHT };
 	bool submitted;
 	int sync_ret = -1;
 	int verified = 1;
@@ -3113,18 +3152,8 @@ static void ge_copy_render_to_scanout(void)
 	if (!display_ge) {
 		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
-		unsigned y;
 
-		for (y = 0; y < HEIGHT; y++) {
-			unsigned x;
-			for (x = 0; x < WIDTH; x++) {
-				uint16_t pixel = src[y * WIDTH + x];
-				unsigned out = (y * 2u) * SCAN_WIDTH + x * 2u;
-				dst[out] = dst[out + 1u] = pixel;
-				dst[out + SCAN_WIDTH] =
-					dst[out + SCAN_WIDTH + 1u] = pixel;
-			}
-		}
+		memcpy(dst, src, FRAME_BYTES);
 		return;
 	}
 	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
@@ -3143,11 +3172,11 @@ static void ge_copy_render_to_scanout(void)
 	state->dst.pitch = SCAN_PITCH;
 	state->src.phys = GMA_RENDER_PHYS;
 	state->src.pitch = PITCH;
-	state->accel = HCGE_DFXL_STRETCHBLIT;
+	state->accel = HCGE_DFXL_BLIT;
 	hcge_set_state(display_ge, state, state->accel);
 	if (trace_attempt)
 		progress_mark("screen-ge-submit", 0x3fu, attempt);
-	submitted = hcge_stretch_blit(display_ge, &source, &destination);
+	submitted = hcge_blit(display_ge, &source, 0, 0);
 	if (trace_attempt)
 		progress_mark(submitted ? "screen-ge-submit-ok" :
 			"screen-ge-submit-fail", 0x3fu, attempt);
@@ -3181,15 +3210,9 @@ static void ge_copy_render_to_scanout(void)
 				unsigned sx = samples[i][0];
 				unsigned sy = samples[i][1];
 				unsigned si = sy * WIDTH + sx;
-				unsigned di = (sy * 2u) * SCAN_WIDTH + sx * 2u;
+				unsigned di = si;
 				uint16_t expected = src[si];
 
-				/*
-				 * The vendor stretch filter interpolates the three pixels
-				 * between source anchors; they are deliberately not nearest-
-				 * neighbour duplicates.  Validate DMA placement at each exact
-				 * 2x anchor instead of rejecting correct filtered output.
-				 */
 				if (dst[di] != expected) {
 					verified = 0;
 					verify_detail = ((uint32_t)i << 24) |
@@ -3206,19 +3229,8 @@ static void ge_copy_render_to_scanout(void)
 	if (!submitted || sync_ret != 0 || !verified) {
 		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
-		unsigned y;
 
-		for (y = 0; y < HEIGHT; y++) {
-			unsigned x;
-			for (x = 0; x < WIDTH; x++) {
-				uint16_t pixel = src[y * WIDTH + x];
-				unsigned out = (y * 2u) * SCAN_WIDTH + x * 2u;
-				dst[out] = pixel;
-				dst[out + 1u] = pixel;
-				dst[out + SCAN_WIDTH] = pixel;
-				dst[out + SCAN_WIDTH + 1u] = pixel;
-			}
-		}
+		memcpy(dst, src, FRAME_BYTES);
 		log_line(verified ?
 			"sf2000-screen: GE present failed, copied on CPU\n" :
 			"sf2000-screen: GE copy mismatch, copied on CPU and retained GE\n");
@@ -3608,42 +3620,45 @@ static void panel_apply_sync_profile(
 		panel_te_stream_start(profile->te_mode == 1);
 }
 
-static int run_hc15_panel_sync_probe(void)
+static int run_gma_descriptor_probe(void)
 {
 	unsigned i;
 
-	progress_mark("screen-sync-probe-begin", 0x3fu,
-		ARRAY_SIZE(hc15_panel_sync_profiles));
-	for (i = 0; i < ARRAY_SIZE(hc15_panel_sync_profiles) && !stopping; i++) {
-		const struct hc15_panel_sync_profile *profile =
-			&hc15_panel_sync_profiles[i];
-		uint32_t detail = (i << 24) | ((uint32_t)profile->madctl << 16) |
-			((uint32_t)profile->te_mode << 8) |
-			((profile->clock_word >> 28) & 0x0fu);
+	progress_mark("screen-gma-probe-begin", 0x3fu,
+		ARRAY_SIZE(gma_descriptor_profiles));
+	for (i = 0; i < ARRAY_SIZE(gma_descriptor_profiles) && !stopping; i++) {
+		const struct gma_descriptor_profile *profile =
+			&gma_descriptor_profiles[i];
+		uint32_t detail = (i << 24) |
+			((uint32_t)profile->src_w << 12) | profile->src_h;
 
-		/* The label and distinct frame number travel through GE/GMA. */
-		draw_diag_screen("SF2000 PANEL SYNC", profile->name,
-			profile->madctl, 0x300u + i);
+		/* Each label is drawn into the exact source buffer under test. */
+		draw_diag_screen("GMA GEOMETRY PROBE", profile->name,
+			0x70, 0x400u + i);
+		build_gma_descriptor_profile(profile);
 		progress_mark("screen-probe-phase-render", 0x3fu, detail);
-		present_frame();
+		progress_mark("screen-probe-d0", 0x3fu, profile->d0);
+		progress_mark("screen-probe-d4", 0x3fu,
+			((uint32_t)profile->src_h << 16) | profile->src_w);
+		progress_mark("screen-probe-d5", 0x3fu,
+			((uint32_t)profile->pitch << 16) | 0xffu);
+		progress_mark("screen-probe-d9", 0x3fu, profile->d9);
+		present_frame_profile(&gma_scanout_profiles[3]);
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 			progress_mark("screen-probe-raster-fail", 0x3fu, detail);
-			panel_control_pinmux();
 			return -1;
 		}
 
 		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
-		panel_apply_sync_profile(profile);
 		progress_mark("screen-probe-phase-live", 0x3fu, detail);
-		/* sleep_ms samples the narrow electrical TE pulse on every spin. */
+		/* Keep sampling and rearming the narrow physical TE pulse. */
 		sleep_ms(1500u);
 		progress_mark("screen-probe-phase-rearms", 0x3fu,
 			(i << 24) | (panel_te_rearms & 0x00ffffffu));
-		panel_te_streaming = 0;
 		progress_mark("screen-probe-phase-done", 0x3fu, detail);
 	}
-	progress_mark("screen-sync-probe-done", 0x3fu,
-		ARRAY_SIZE(hc15_panel_sync_profiles));
+	progress_mark("screen-gma-probe-done", 0x3fu,
+		ARRAY_SIZE(gma_descriptor_profiles));
 	return stopping ? -1 : 0;
 }
 
@@ -3704,22 +3719,26 @@ static void run_direct_console(unsigned *frame)
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/* Exercise all known SF2000 panel ownership/TE contracts in one run. */
-	if (run_hc15_panel_sync_probe() < 0) {
+	/*
+	 * Hold the proven MuFrog panel ownership transaction constant while the
+	 * descriptor matrix varies only GMA source geometry and header semantics.
+	 */
+	panel_commit_rgb_handoff();
+	rgb_active = 1;
+	mark_hc15_display_state(1);
+	if (run_gma_descriptor_probe() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/* Restore the normal console frame before selecting the production mode. */
+	/* Restore the normal console with the native MuFrog descriptor. */
 	draw_console_screen(*frame);
+	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
 	progress_mark("screen-probe-restore-present", 0x3fu, *frame);
-	present_frame();
+	present_frame_profile(&gma_scanout_profiles[3]);
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	panel_commit_rgb_handoff();
-	rgb_active = 1;
-	mark_hc15_display_state(1);
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	log_gma_ready();
@@ -3857,7 +3876,7 @@ static void run_rgb_only_diag(unsigned *frame)
 
 		for (hold = 0; hold < 3 && !stopping; hold++) {
 			(*frame)++;
-			build_gma_descriptor_profile(variant, mode, pitch);
+			build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
 			draw_solid_rgb565_screen(variant);
 			panel_apply_rgb_mode_profile(panel_profile);
 			panel_rgb_pinmux();
