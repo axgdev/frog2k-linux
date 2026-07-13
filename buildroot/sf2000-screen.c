@@ -1934,15 +1934,31 @@ static void panel_control_pinmux(void)
 		pinmux_set_pad(panel_control_pads[i], PINMUX_GPIO);
 }
 
-static void panel_rgb_reset_release(void)
+static void panel_rgb_controller_connect(void)
 {
-	uint32_t value = mmio_read32(sysio, SYS_RESET1_OFF);
+	uint32_t ctrl = mmio_read32(gma, VOU_HD_CTRL);
+	uint32_t mode = mmio_read32(gma, VOU_HD_MODE);
 
-	/* The vendor's RGB handoff begins by releasing the VOU reset (bit 8). */
-	value &= ~(1u << 8);
-	mmio_write32(sysio, SYS_RESET1_OFF, value);
-	progress_mark("screen-rgb-reset-release", 0x3fu,
-		mmio_read32(sysio, SYS_RESET1_OFF));
+	/*
+	 * Exact first two writes from the proven HC15 lcd_pinmux_rgb(true):
+	 *
+	 *   *(u32 *)0xb8808084 &= ~0x100;
+	 *   *(u32 *)0xb8808000 = (... & ~0xff) | 0x15;
+	 *
+	 * These addresses belong to VOU, not SYSIO.  The old replacement lost
+	 * the 0x8000 bank displacement and cleared SYSIO+0x84 instead, leaving
+	 * the VOU output at 0x00137102.  That state has a live frame counter but
+	 * does not connect the completed HD raster to the parallel RGB pads.
+	 */
+	progress_mark("screen-rgb-vou-connect-before", 0x3fu, ctrl);
+	ctrl &= ~(1u << 8);
+	mode = (mode & ~0xffu) | 0x15u;
+	mmio_write32(gma, VOU_HD_CTRL, ctrl);
+	mmio_write32(gma, VOU_HD_MODE, mode);
+	progress_mark("screen-rgb-vou-connect-ctrl", 0x3fu,
+		mmio_read32(gma, VOU_HD_CTRL));
+	progress_mark("screen-rgb-vou-connect-mode", 0x3fu,
+		mmio_read32(gma, VOU_HD_MODE));
 }
 
 static void panel_rgb_pad_mux_only(void)
@@ -1990,13 +2006,13 @@ static void panel_rgb_stream_begin(void)
 static void panel_rgb_engine_prepare(void)
 {
 	panel_lcd_setup_enable();
-	panel_rgb_reset_release();
 	panel_rgb_output_mux_enable();
 	panel_vou_rgb_enable();
 }
 
 static void panel_rgb_bus_connect(void)
 {
+	panel_rgb_controller_connect();
 	panel_rgb_pad_mux_only();
 	panel_rgb_stream_begin();
 }
@@ -2508,12 +2524,11 @@ static int panel_init_sf2000_original_order(void)
 	return 0;
 }
 
-static void panel_push_frame(int switch_to_rgb)
+static void panel_push_pixels(const uint16_t *fb, int switch_to_rgb)
 {
-	uint16_t *fb = framebuffer();
 	unsigned i;
 
-	if (!panel_enabled)
+	if (!panel_enabled || !fb)
 		return;
 
 	panel_control_pinmux();
@@ -2529,6 +2544,11 @@ static void panel_push_frame(int switch_to_rgb)
 	if (switch_to_rgb)
 		panel_rgb_pinmux();
 	watchdog_pet();
+}
+
+static void panel_push_frame(int switch_to_rgb)
+{
+	panel_push_pixels(framebuffer(), switch_to_rgb);
 }
 
 static void panel_push_probe_pixels(void)
@@ -3244,6 +3264,143 @@ static void ge_copy_render_to_scanout(void)
 	}
 }
 
+static uint32_t ge_diag_frame_hash(void)
+{
+	const uint16_t *pixels = (const uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	uint32_t hash = 2166136261u;
+	unsigned i;
+
+	/* Sample every cache line; this is diagnostic identity, not integrity. */
+	for (i = 0; i < WIDTH * HEIGHT; i += 16u) {
+		hash ^= pixels[i];
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
+static int ge_diag_finish(unsigned stage, int submitted)
+{
+	int sync_ret = -1;
+
+	progress_mark(submitted ? "screen-ge-mcu-submit-ok" :
+		"screen-ge-mcu-submit-fail", 0x3fu, stage);
+	if (submitted)
+		sync_ret = hcge_engine_sync(display_ge);
+	progress_mark(sync_ret == 0 ? "screen-ge-mcu-sync-ok" :
+		"screen-ge-mcu-sync-fail", 0x3fu,
+		(stage << 16) | ((uint32_t)sync_ret & 0xffffu));
+	if (!submitted || sync_ret != 0)
+		return -1;
+
+	/* Invalidate CPU cache lines written by the GE DMA master. */
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
+	progress_mark("screen-ge-mcu-hash", 0x3fu, ge_diag_frame_hash());
+	progress_mark("screen-ge-mcu-visible", 0x3fu, stage);
+	panel_push_pixels((const uint16_t *)(gma_ram + GMA_FRAME_OFF), 0);
+	sleep_ms(800);
+	return 0;
+}
+
+static void ge_diag_surface_state(hcge_state *state, int source)
+{
+	memset(state, 0, sizeof(*state));
+	state->render_options = HCGE_DSRO_NONE;
+	state->drawingflags = HCGE_DSDRAW_NOFX;
+	state->blittingflags = HCGE_DSBLIT_NOFX;
+	state->src_blend = HCGE_DSBF_SRCALPHA;
+	state->dst_blend = HCGE_DSBF_ZERO;
+	state->destination.config.format = HCGE_DSPF_RGB16;
+	state->destination.config.size.w = WIDTH;
+	state->destination.config.size.h = HEIGHT;
+	state->dst.phys = GMA_FRAME_PHYS;
+	state->dst.pitch = PITCH;
+	if (source) {
+		state->source.config.format = HCGE_DSPF_RGB16;
+		state->source.config.size.w = WIDTH;
+		state->source.config.size.h = HEIGHT;
+		state->src.phys = GMA_RENDER_PHYS;
+		state->src.pitch = PITCH;
+	}
+}
+
+static int ge_diag_fill_quadrants(void)
+{
+	static const HCGERectangle rects[] = {
+		{ 0, 0, WIDTH / 2, HEIGHT / 2 },
+		{ WIDTH / 2, 0, WIDTH / 2, HEIGHT / 2 },
+		{ 0, HEIGHT / 2, WIDTH / 2, HEIGHT / 2 },
+		{ WIDTH / 2, HEIGHT / 2, WIDTH / 2, HEIGHT / 2 },
+	};
+	static const HCGEColor colors[] = {
+		{ 0xff, 0xff, 0x00, 0x00 }, { 0xff, 0x00, 0xff, 0x00 },
+		{ 0xff, 0x00, 0x00, 0xff }, { 0xff, 0xff, 0xff, 0xff },
+	};
+	hcge_state *state = &display_ge->state;
+	unsigned i;
+	int submitted = 1;
+
+	ge_diag_surface_state(state, 0);
+	state->accel = HCGE_DFXL_FILLRECTANGLE;
+	for (i = 0; i < ARRAY_SIZE(rects); i++) {
+		HCGERectangle rect = rects[i];
+
+		state->color = colors[i];
+		hcge_set_state(display_ge, state, state->accel);
+		if (!hcge_fill_rect(display_ge, &rect))
+			submitted = 0;
+	}
+	return ge_diag_finish(2u, submitted);
+}
+
+static int ge_diag_stretch(void)
+{
+	hcge_state *state = &display_ge->state;
+	HCGERectangle source = { 0, 0, WIDTH / 2, HEIGHT / 2 };
+	HCGERectangle destination = { 0, 0, WIDTH, HEIGHT };
+	int submitted;
+
+	draw_diag_screen("E3 GE STRETCH VIA MCU", "2X TOP LEFT", 0x70, 3u);
+	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	ge_diag_surface_state(state, 1);
+	state->accel = HCGE_DFXL_STRETCHBLIT;
+	hcge_set_state(display_ge, state, state->accel);
+	submitted = hcge_stretch_blit(display_ge, &source, &destination);
+	return ge_diag_finish(3u, submitted);
+}
+
+static void run_ge_mcu_probe(unsigned frame)
+{
+	progress_mark("screen-ge-mcu-probe-begin", 0x3fu, 3u);
+	if (!display_ge) {
+		progress_mark("screen-ge-mcu-probe-skip", 0x3fu, SCREEN_TAG);
+		return;
+	}
+
+	/*
+	 * Keep the panel on its known-good 8080/MCU bus for all three screens.
+	 * Thus the only hardware between each generated destination and the glass
+	 * is the already-proven CPU pixel writer; VOU and GMA are not involved.
+	 */
+	draw_diag_screen("E1 GE BLIT VIA MCU", "NATIVE RGB565", 0x70, 1u);
+	progress_mark("screen-ge-mcu-phase", 0x3fu, 1u);
+	ge_copy_render_to_scanout();
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF), FRAME_BYTES, BCACHE);
+	progress_mark("screen-ge-mcu-hash", 0x3fu, ge_diag_frame_hash());
+	progress_mark("screen-ge-mcu-visible", 0x3fu, 1u);
+	panel_push_pixels((const uint16_t *)(gma_ram + GMA_FRAME_OFF), 0);
+	sleep_ms(800);
+
+	progress_mark("screen-ge-mcu-phase", 0x3fu, 2u);
+	(void)ge_diag_fill_quadrants();
+	progress_mark("screen-ge-mcu-phase", 0x3fu, 3u);
+	(void)ge_diag_stretch();
+
+	/* Restore the normal text console before beginning the RGB handoff. */
+	draw_console_screen(frame);
+	panel_push_frame(0);
+	progress_mark("screen-ge-mcu-probe-done", 0x3fu, 3u);
+}
+
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 {
 	uint32_t value = mmio_read32(gma, off);
@@ -3688,6 +3845,7 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	run_ge_mcu_probe(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering

@@ -1150,6 +1150,13 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000003 name=screen-ge-mcu-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 3
+	grep -q 'value=0x00000002 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000003 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00040001 name=screen-raster-ctl-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00280 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00000 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1259,6 +1266,8 @@ run-qemu-unifrog-display: qemu $(UNIFROG_QEMU_SD)
 smoke-qemu-unifrog-display: run-qemu-unifrog-display
 	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
 	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
+	! grep -q 'GMA scanout with panel sync/DE disconnected' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
+	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/qemu-unifrog-display.log
 	test -s '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm
 	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
@@ -1297,6 +1306,8 @@ run-qemu-mufrog-display: qemu $(MUFROG_QEMU_SD)
 smoke-qemu-mufrog-display: run-qemu-mufrog-display
 	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
 	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
+	! grep -q 'GMA scanout with panel sync/DE disconnected' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
+	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
 	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
 	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
