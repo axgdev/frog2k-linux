@@ -1853,12 +1853,13 @@ static void panel_rgb_pad_mux_only(void)
 {
 	static int logged;
 	/*
-	 * Exact vendor drive-strength word: the high byte (0xb6) selects the
-	 * PRGB clock pad.  The lower three bytes are the RGB data drive fields.
-	 * Omitting that byte still lets VOU/GMA report a completed frame but the
-	 * physical ST7789 receives no valid pixel clock and retains one colour.
+	 * Each byte is an HC15 pin-function selector.  L07, in the high byte, is
+	 * the PRGB pixel clock and its proven stock/UniFrog selector is exactly
+	 * 0x06.  The former 0xb6 value came from a speculative drive-strength
+	 * interpretation; log45 proves it was the sole post-handoff pinmux word
+	 * which differed from the working HC15 state.
 	 */
-	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0xb6060606u);
+	mmio_write32(sysio, PINMUX_L_OFF + 0x04, 0x06060606u);
 	mmio_write32(sysio, PINMUX_L_OFF + 0x00,
 		(mmio_read32(sysio, PINMUX_L_OFF + 0x00) & 0x0000ffffu) |
 		0x06060000u);
