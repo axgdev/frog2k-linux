@@ -550,6 +550,13 @@ struct panel_rgb_mode_profile {
 	uint8_t colmod;
 };
 
+struct hc15_rgb_output_profile {
+	const char *name;
+	uint32_t gate0;
+	uint32_t gate1;
+	uint32_t sysclk;
+};
+
 static const struct panel_variant panel_variants[] = {
 	{ "SF2000", st7789_sf2000_init, { 0x60, 0x00, 0x80, 0xc0 } },
 	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
@@ -583,20 +590,22 @@ static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
 };
 
 /*
- * One physical run exercises the independent ST7789 input contracts which
- * cannot be distinguished by HC15 MMIO readback.  The framebuffer itself is
- * labelled for every phase, so any working contract identifies itself on the
- * panel without UART or a second build.
+ * log47 eliminated all meaningful ST7789 input contracts: every phase ran and
+ * none reached the glass.  Probe below the panel protocol instead.  C1 is the
+ * clock-gate state repeatedly captured from the working HC15 MuFrog frontend;
+ * C5 is Linux's former cold state and C7 is the original firmware's write.
+ * Bit 15 selects the alternate pixel-clock edge and bit 19's final level is
+ * tested independently.  Every phase is labelled in its GMA framebuffer.
  */
-static const struct panel_rgb_mode_profile hc15_rgb_probe_profiles[] = {
-	{ "P1 STOCK MEM CLK+", 1, { 0x11, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
-	{ "P2 STOCK MEM CLK-", 1, { 0x11, 0xf0 }, { 0x42, 0x04, 0x14 }, 0x55 },
-	{ "P3 STOCK MEM DE-", 1, { 0x11, 0xf0 }, { 0x41, 0x04, 0x14 }, 0x55 },
-	{ "P4 DIRECT CLK+", 1, { 0x11, 0xf0 }, { 0xc0, 0x04, 0x14 }, 0x55 },
-	{ "P5 DIRECT CLK-", 1, { 0x11, 0xf0 }, { 0xc2, 0x04, 0x14 }, 0x55 },
-	{ "P6 HCLINUX RGB666", 1, { 0x11, 0xf0 }, { 0x42, 0x08, 0x14 }, 0x66 },
-	{ "P7 MCU RAM RGB DISP", 1, { 0x01, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
-	{ "P8 RGB RAM VSYNC DISP", 1, { 0x12, 0xf0 }, { 0x40, 0x04, 0x14 }, 0x55 },
+static const struct hc15_rgb_output_profile hc15_rgb_output_profiles[] = {
+	{ "C1 HC15 G600 CLK3700", 0x00000000u, 0x00000600u, 0x00003700u },
+	{ "C2 HC15 G600 SKEW", 0x00000000u, 0x00000600u, 0x0000b700u },
+	{ "C3 HC15 G600 CLK83700", 0x00000000u, 0x00000600u, 0x00083700u },
+	{ "C4 HC15 G600 8SKEW", 0x00000000u, 0x00000600u, 0x0008b700u },
+	{ "C5 COLD G0 CLK3700", 0x00000000u, 0x00000000u, 0x00003700u },
+	{ "C6 COLD G0 SKEW", 0x00000000u, 0x00000000u, 0x0000b700u },
+	{ "C7 STOCK GATES CLK3700", 0x00000f88u, 0x0bc04040u, 0x00003700u },
+	{ "C8 STOCK GATES SKEW", 0x00000f88u, 0x0bc04040u, 0x0000b700u },
 };
 
 struct pinmux_setting {
@@ -1443,10 +1452,14 @@ static void panel_rgb_clock_enable(void)
 {
 	uint32_t gate1;
 
+	/*
+	 * These are HC15 clock enables, not HC16 active-low gates.  Repeated logs
+	 * from the working MuFrog frontend show CLOCK_GATE1=0x00000600 after the
+	 * vendor display stack starts.  The previous bits 0/2/18 assignment came
+	 * from the different HC16 clock tree and left both HC15 RGB clocks stopped.
+	 */
 	gate1 = mmio_read32(sysio, SYS_CLOCK_GATE1_OFF);
-	gate1 &= ~(1u << 0);  /* VOU_HD_CLK */
-	gate1 &= ~(1u << 2);  /* DE_CLK */
-	gate1 &= ~(1u << 18); /* VOU_HD_EXT_CLK */
+	gate1 |= (1u << 9) | (1u << 10);
 	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate1);
 	progress_mark("screen-rgb-gate1", 0x3fu,
 		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
@@ -1976,6 +1989,8 @@ static void mark_hc15_display_state(int post)
 	 */
 	progress_mark(post ? "screen-post-sysclk" : "screen-pre-sysclk", 0x3fu,
 		mmio_read32(sysio, SYS_CLK_CTR_OFF));
+	progress_mark(post ? "screen-post-gate0" : "screen-pre-gate0", 0x3fu,
+		mmio_read32(sysio, SYS_CLOCK_GATE0_OFF));
 	progress_mark(post ? "screen-post-gate1" : "screen-pre-gate1", 0x3fu,
 		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
 	progress_mark(post ? "screen-post-reset1" : "screen-pre-reset1", 0x3fu,
@@ -3483,21 +3498,96 @@ static void run_rgb_diag(unsigned *frame)
 	}
 }
 
-static int run_hc15_rgb_contract_probe(void)
+static void hc15_apply_rgb_output_profile(
+	const struct hc15_rgb_output_profile *profile)
+{
+	uint32_t target;
+
+	/* Force a real bit-19 edge before selecting its requested final level. */
+	target = (mmio_read32(sysio, SYS_CLK_CTR_OFF) & ~0x0008b700u) |
+		(profile->sysclk & 0x0008b700u);
+	mmio_write32(sysio, SYS_CLK_CTR_OFF, target ^ (1u << 19));
+	mmio_write32(sysio, SYS_CLK_CTR_OFF, target);
+	mmio_write32(sysio, SYS_CLOCK_GATE0_OFF, profile->gate0);
+	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, profile->gate1);
+	/* The stock stack arms RGB once, then enables the external RGB output. */
+	mmio_write32(gma, VOU_RGB_ENABLE, 0x00010000u);
+	mmio_write32(gma, VOU_RGB_ENABLE, 0x00050000u);
+}
+
+static void hc15_sample_rgb_pads(unsigned phase)
+{
+	uint32_t prev_l = mmio_read32(sysio, GPIOL_OFF + GPIO_INPUT_OFF);
+	uint32_t prev_t = mmio_read32(sysio, GPIOT_OFF + GPIO_INPUT_OFF);
+	uint32_t seen_l = prev_l;
+	uint32_t seen_t = prev_t;
+	uint32_t always_l = prev_l;
+	uint32_t always_t = prev_t;
+	uint32_t changed_l = 0;
+	uint32_t changed_t = 0;
+	uint32_t clk_edges = 0;
+	uint32_t vs_edges = 0;
+	uint32_t de_edges = 0;
+	unsigned i;
+
+	/*
+	 * Sample the GPIO input receivers while the pads belong to PRGB.  If HC15
+	 * keeps those receivers live in peripheral mode, this distinguishes a valid
+	 * internal GMA shadow from a raster which actually reaches the die pads.  A
+	 * static result across every profile also tells us not to use this readback
+	 * path as evidence.  The edge counts are relative, not frequency meters.
+	 */
+	for (i = 0; i < 65536u; i++) {
+		uint32_t l = mmio_read32(sysio, GPIOL_OFF + GPIO_INPUT_OFF);
+		uint32_t t = mmio_read32(sysio, GPIOT_OFF + GPIO_INPUT_OFF);
+		uint32_t dl = l ^ prev_l;
+		uint32_t dt = t ^ prev_t;
+
+		clk_edges += (dl >> 7) & 1u;
+		vs_edges += (dl >> 9) & 1u;
+		de_edges += (dl >> 10) & 1u;
+		changed_l |= dl;
+		changed_t |= dt;
+		seen_l |= l;
+		seen_t |= t;
+		always_l &= l;
+		always_t &= t;
+		prev_l = l;
+		prev_t = t;
+		if ((i & 0x1fffu) == 0)
+			watchdog_pet();
+	}
+	progress_mark("screen-wave-clock", 0x3fu,
+		(phase << 24) | (clk_edges & 0x00ffffffu));
+	progress_mark("screen-wave-vsync", 0x3fu,
+		(phase << 24) | (vs_edges & 0x00ffffffu));
+	progress_mark("screen-wave-de", 0x3fu,
+		(phase << 24) | (de_edges & 0x00ffffffu));
+	progress_mark("screen-wave-lchange", 0x3fu,
+		(phase << 24) | (changed_l & 0x00ffffffu));
+	progress_mark("screen-wave-tchange", 0x3fu,
+		(phase << 24) | (changed_t & 0x00ffffffu));
+	progress_mark("screen-wave-levels", 0x3fu,
+		(phase << 24) | ((seen_l | seen_t) & 0x00ffffffu));
+	progress_mark("screen-wave-both", 0x3fu,
+		(phase << 24) |
+		(((seen_l & ~always_l) | (seen_t & ~always_t)) & 0x00ffffffu));
+}
+
+static int run_hc15_rgb_output_probe(void)
 {
 	unsigned i;
 
-	progress_mark("screen-probe-carousel-begin", 0x3fu,
-		ARRAY_SIZE(hc15_rgb_probe_profiles));
-	for (i = 0; i < ARRAY_SIZE(hc15_rgb_probe_profiles) && !stopping; i++) {
-		const struct panel_rgb_mode_profile *profile =
-			&hc15_rgb_probe_profiles[i];
-		uint32_t detail = (i << 24) | ((uint32_t)profile->b0[0] << 16) |
-			((uint32_t)profile->b1[0] << 8) | profile->colmod;
+	progress_mark("screen-output-probe-begin", 0x3fu,
+		ARRAY_SIZE(hc15_rgb_output_profiles));
+	for (i = 0; i < ARRAY_SIZE(hc15_rgb_output_profiles) && !stopping; i++) {
+		const struct hc15_rgb_output_profile *profile =
+			&hc15_rgb_output_profiles[i];
+		uint32_t detail = (i << 24) | (profile->gate1 & 0x00ffffffu);
 
 		/* The label and distinct frame number travel through GE/GMA. */
-		draw_diag_screen("HC15 RGB CONTRACT", profile->name,
-			profile->b1[0], 0x100u + i);
+		draw_diag_screen("HC15 RGB OUTPUT", profile->name,
+			profile->sysclk, 0x200u + i);
 		progress_mark("screen-probe-phase-render", 0x3fu, detail);
 		present_frame();
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
@@ -3507,14 +3597,24 @@ static int run_hc15_rgb_contract_probe(void)
 		}
 
 		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
-		panel_commit_rgb_profile(profile);
+		hc15_apply_rgb_output_profile(profile);
+		panel_commit_rgb_profile(&panel_rgb_mode_profiles[0]);
 		progress_mark("screen-probe-phase-live", 0x3fu, detail);
-		/* About 1.5 seconds per contract on the physical HC15 CPU. */
+		progress_mark("screen-probe-phase-clock", 0x3fu,
+			mmio_read32(sysio, SYS_CLK_CTR_OFF));
+		progress_mark("screen-probe-phase-gate1", 0x3fu,
+			mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
+		progress_mark("screen-probe-phase-gate0", 0x3fu,
+			mmio_read32(sysio, SYS_CLOCK_GATE0_OFF));
+		hc15_sample_rgb_pads(i + 1u);
+		/* About 1.5 seconds per output contract on the physical HC15 CPU. */
 		sleep_ms(1500u);
 		progress_mark("screen-probe-phase-done", 0x3fu, detail);
 	}
-	progress_mark("screen-probe-carousel-done", 0x3fu,
-		ARRAY_SIZE(hc15_rgb_probe_profiles));
+	/* Leave the proven HC15/MuFrog clock state selected for normal use. */
+	hc15_apply_rgb_output_profile(&hc15_rgb_output_profiles[0]);
+	progress_mark("screen-output-probe-done", 0x3fu,
+		ARRAY_SIZE(hc15_rgb_output_profiles));
 	return stopping ? -1 : 0;
 }
 
@@ -3575,8 +3675,8 @@ static void run_direct_console(unsigned *frame)
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/* Exercise all meaningful panel-side contracts in this one physical run. */
-	if (run_hc15_rgb_contract_probe() < 0) {
+	/* Exercise HC15 output clocks and measure the physical pads in one run. */
+	if (run_hc15_rgb_output_probe() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}

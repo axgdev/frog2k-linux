@@ -1156,8 +1156,13 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000008 name=screen-probe-carousel-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000008 name=screen-output-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	test "$$(grep -c 'name=screen-wave-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	test "$$(grep -c 'name=screen-wave-de' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	test "$$(grep -c 'name=screen-wave-both' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	grep -q 'value=0x00000600 name=screen-post-gate1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000: HC15 RGB scanout clocks gated gate1=0x00000000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-probe-raster-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
