@@ -2395,25 +2395,6 @@ static void panel_te_service_sample(void)
 		panel_te_rearm();
 }
 
-static int panel_wait_te_stable(unsigned frames, unsigned timeout_ms)
-{
-	unsigned start = panel_te_rearms;
-	unsigned elapsed;
-
-	progress_mark("screen-te-stable-begin", 0x3fu,
-		(frames << 16) | (start & 0xffffu));
-	for (elapsed = 0; elapsed < timeout_ms && !stopping; elapsed++) {
-		if (panel_te_rearms - start >= frames)
-			break;
-		sleep_ms(1);
-	}
-	progress_mark("screen-te-stable-count", 0x3fu, panel_te_rearms);
-	progress_mark(elapsed < timeout_ms && !stopping ?
-		"screen-te-stable-ok" : "screen-te-stable-fail",
-		0x3fu, elapsed);
-	return elapsed < timeout_ms && !stopping ? 0 : -1;
-}
-
 static void panel_reset(void)
 {
 	panel_bus_idle();
@@ -3847,9 +3828,6 @@ static void run_direct_console(unsigned *frame)
 	unsigned idle = 0;
 	unsigned input_retry = 0;
 	int rgb_active = 0;
-	int ge_diagnostics =
-		env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
-		cmdline_contains("SF2000_GE_DIAG=1");
 
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
@@ -3867,10 +3845,7 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
-	progress_mark("screen-ge-diagnostics", 0x3fu,
-		ge_diagnostics ? 1u : 0u);
-	if (ge_diagnostics)
-		run_ge_mcu_probe(*frame);
+	run_ge_mcu_probe(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering
@@ -3909,35 +3884,19 @@ static void run_direct_console(unsigned *frame)
 	panel_commit_rgb_handoff();
 	rgb_active = 1;
 	mark_hc15_display_state(1);
-	if (ge_diagnostics && run_gma_descriptor_probe() < 0) {
+	if (run_gma_descriptor_probe() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/*
-	 * Production always uses the native MuFrog descriptor.  The opt-in
-	 * diagnostics deliberately install invalid legacy descriptors in G7/G8,
-	 * so rebuild it here in both modes instead of relying on inherited state.
-	 */
+	/* Restore the normal console with the native MuFrog descriptor. */
 	draw_console_screen(*frame);
 	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
-	progress_mark("screen-native-present", 0x3fu, *frame);
+	progress_mark("screen-probe-restore-present", 0x3fu, *frame);
 	present_frame_profile(&gma_scanout_profiles[3]);
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		goto handoff_complete;
 	}
-	/*
-	 * Do not start replacing descriptors as soon as the first RGB frame
-	 * latches.  The physical ST7789 needs several complete TE/RAMWR rearms to
-	 * phase-lock to the newly connected VOU stream.  The former G1 diagnostic
-	 * accidentally supplied a long stable hold (203 rearms in log52); removing
-	 * it made the kmsg loop swap descriptors after only one rearm in log53 and
-	 * the panel remained in the familiar rolling/scrambled state.  Count real
-	 * panel frame boundaries instead of retaining a diagnostic delay.
-	 */
-	if (panel_wait_te_stable(16u, 1000u) < 0)
-		progress_mark("screen-rgb-stabilize-timeout", 0x3fu,
-			panel_te_rearms);
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	log_gma_ready();

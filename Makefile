@@ -1150,8 +1150,10 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=screen-ge-diagnostics' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-ge-mcu-probe-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000003 name=screen-ge-mcu-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 3
+	grep -q 'value=0x00000002 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000003 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1162,18 +1164,20 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-gma-probe-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-stable-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-te-stable-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-rgb-stabilize-timeout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000008 name=screen-gma-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	test "$$(grep -c 'name=screen-probe-phase-rearms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
+	grep -q 'value=0xaa201b61 name=screen-probe-d0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00f00140 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x028000ff name=screen-probe-d5' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x01e00280 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
 		test $$((gate1 & 0x600)) -eq 1536
 	grep -q 'name=screen-panel-id' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-panel-aux' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-probe-raster-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

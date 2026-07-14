@@ -81,20 +81,10 @@ the screen service's ready marker and rejects data-bus faults.
 scanout and a captured 320x240 framebuffer. The kernel reserves that scanout
 as a 320x240 RGB565 simple framebuffer and exposes it as `/dev/fb0`; the smoke
 requires device registration and a successful userspace write through the
-standard fbdev file interface. The screen service renders into a separate
-RGB565 surface, uses the source GE implementation to blit it into the native
-320x240 scanout surface, and lets GMA/VOU continuously drive the panel. The GE
-fill, blit, and stretch-blit paths have also been verified on physical SF2000
-hardware. The service still programs the vendor GMA descriptors and panel
-registers directly. Framebuffer `mmap` is not yet enabled on this NOMMU port,
-so applications should use `read`, `write`, and fbdev ioctls for now.
-
-The destructive E1-E3 GE and G1-G8 descriptor carousel is disabled during a
-normal boot. Add `SF2000_GE_DIAG=1` to `LINUX_CMDLINE`, or export the same name
-before starting `sf2000-screen` manually, to run it. G7 and G8 intentionally
-install invalid legacy geometry and are expected to corrupt the bottom or the
-whole display temporarily; the service always restores the proven native
-MuFrog descriptor before entering its console loop.
+standard fbdev file interface. The screen service still programs the vendor
+GMA descriptors and panel registers directly. Framebuffer `mmap` is not yet
+enabled on this NOMMU port, so applications should use `read`, `write`, and
+fbdev ioctls for now.
 
 `smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
