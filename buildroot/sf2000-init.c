@@ -13,6 +13,7 @@ typedef unsigned int size_t;
 #define SYS_dup2 4063
 #define SYS_wait4 4114
 #define SYS_mmap 4090
+#define SYS_kill 4037
 #define SYS_nanosleep 4166
 #define SYS_mmap2 4210
 
@@ -24,6 +25,7 @@ typedef unsigned int size_t;
 #define PROT_WRITE 2
 #define MAP_SHARED 1
 #define SIGCHLD 18
+#define SIGTERM 15
 #define CLONE_VM 0x00000100UL
 #define SERVICE_STACK_BYTES 4096u
 #define SERVICE_STACK_WORDS (SERVICE_STACK_BYTES / sizeof(unsigned long))
@@ -85,9 +87,7 @@ static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "sf2000", 0 };
 static char *const audio_argv[] = { "/usr/sbin/sf2000-audio", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = { "/etc/init.d/S05sf2000-storage", 0 };
-static char *const fb_test_argv[] = {
-	"/etc/init.d/S06sf2000-fb-test", "start", 0
-};
+static char *const fb_test_argv[] = { "/usr/bin/fb-test", "-p", "0", 0 };
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
@@ -595,7 +595,7 @@ void service_child_exec(char *const *argv)
 
 typedef long (*clone_service_fn)(unsigned long child_stack, char *const argv[]);
 
-static void spawn_service_with(const char *name, char *const argv[],
+static long spawn_service_with(const char *name, char *const argv[],
 		unsigned long *stack, clone_service_fn clone_service)
 {
 	long pid;
@@ -609,23 +609,49 @@ static void spawn_service_with(const char *name, char *const argv[],
 	if (pid < 0) {
 		log_message("sf2000_buildroot: service clone failed ");
 		log_hex_word((unsigned int)pid);
-		return;
+		return pid;
 	}
 	if (pid == 0)
 		service_child_exec(argv);
 	diagnostic_watchdog_pet();
+	return pid;
 }
 
-static void spawn_service(const char *name, char *const argv[],
+static long spawn_service(const char *name, char *const argv[],
 		unsigned long *stack)
 {
-	spawn_service_with(name, argv, stack, sf2000_clone_service);
+	return spawn_service_with(name, argv, stack, sf2000_clone_service);
 }
 
-static void reap_children(void)
+static long reap_child(int *status)
 {
-	while (syscall4(SYS_wait4, -1, 0, 1, 0) > 0)
-		;
+	return syscall4(SYS_wait4, -1, (long)status, 1, 0);
+}
+
+static int stop_service(long pid)
+{
+	int status = 0;
+	long ret;
+
+	if (pid <= 0)
+		return -1;
+	/*
+	 * The display diagnostic owns the hardware watchdog while it performs
+	 * panel transactions.  Disarm it before and after signalling so neither
+	 * a pending watchdog tick nor a final pet can survive the handoff.
+	 * Process exit closes /dev/ge and releases its IRQ through the kernel.
+	 */
+	(void)diagnostic_watchdog_disable();
+	progress_mark("init-screen-stop-signal", 0x3eu, (unsigned int)pid);
+	ret = syscall2(SYS_kill, pid, SIGTERM);
+	if (ret < 0)
+		return (int)ret;
+	(void)diagnostic_watchdog_disable();
+	ret = syscall4(SYS_wait4, pid, (long)&status, 0, 0);
+	progress_mark("init-screen-stop-wait", 0x3eu, (unsigned int)ret);
+	/* Keep the invariant true even if a future screen binary exits abruptly. */
+	(void)diagnostic_watchdog_disable();
+	return ret == pid ? 0 : -1;
 }
 
 int main(void)
@@ -636,6 +662,8 @@ int main(void)
 	unsigned int panel_probe = 0;
 	unsigned int fb_test_started = 0;
 	unsigned int fb_test_enabled = 1;
+	long screen_pid = -1;
+	long fb_test_pid = -1;
 	log_message("sf2000_buildroot: init main entry\n");
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
@@ -695,8 +723,8 @@ int main(void)
 	sleep_ms(50);
 	diagnostic_watchdog_pet();
 	if (!panel_probe) {
-		spawn_service("sf2000_buildroot: starting screen\n", screen_argv,
-			screen_stack);
+		screen_pid = spawn_service("sf2000_buildroot: starting screen\n",
+			screen_argv, screen_stack);
 	}
 	diagnostic_watchdog_pet();
 	sleep_ms(1200);
@@ -711,13 +739,35 @@ int main(void)
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
 	for (;;) {
-		reap_children();
+		long child;
+		int child_status;
+
+		while ((child = reap_child(&child_status)) > 0) {
+			if (child == fb_test_pid) {
+				progress_mark("init-fb-test-exit", 0x3eu,
+					(unsigned int)child_status);
+				log_message("sf2000_buildroot: framebuffer test complete\n");
+				fb_test_pid = -1;
+			}
+		}
 		if (!panel_probe && fb_test_enabled && !fb_test_started &&
-		    path_exists("/run/sf2000-screen-ready")) {
-			spawn_service("sf2000_buildroot: starting framebuffer test\n",
-				fb_test_argv, fb_test_stack);
+		    screen_pid > 0 && path_exists("/run/sf2000-screen-ready")) {
+			log_message("sf2000_buildroot: stopping screen for framebuffer test\n");
+			progress_mark("init-fb-handoff-begin", 0x3eu, INIT_TAG);
+			if (stop_service(screen_pid) == 0) {
+				screen_pid = -1;
+				log_message("sf2000_buildroot: starting framebuffer test directly\n");
+				fb_test_pid = spawn_service(
+					"sf2000_buildroot: exec /usr/bin/fb-test -p 0\n",
+					fb_test_argv, fb_test_stack);
+				progress_mark("init-fb-test-started", 0x3eu,
+					(unsigned int)fb_test_pid);
+			} else {
+				log_message("sf2000_buildroot: screen stop failed\n");
+				progress_mark("init-fb-screen-stop-fail", 0x3eu,
+					(unsigned int)screen_pid);
+			}
 			fb_test_started = 1;
-			progress_mark("init-fb-test-started", 0x3eu, INIT_TAG);
 		}
 		if (!storage_started) {
 			spawn_storage = 0;

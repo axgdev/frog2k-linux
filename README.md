@@ -89,8 +89,11 @@ address, so ordinary applications can use fbdev `mmap` as well as `read`,
 `write`, and ioctls.
 
 The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
-the eight physical-panel/GE diagnostics finish, init stops the diagnostic
-console without disturbing its live GMA descriptor and runs `fb-test -p 0`.
+the eight physical-panel/GE diagnostics finish, init disarms the display
+watchdog, terminates the diagnostic console by its supervised PID, and waits
+for kernel-owned GE cleanup without disturbing the live GMA descriptor. It
+then executes `fb-test -p 0` directly. No
+intermediate shell, `killall`, or timeout process is involved in the handoff.
 The expected final screen is a sharp test card with a green top edge, yellow
 bottom edge, blue left field, red right field, RGB labels, and diagonals. The
 `smoke-linux-buildroot-fb-test` alias runs the full display smoke and checks
