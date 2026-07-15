@@ -24,7 +24,7 @@ typedef unsigned long uintptr;
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
 #define CACHE_LINE 16u
-#define PRIMARY_CACHE_SIZE 2048u
+#define PRIMARY_CACHE_INDEX_SPAN 0x4000u
 #define PINMUX_R05 0xb88004e5u
 #define PINMUX_L25 0xb88004b9u
 #define GPIO_L_OUT 0xb8800054u
@@ -63,7 +63,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-07-15 indexed-kernel-cache"
+#define LOADER_BUILD_TAG "2026-07-15 vendor-cache-sweep"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1171,11 +1171,19 @@ static void cache_writeback_dcache_indices(void)
 {
 	uintptr p;
 
-	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_SIZE;
+	/*
+	 * Match the HC15xx ROM cache handoff at 0x810031d4.  Config1 is not a
+	 * reliable description of this implementation's index space: the ROM
+	 * sweeps 0x4000 bytes and issues each index operation twice (one per
+	 * way).  Use that observed hardware contract instead of deriving the
+	 * loader handoff from Linux's synthetic Config1 description.
+	 */
+	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN;
 			p += CACHE_LINE) {
 		__asm__ volatile(
 			".set push\n\t"
 			".set mips32\n\t"
+			"cache 0x01, 0(%0)\n\t"
 			"cache 0x01, 0(%0)\n\t"
 			".set pop"
 			:
@@ -1189,11 +1197,12 @@ static void cache_invalidate_icache_indices(void)
 {
 	uintptr p;
 
-	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_SIZE;
+	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN;
 			p += CACHE_LINE) {
 		__asm__ volatile(
 			".set push\n\t"
 			".set mips32\n\t"
+			"cache 0x00, 0(%0)\n\t"
 			"cache 0x00, 0(%0)\n\t"
 			".set pop"
 			:

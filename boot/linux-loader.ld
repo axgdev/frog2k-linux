@@ -33,6 +33,17 @@ SECTIONS
 		__bss_end = .;
 	}
 
+	/*
+	 * Keep mutable loader state below the embedded image.  If payload comes
+	 * first, a sufficiently large kernel puts .data/.bss at 0x80600000 and
+	 * the ELF relocation overwrites that state with kernel text while the
+	 * loader is still using its SD log buffers.
+	 */
+	.payload : {
+		*(.payload)
+		. = ALIGN(16);
+	}
+
 	/DISCARD/ : {
 		*(.MIPS.abiflags)
 		*(.reginfo)

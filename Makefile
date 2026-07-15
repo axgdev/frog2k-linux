@@ -888,7 +888,7 @@ $(LINUX_LOADER_OBJ): boot/linux-loader.c Makefile
 $(LINUX_LOADER_BLOBS_S): $(LINUX_VMLINUX) $(SF2000_DTB) Makefile
 	mkdir -p '$(dir $@)'
 	{ \
-		printf '.section .rodata.blobs, "a"\n'; \
+		printf '.section .payload, "a"\n'; \
 		printf '.balign 16\n'; \
 		printf '.globl linux_vmlinux_start\n'; \
 		printf 'linux_vmlinux_start:\n'; \
