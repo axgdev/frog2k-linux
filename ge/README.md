@@ -49,7 +49,10 @@ The surviving public `ge_api.h` ABI is now mirrored in this directory. The
 Linux backend implements context lifetime, reset, IRQ ownership, clock
 selection, synchronous completion, validated copied-node submission, and
 conservative acceleration capability checks without exposing kernel mappings
-or registers to userspace. Fill, direct blit, and stretch nodes are
+or registers to userspace. Heap contexts use `hcge_open()`/`hcge_close()`;
+small no-MMU programs can pair `hcge_open_context()` with
+`hcge_close_context()` for caller-owned storage. Fill, direct blit, and
+stretch nodes are
 byte-identical to the vendor library for ARGB1555, RGB565, XRGB8888, ARGB8888,
 and ARGB4444. Cropped surfaces use validated physical-address views while
 retaining the hardware pitch. Drawing/blitting blend factors, color alpha,

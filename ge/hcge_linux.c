@@ -374,7 +374,7 @@ int hcge_open(hcge_context **pctx)
 	return 0;
 }
 
-void hcge_close(hcge_context *ctx)
+void hcge_close_context(hcge_context *ctx)
 {
 	if (!ctx)
 		return;
@@ -384,6 +384,15 @@ void hcge_close(hcge_context *ctx)
 		close(ctx->ge_fd);
 	}
 	free(ctx->nd_ctx);
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->ge_fd = -1;
+}
+
+void hcge_close(hcge_context *ctx)
+{
+	if (!ctx)
+		return;
+	hcge_close_context(ctx);
 	free(ctx);
 }
 

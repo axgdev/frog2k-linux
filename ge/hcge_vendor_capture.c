@@ -335,5 +335,17 @@ int main(int argc, char **argv)
 		return 1;
 	dump_nodes("stretch-rgb16", ctx);
 	hcge_close(ctx);
+#ifdef HCGE_SOURCE_CAPTURE
+	/* Exercise the no-heap lifetime used by the SF2000 screen service. */
+	{
+		hcge_context storage;
+
+		if (hcge_open_context(&storage) != 0)
+			return 1;
+		hcge_close_context(&storage);
+		if (storage.ge_fd != -1 || storage.nd_ctx != NULL)
+			return 1;
+	}
+#endif
 	return 0;
 }
