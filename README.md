@@ -98,10 +98,17 @@ address, so ordinary applications can use fbdev `mmap` as well as `read`,
 `write`, and ioctls.
 
 The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
-the eight physical-panel/GE diagnostics finish, init disarms the display
-watchdog, terminates the diagnostic console by its supervised PID, and waits
-for kernel-owned GE cleanup without disturbing the live GMA descriptor. It
-then executes `fb-test -p 0` directly. No
+the physical display contract has been validated, normal boots retain the
+working console instead of stopping it for diagnostic test screens. Append
+`SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
+The slower hardware-isolation sequences are likewise opt-in through the
+screen service environment: `SF2000_GE_DIAGNOSTICS=1` enables the three MCU
+GE screens and `SF2000_GMA_PROBE=1` enables G1-G8. The short startup backlight
+sequence remains part of the validated SF2000 panel-settle contract.
+
+When explicitly enabled, init disarms the display watchdog, terminates the
+console by its supervised PID, and waits for kernel-owned GE cleanup without
+disturbing the live GMA descriptor. It then executes `fb-test -p 0` directly. No
 intermediate shell, `killall`, or timeout process is involved in the handoff.
 The expected final screen is a sharp test card with a green top edge, yellow
 bottom edge, blue left field, red right field, RGB labels, and diagonals. The
@@ -110,8 +117,8 @@ representative pixels in QEMU's continuously refreshed scanout. This covers a
 real independently maintained Linux bFLT program, signal/child handling, all
 eight o32 syscall argument slots, fbdev ioctls, framebuffer `mmap`, and CPU
 writes becoming visible through the same GMA scanout used by the device. Add
-`SF2000_FB_TEST=0` to the kernel command line when building an image that should
-leave the diagnostic console running instead.
+`SF2000_FB_TEST=1` is intentionally required because the production default
+leaves the accelerated console running.
 
 `smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0

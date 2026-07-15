@@ -665,7 +665,7 @@ int main(void)
 	unsigned int spawn_storage = 0;
 	unsigned int panel_probe = 0;
 	unsigned int fb_test_started = 0;
-	unsigned int fb_test_enabled = 1;
+	unsigned int fb_test_enabled = 0;
 	long screen_pid = -1;
 	long fb_test_pid = -1;
 	log_message("sf2000_buildroot: init main entry\n");
@@ -674,7 +674,7 @@ int main(void)
 	progress_mark("init-stdio", 0x3eu, INIT_TAG);
 	(void)mount_procfs();
 	panel_probe = cmdline_contains("SF2000_PANEL_PROBE=1");
-	fb_test_enabled = !cmdline_contains("SF2000_FB_TEST=0");
+	fb_test_enabled = cmdline_contains("SF2000_FB_TEST=1");
 #ifdef PANEL_PROBE_INIT
 	panel_probe = 1;
 #endif
@@ -718,6 +718,23 @@ int main(void)
 		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
 		storage_started = 1;
 	}
+	diagnostic_watchdog_pet();
+	if (!panel_probe) {
+		screen_pid = spawn_service("sf2000_buildroot: starting screen\n",
+			screen_argv, screen_stack);
+		/*
+		 * The display handoff and the retained progress ring are shared board
+		 * resources.  Finish that dependency before starting helpers which
+		 * also publish retained records; this avoids both CPU starvation and
+		 * unsynchronised multi-process writes during the RGB/GMA transition.
+		 */
+		while (screen_wait_ticks < 100u &&
+		       !path_exists("/run/sf2000-screen-ready")) {
+			diagnostic_watchdog_pet();
+			sleep_ms(100);
+			screen_wait_ticks++;
+		}
+	}
 	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
 		pad_stack);
 	spawn_service("sf2000_buildroot: starting persistent logger\n", logd_argv,
@@ -726,21 +743,6 @@ int main(void)
 		spawn_service("sf2000_buildroot: starting audio DMA test\n",
 			audio_argv, audio_stack);
 	diagnostic_watchdog_pet();
-	sleep_ms(50);
-	diagnostic_watchdog_pet();
-	if (!panel_probe) {
-		screen_pid = spawn_service("sf2000_buildroot: starting screen\n",
-			screen_argv, screen_stack);
-	}
-	diagnostic_watchdog_pet();
-	sleep_ms(1200);
-	progress_mark("init-storage-spawn-delay", 0x3eu, INIT_TAG);
-	if (!panel_probe) {
-		spawn_service("sf2000_buildroot: starting storage service early\n",
-			storage_argv, storage_late_stack);
-		storage_started = 1;
-		log_message("sf2000_buildroot: early storage service started\n");
-	}
 
 	log_message("sf2000_buildroot: direct init supervisor running\n");
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);

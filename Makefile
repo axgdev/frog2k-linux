@@ -1292,10 +1292,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000003 name=screen-ge-mcu-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test "$$(grep -c 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 3
-	grep -q 'value=0x00000002 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000003 name=screen-ge-mcu-submit-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-mcu-probe-skip' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1306,13 +1303,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000008 name=screen-gma-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	test "$$(grep -c 'name=screen-probe-phase-rearms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
-	grep -q 'value=0xaa201b61 name=screen-probe-d0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00f00140 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x028000ff name=screen-probe-d5' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x01e00280 name=screen-probe-d4' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-gma-probe-skip' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
@@ -1339,6 +1330,12 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+
+smoke-linux-buildroot-fb-test:
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_FB_TEST=1' \
+		run-linux-buildroot-display
 	grep -q 'sf2000_buildroot: stopping screen for framebuffer test' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=init-screen-stop-wait' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000_buildroot: exec /usr/bin/fb-test -p 0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1358,9 +1355,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	test "$$(pixel 0 100)" = 0000ff; \
 	test "$$(pixel 319 100)" = ff0000; \
 	test "$$(pixel 100 239)" = ffff00
-
-smoke-linux-buildroot-fb-test: smoke-linux-buildroot-display
-
 run-linux-buildroot-audio: qemu
 	$(MAKE) ROOTFS=buildroot \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' linux-asd
