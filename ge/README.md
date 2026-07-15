@@ -16,8 +16,9 @@ This directory tracks the clean source replacement for the vendor LGPL-2.0+
   CLUT. Command nodes begin after the 1,056-byte header.
 - Supported accelerated primitives: fill, blit, cropped stretch blit, pixel
   format conversion, horizontal/vertical flips, 90/180/270-degree blit
-  rotation, alpha blending, color modulation and keys, premultiply/demultiply,
-  and XOR. Effects are encoded by the recovered compositor and key groups.
+  rotation, alpha blending, A8 source masks, color modulation and standard or
+  custom key operators, premultiply/demultiply, and XOR. Effects are encoded by
+  the recovered compositor, mask, and key groups.
 
 The HCRTOS kernel driver source survives under the read-only reference tree at
 `components/kernel/source/drivers/ge/ge.c`. The userspace archive retains
@@ -52,18 +53,20 @@ or registers to userspace. Fill, direct blit, and stretch nodes are
 byte-identical to the vendor library for ARGB1555, RGB565, XRGB8888, ARGB8888,
 and ARGB4444. Cropped surfaces use validated physical-address views while
 retaining the hardware pitch. Drawing/blitting blend factors, color alpha,
-colorize, source/destination keys, premultiply/demultiply, XOR, flips, and
-rotations are byte-identical to the vendor nodes. `make test-ge-formats` and
-`make test-ge-effects` compare these paths, non-default blend factors, and key
-conversion in every format against the original MIPS archive under qemu-user.
+colorize, A8 source-mask alpha, all six vendor custom source/destination key
+operators, premultiply/demultiply, XOR, flips, and rotations are byte-identical
+to the vendor nodes. `make test-ge-formats`, `make test-ge-effects`, `make
+test-ge-mask`, and `make test-ge-custom-keys` compare these paths, non-default
+blend factors, mask offset modes and pitches, and key conversion in every
+supported format against the original MIPS archive under qemu-user.
 
-The remaining ABI surface is not used by the SF2000 or MuFrog display paths and
-is deliberately absent from `hcge_check_state()` until it is vendor-equivalent:
-
-1. A8 source-mask alpha and the vendor-specific extended color-key operators;
-2. caller-supplied DirectFB matrices and convolution filters (both marked not
-   supported at present by the surviving vendor header);
-3. cycle-accurate timing for optional compositor groups in system QEMU.
+The remaining public-header flags are capabilities the surviving vendor header
+itself marks unsupported: deinterlace, indexed translation, extended keys,
+source-mask color, caller-supplied ROP/color matrices/convolution filters, and
+the advanced DirectFB drawing primitives. They remain absent from
+`hcge_check_state()` rather than silently producing an incorrect node. System
+QEMU executes the complete supported compositor contract functionally; its GE
+completion timing is intentionally functional rather than cycle-accurate.
 
 The SF2000 console uses GE for its full-screen background paint and for every
 render-to-scanout presentation. Idle counter frames update only their dynamic

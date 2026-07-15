@@ -208,7 +208,8 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
-	test-ge-source-capture test-ge-formats test-ge-effects clean
+	test-ge-source-capture test-ge-formats test-ge-effects \
+	test-ge-mask test-ge-custom-keys clean
 
 all: status
 
@@ -335,6 +336,57 @@ test-ge-effects: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
 			1 "$$flags" 0 | sed -n '2p' | \
 			cmp - '$(BUILD_DIR)/.hcge-vendor-effect'; \
 	done; rm -f '$(BUILD_DIR)/.hcge-vendor-effect'
+
+test-ge-mask: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
+	set -e; for flags in 1048576 1048577 1048578 1048579 1048580 \
+		1048608 1048640 1049088; do \
+		HCGE_CAPTURE_SRC_BLEND=2 HCGE_CAPTURE_DST_BLEND=6 \
+		qemu-mipsel '$(GE_VENDOR_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 "$$flags" 0 2>/dev/null | \
+			grep -E '^(fill|blit|stretch)-' > '$(BUILD_DIR)/.hcge-vendor-mask'; \
+		HCGE_CAPTURE_SRC_BLEND=2 HCGE_CAPTURE_DST_BLEND=6 \
+		qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 "$$flags" 0 2>/dev/null | \
+			grep -E '^(fill|blit|stretch)-' | \
+			cmp - '$(BUILD_DIR)/.hcge-vendor-mask'; \
+	done; for setup in stencil padded; do \
+		unset HCGE_CAPTURE_MASK_X HCGE_CAPTURE_MASK_Y HCGE_CAPTURE_MASK_FLAGS \
+			HCGE_CAPTURE_MASK_WIDTH HCGE_CAPTURE_MASK_HEIGHT \
+			HCGE_CAPTURE_MASK_PITCH; \
+		if test "$$setup" = stencil; then \
+			export HCGE_CAPTURE_MASK_X=7 HCGE_CAPTURE_MASK_Y=9 \
+				HCGE_CAPTURE_MASK_FLAGS=1; \
+		else \
+			export HCGE_CAPTURE_MASK_WIDTH=100 HCGE_CAPTURE_MASK_HEIGHT=70 \
+				HCGE_CAPTURE_MASK_PITCH=112; \
+		fi; \
+		qemu-mipsel '$(GE_VENDOR_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 1048576 0 2>/dev/null | grep -E '^(fill|blit|stretch)-' \
+			> '$(BUILD_DIR)/.hcge-vendor-mask'; \
+		qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 1048576 0 2>/dev/null | grep -E '^(fill|blit|stretch)-' | \
+			cmp - '$(BUILD_DIR)/.hcge-vendor-mask'; \
+	done; rm -f '$(BUILD_DIR)/.hcge-vendor-mask'
+
+test-ge-custom-keys: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
+	set -e; for flags in 536870912 1073741824 1610612736; do \
+		for operation in 0 1 2 3 4 5; do \
+			HCGE_CAPTURE_SRC_KEY=0xf81f HCGE_CAPTURE_DST_KEY=0x07e0 \
+			HCGE_CAPTURE_SRC_KEY_OP="$$operation" \
+			HCGE_CAPTURE_DST_KEY_OP="$$operation" \
+			qemu-mipsel '$(GE_VENDOR_CAPTURE)' 0 0 64 48 0 0 160 120 \
+				1 "$$flags" 0 2>/dev/null | \
+				grep -E '^(fill|blit|stretch)-' \
+				> '$(BUILD_DIR)/.hcge-vendor-key'; \
+			HCGE_CAPTURE_SRC_KEY=0xf81f HCGE_CAPTURE_DST_KEY=0x07e0 \
+			HCGE_CAPTURE_SRC_KEY_OP="$$operation" \
+			HCGE_CAPTURE_DST_KEY_OP="$$operation" \
+			qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
+				1 "$$flags" 0 2>/dev/null | \
+				grep -E '^(fill|blit|stretch)-' | \
+				cmp - '$(BUILD_DIR)/.hcge-vendor-key'; \
+		done; \
+	done; rm -f '$(BUILD_DIR)/.hcge-vendor-key'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build

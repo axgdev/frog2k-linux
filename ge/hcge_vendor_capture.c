@@ -132,6 +132,10 @@ static void setup_surface(HCGE_CoreSurface *surface,
 static void setup_state(hcge_state *state)
 {
 	const char *value;
+	unsigned int mask_width = 128;
+	unsigned int mask_height = 96;
+	unsigned int mask_pitch;
+	unsigned int mask_bytes = 1;
 
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
@@ -146,9 +150,36 @@ static void setup_state(hcge_state *state)
 	state->mod_hw = HCGE_SMF_CLIP;
 	setup_surface(&state->destination, &state->dst, 0x00200000u, 320, 240);
 	setup_surface(&state->source, &state->src, 0x00300000u, 128, 96);
-	setup_surface(&state->source_mask, &state->src_mask, 0x00400000u, 128, 96);
+	value = getenv("HCGE_CAPTURE_MASK_WIDTH");
+	if (value)
+		mask_width = (unsigned int)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_MASK_HEIGHT");
+	if (value)
+		mask_height = (unsigned int)strtoul(value, NULL, 0);
+	mask_pitch = mask_width;
+	value = getenv("HCGE_CAPTURE_MASK_PITCH");
+	if (value)
+		mask_pitch = (unsigned int)strtoul(value, NULL, 0);
+	setup_surface(&state->source_mask, &state->src_mask, 0x00400000u,
+		(int)mask_width, (int)mask_height);
 	state->source_mask.config.format = HCGE_DSPF_A8;
-	state->src_mask.pitch = 128;
+	value = getenv("HCGE_CAPTURE_MASK_FORMAT");
+	if (value) {
+		unsigned int index = (unsigned int)strtoul(value, NULL, 0);
+		static const HCGESurfacePixelFormat formats[] = {
+			HCGE_DSPF_ARGB1555, HCGE_DSPF_RGB16, HCGE_DSPF_RGB24,
+			HCGE_DSPF_RGB32, HCGE_DSPF_ARGB, HCGE_DSPF_A8,
+			HCGE_DSPF_LUT8, HCGE_DSPF_ARGB4444,
+		};
+
+		if (index < sizeof(formats) / sizeof(formats[0])) {
+			state->source_mask.config.format = formats[index];
+			mask_bytes = index == 5 || index == 6 ? 1 :
+				(index == 2 ? 3 :
+				 (index == 3 || index == 4 ? 4 : 2));
+		}
+	}
+	state->src_mask.pitch = mask_pitch * mask_bytes;
 	state->color.a = 0xff;
 	state->color.r = 0x12;
 	state->color.g = 0x34;
@@ -174,6 +205,21 @@ static void setup_state(hcge_state *state)
 		state->color.g = color >> 8;
 		state->color.b = color;
 	}
+	value = getenv("HCGE_CAPTURE_MASK_X");
+	if (value)
+		state->src_mask_offset.x = (int)strtol(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_MASK_Y");
+	if (value)
+		state->src_mask_offset.y = (int)strtol(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_MASK_FLAGS");
+	if (value)
+		state->src_mask_flags = (HCGESurfaceMaskFlags)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_SRC_KEY_OP");
+	if (value)
+		state->src_colorkey_opt = (HCGEColorKeyOp)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_DST_KEY_OP");
+	if (value)
+		state->dst_colorkey_opt = (HCGEColorKeyOp)strtoul(value, NULL, 0);
 }
 
 static void dump_nodes(const char *operation, hcge_context *ctx)

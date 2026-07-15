@@ -143,14 +143,14 @@ typedef enum {
 
     HCGE_DSBLIT_SRC_MASK_COLOR         = 0x00200000, /* Not supported at present. modulate source color channels with color channels from source mask,
                                                     see also IDirectFBSurface::SetSourceMask() */
-    HCGE_DSBLIT_FLIP_HORIZONTAL        = 0x01000000, /* Not supported at present. flip the image horizontally */
-    HCGE_DSBLIT_FLIP_VERTICAL          = 0x02000000, /* Not supported at present. flip the image vertically */
+    HCGE_DSBLIT_FLIP_HORIZONTAL        = 0x01000000, /* flip the image horizontally */
+    HCGE_DSBLIT_FLIP_VERTICAL          = 0x02000000, /* flip the image vertically */
 
     HCGE_DSBLIT_ROP                    = 0x04000000, /* Not supported at present. use rop setting */
     HCGE_DSBLIT_SRC_COLORMATRIX        = 0x08000000, /* Not supported at present. use source color matrix setting */
     HCGE_DSBLIT_SRC_CONVOLUTION        = 0x10000000,  /* Not supported at present. use source convolution filter */
-	HCGE_CUST_DST_COLORKEY = 0x20000000, /* destination apply colorkey */
-	HCGE_CUST_SRC_COLORKEY = 0x40000000, /* destination apply colorkey */
+	HCGE_CUST_DST_COLORKEY = 0x20000000, /* destination custom color-key operator */
+	HCGE_CUST_SRC_COLORKEY = 0x40000000, /* source custom color-key operator */
 } HCGESurfaceBlittingFlags;
 
 /*
@@ -331,6 +331,8 @@ typedef enum {
      HCGE_DSBLIT_FLIP_VERTICAL     |                 \
      HCGE_DSBLIT_XOR               |                 \
      HCGE_DSBLIT_SRC_MASK_ALPHA    |                 \
+     HCGE_CUST_DST_COLORKEY        |                 \
+     HCGE_CUST_SRC_COLORKEY        |                 \
      HCGE_DSBLIT_COLORKEY_PROTECT  |                 \
      HCGE_DSBLIT_ROTATE90 | HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270 | \
      HCGE_DSBLIT_DEMULTIPLY)
