@@ -1,0 +1,227 @@
+From: SF2000 Linux port
+Subject: [PATCH] mmc: hc15: preserve armed write DMA until command completion
+
+The HC15 register at 0x30 is a mixed DMA-control and interrupt-status
+register.  The command helper used to write its raw contents back after DMA
+had already been armed.  On real HC15xx hardware that second write can cancel
+or restart the transfer, while QEMU's immediate completion hid the problem.
+
+A legacy write-variant probe compounded this by resetting the complete SDIO
+controller after every successful single-block write.  The probe never
+verified media contents and is irrelevant to the now-selected DMA path.
+
+Acknowledge only stale terminal bits before programming DMA, leave the armed
+engine untouched while starting the command, and remove the destructive
+write probe.  Keep a bounded write-specific retained trace and cap repeated
+recovery register dumps so a physical run retains the transfers that created
+the persistent log.
+
+--- a/drivers/mmc/host/hc15_mmc.c
++++ b/drivers/mmc/host/hc15_mmc.c
+@@ -64,7 +64,6 @@
+ #define HC15_DATA_VARIANTS	1
+ #define HC15_READ_VARIANTS	1
+ #define HC15_WRITE_WAIT_BEFORE_PIO 1
+-#define HC15_WRITE_VARIANTS	8
+ #define HC15_WRITE_LOCK_VARIANT	2
+ #define HC15_TRACE_VERBOSE	0
+ #define HC15_PROBE_TAG		0x0240
+@@ -68,6 +67,6 @@
+ #define HC15_WRITE_LOCK_VARIANT	2
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0240
++#define HC15_PROBE_TAG		0x0241
+ 
+ /* The vendor host requires 32-byte aligned DMA buffers (unifrog
+  * hc_src_sg_needs_bounce, HC_MMC_DMA_ALIGN). */
+@@ -92,6 +91,7 @@
+ 	u32 last_read_sample2;
+ 	u8 read_variant;
+ 	u8 write_variant;
++	u8 recovery_traces;
+ 	bool dma_ok;
+ 	void *bounce_buf;
+ 	dma_addr_t bounce_dma;
+@@ -122,9 +122,19 @@
+ 		return;
+ 	sf2000_progress_mark(name, 0x36, value);
+ }
++
++static void hc15_write_mark(const char *name, u32 value)
++{
++	static unsigned int count;
++
++	if (count++ >= 128)
++		return;
++	sf2000_progress_mark(name, 0x37, value);
++}
+ #else
+ static void hc15_mark(const char *name, u32 value) { }
+ static void hc15_rw_mark(const char *name, u32 value) { }
++static void hc15_write_mark(const char *name, u32 value) { }
+ #endif
+ 
+ static void hc15_update32(u32 phys, u32 clear, u32 set)
+@@ -203,7 +213,13 @@
+ 
+ static void hc15_recover_controller(struct hc15_mmc *host)
+ {
+-	hc15_mark("hc15-recover-entry", readb(host->base + HC15_REG_CMDCTL));
++	bool trace = host->recovery_traces < 8;
++
++	if (host->recovery_traces != 0xff)
++		host->recovery_traces++;
++	if (trace)
++		hc15_mark("hc15-recover-entry",
++			  readb(host->base + HC15_REG_CMDCTL));
+ 
+ 	hc15_update32(HC_SYS_RESET, 0, BIT(HC_SDIO_RESET_BIT));
+ 	udelay(20);
+@@ -218,9 +234,14 @@
+ 	writeb(0, host->base + HC15_REG_TIMING);
+ 	writeb(0x40, host->base + HC15_REG_IRQSTS);
+ 
+-	hc15_mark("hc15-recover-cmdctl", readb(host->base + HC15_REG_CMDCTL));
+-	hc15_mark("hc15-recover-status", readb(host->base + HC15_REG_CMDSTS));
+-	hc15_mark("hc15-recover-bus", readb(host->base + HC15_REG_BUS));
++	if (trace) {
++		hc15_mark("hc15-recover-cmdctl",
++			  readb(host->base + HC15_REG_CMDCTL));
++		hc15_mark("hc15-recover-status",
++			  readb(host->base + HC15_REG_CMDSTS));
++		hc15_mark("hc15-recover-bus",
++			  readb(host->base + HC15_REG_BUS));
++	}
+ }
+ 
+ static u8 hc15_cmd_type(struct mmc_command *cmd, struct mmc_data *data)
+@@ -330,16 +351,26 @@
+ static void hc15_start_command(struct hc15_mmc *host)
+ {
+ 	u8 value = readb(host->base + HC15_REG_CMDCTL);
+-	u8 irq = readb(host->base + HC15_REG_IRQSTS);
+ 
+-	writeb(irq, host->base + HC15_REG_IRQSTS);
+ 	writeb(value | 0x01, host->base + HC15_REG_CMDCTL);
+ 
+-	hc15_mark("hc15-irq-prestart", irq);
+ 	hc15_mark("hc15-cmdctl-start", readb(host->base + HC15_REG_CMDCTL));
+ 	hc15_mark("hc15-cmdidx-start", readb(host->base + HC15_REG_CMDIDX));
+ }
+ 
++static void hc15_clear_pending_irq(struct hc15_mmc *host)
++{
++	u8 irq = readb(host->base + HC15_REG_IRQSTS);
++
++	/*
++	 * 0x30 is both DMA control and interrupt status.  Only acknowledge stale
++	 * terminal bits here, before a new DMA engine is armed.  Writing the raw
++	 * register after set_dma() cancels or restarts the transfer on HC15xx.
++	 */
++	writeb(irq & 0xc0, host->base + HC15_REG_IRQSTS);
++	hc15_mark("hc15-irq-prestart", irq);
++}
++
+ static int hc15_wait_irq(struct hc15_mmc *host, struct mmc_command *cmd,
+ 			 bool allow_start_done)
+ {
+@@ -508,6 +539,12 @@
+ 	hc15_rw_mark("hc15-dma-addr", lower_32_bits(addr));
+ 	hc15_rw_mark("hc15-dma-len", len);
+ 	hc15_rw_mark("hc15-dma-ctl0", readl(host->base + HC15_REG_IRQSTS));
++	if (data->flags & MMC_DATA_WRITE) {
++		hc15_write_mark("hc15-wdma-addr", lower_32_bits(addr));
++		hc15_write_mark("hc15-wdma-len", len);
++		hc15_write_mark("hc15-wdma-ctl0",
++				  readl(host->base + HC15_REG_IRQSTS));
++	}
+ }
+ 
+ static int hc15_wait_dma(struct hc15_mmc *host, struct mmc_data *data)
+@@ -752,6 +789,7 @@
+ 	bool write_wait_first = data_write &&
+ 		HC15_WRITE_WAIT_BEFORE_PIO && !(host->write_variant & 0x01);
+ 
++	hc15_clear_pending_irq(host);
+ 	cmd->error = 0;
+ 	if (data) {
+ 		data->error = 0;
+@@ -812,7 +850,7 @@
+ 	if (data_read)
+ 		hc15_mark("hc15-read-variant", host->read_variant);
+ 	if (data_write)
+-		hc15_rw_mark("hc15-write-variant", host->write_variant);
++		hc15_write_mark("hc15-write-op", cmd->opcode);
+ 	hc15_set_command(host, cmd, data);
+ 	hc15_start_command(host);
+ 
+@@ -869,6 +907,12 @@
+ 			hc15_rw_mark("hc15-rw-bytes", data->bytes_xfered);
+ 			hc15_rw_mark("hc15-rw-cmderr", cmd->error);
+ 			hc15_rw_mark("hc15-rw-dataerr", data->error);
++			if (data_write) {
++				hc15_write_mark("hc15-write-bytes",
++						  data->bytes_xfered);
++				hc15_write_mark("hc15-write-cmderr", cmd->error);
++				hc15_write_mark("hc15-write-dataerr", data->error);
++			}
+ 		}
+ 		hc15_mark("hc15-data-error", data->error);
+ 		hc15_mark("hc15-data-bytes", data->bytes_xfered);
+@@ -876,39 +920,6 @@
+ 	hc15_mark("hc15-cmd-error", cmd->error);
+ }
+ 
+-static bool hc15_request_scan_write(struct hc15_mmc *host,
+-				    struct mmc_command *cmd,
+-				    struct mmc_data *data)
+-{
+-	u8 saved_variant = host->write_variant;
+-	unsigned int variant;
+-
+-	if (!data || !(data->flags & MMC_DATA_WRITE))
+-		return false;
+-	if (cmd->opcode != MMC_WRITE_BLOCK)
+-		return false;
+-	if (data->blksz != 512 || data->blocks != 1)
+-		return false;
+-
+-	hc15_mark("hc15-scan-write", HC15_WRITE_VARIANTS);
+-	for (variant = HC15_WRITE_LOCK_VARIANT; variant < HC15_WRITE_VARIANTS;
+-	     variant++) {
+-		if (variant)
+-			hc15_recover_controller(host);
+-		host->write_variant = variant;
+-		hc15_rw_mark("hc15-write-try", variant);
+-		hc15_run_command(host, cmd, data);
+-		if (!cmd->error && !data->error && data->bytes_xfered == 512) {
+-			hc15_rw_mark("hc15-write-selected", variant);
+-			hc15_recover_controller(host);
+-			udelay(1000);
+-			return true;
+-		}
+-	}
+-	host->write_variant = saved_variant;
+-	return false;
+-}
+-
+ static bool hc15_request_scan_read(struct hc15_mmc *host,
+ 				   struct mmc_command *cmd,
+ 				   struct mmc_data *data)
+@@ -1032,9 +1043,6 @@
+ 	if (hc15_request_scan_read(host, cmd, data))
+ 		goto done;
+ 
+-	if (hc15_request_scan_write(host, cmd, data))
+-		goto done;
+-
+ 	hc15_run_command(host, cmd, data);
+ 
+ 	if (data_read && cmd->opcode == HC15_SD_APP_SEND_SCR &&
+ #define HC15_WRITE_LOCK_VARIANT	2
+ #define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0240
++#define HC15_PROBE_TAG		0x0241
+-#define HC15_WRITE_LOCK_VARIANT	2
+-#define HC15_TRACE_VERBOSE	0
+-#define HC15_PROBE_TAG		0x0240
