@@ -268,13 +268,14 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define BTN_DPAD_RIGHT 0x223
 #endif
 
-#define CONSOLE_INPUT_FDS 4u
+#define CONSOLE_INPUT_FDS 16u
 #define CONSOLE_POLL_MS 50u
 #define CONSOLE_IDLE_REDRAW_TICKS 40u
 #define CONSOLE_REPEAT_DELAY_TICKS 5u
 #define CONSOLE_REPEAT_INTERVAL_TICKS 1u
 #define CONSOLE_INPUT_REOPEN_TICKS 100u
 #define CONSOLE_KMSG_READS_PER_FRAME 64u
+#define CONDITIONING_FRAME_DWELL_MS 80u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -2997,45 +2998,66 @@ static void console_input_close_fds(int fds[CONSOLE_INPUT_FDS])
 	}
 }
 
-static void console_input_open_fds(int fds[CONSOLE_INPUT_FDS])
+static int console_input_refresh_fds(int fds[CONSOLE_INPUT_FDS])
 {
-	char path[] = "/dev/input/event0";
+	char path[32];
 	unsigned i;
+	int changed = 0;
 
-	console_input_close_fds(fds);
 	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
-		path[16] = (char)('0' + i);
+		char name[80] = "unknown";
+		char line[128];
+
+		if (fds[i] >= 0)
+			continue;
+		snprintf(path, sizeof(path), "/dev/input/event%u", i);
 		fds[i] = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		if (fds[i] < 0)
+			continue;
+		(void)ioctl(fds[i], EVIOCGNAME(sizeof(name)), name);
+		snprintf(line, sizeof(line), "input event%u: %s", i, name);
+		console_add_line(line);
+		snprintf(line, sizeof(line),
+			 "sf2000-screen: opened %s name=%s\n", path, name);
+		log_line(line);
+		changed = 1;
 	}
-	if (console_input_has_fd(fds))
-		console_add_line("dpad scroll: evdev input");
-	else
-		console_add_line("dpad scroll: waiting for evdev");
+	return changed;
 }
 
-static void console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
+static int console_poll_evdev_buttons(int fds[CONSOLE_INPUT_FDS],
 	uint32_t *held_buttons)
 {
 	struct input_event ev;
 	unsigned i;
+	int changed = 0;
 
 	for (i = 0; i < CONSOLE_INPUT_FDS; i++) {
 		if (fds[i] < 0)
 			continue;
 		while (read(fds[i], &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
 			uint32_t button;
+			char line[64];
 
 			if (ev.type != EV_KEY)
 				continue;
 			button = console_button_for_key(ev.code);
-			if (!button)
+			if (!button) {
+				if (ev.value == 1) {
+					snprintf(line, sizeof(line),
+						 "input event%u: key %u", i, ev.code);
+					console_add_line(line);
+					changed = 1;
+				}
 				continue;
+			}
 			if (ev.value)
 				*held_buttons |= button;
 			else
 				*held_buttons &= ~button;
 		}
 	}
+	return changed;
 }
 
 static int console_handle_held_buttons(uint32_t held_buttons)
@@ -3352,7 +3374,8 @@ static int ge_diag_finish(unsigned stage, int submitted)
 	progress_mark("screen-ge-mcu-hash", 0x3fu, ge_diag_frame_hash());
 	progress_mark("screen-ge-mcu-visible", 0x3fu, stage);
 	panel_push_pixels((const uint16_t *)(gma_ram + GMA_FRAME_OFF), 0);
-	sleep_ms(800);
+	/* Synchronization above proves completion; this dwell is only visual. */
+	sleep_ms(CONDITIONING_FRAME_DWELL_MS);
 	return 0;
 }
 
@@ -3443,7 +3466,7 @@ static void run_ge_mcu_probe(unsigned frame)
 	progress_mark("screen-ge-mcu-hash", 0x3fu, ge_diag_frame_hash());
 	progress_mark("screen-ge-mcu-visible", 0x3fu, 1u);
 	panel_push_pixels((const uint16_t *)(gma_ram + GMA_FRAME_OFF), 0);
-	sleep_ms(800);
+	sleep_ms(CONDITIONING_FRAME_DWELL_MS);
 
 	progress_mark("screen-ge-mcu-phase", 0x3fu, 2u);
 	(void)ge_diag_fill_quadrants();
@@ -3863,8 +3886,12 @@ static int run_gma_descriptor_probe(void)
 
 		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
 		progress_mark("screen-probe-phase-live", 0x3fu, detail);
-		/* Keep sampling and rearming the narrow physical TE pulse. */
-		sleep_ms(1500u);
+		/*
+		 * Raster observation above is the hardware completion contract.  Keep
+		 * one comfortably visible panel interval without turning the recovered
+		 * state walk into a twelve-second boot animation.
+		 */
+		sleep_ms(CONDITIONING_FRAME_DWELL_MS);
 		progress_mark("screen-probe-phase-rearms", 0x3fu,
 			(i << 24) | (panel_te_rearms & 0x00ffffffu));
 		progress_mark("screen-probe-phase-done", 0x3fu, detail);
@@ -3895,7 +3922,8 @@ static void run_direct_console(unsigned *frame)
 	console_add_line("sf2000 linux direct lcd console");
 	console_add_line("reading /dev/kmsg");
 	console_input_init_fds(input_fds);
-	console_input_open_fds(input_fds);
+	if (!console_input_refresh_fds(input_fds))
+		console_add_line("input: waiting for evdev devices");
 	draw_console_screen(++*frame);
 	/*
 	 * Complete a real GRAM transaction before changing the ST7789 ownership
@@ -4005,16 +4033,15 @@ handoff_complete:
 		}
 
 		if (console_input_has_fd(input_fds)) {
-			console_poll_evdev_buttons(input_fds, &evdev_held);
+			changed |= console_poll_evdev_buttons(input_fds, &evdev_held);
 			changed |= console_handle_held_buttons(evdev_held);
 		} else {
 			evdev_held = 0;
 			changed |= console_handle_held_buttons(0);
-			if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
-				console_input_open_fds(input_fds);
-				input_retry = 0;
-				changed = 1;
-			}
+		}
+		if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
+			changed |= console_input_refresh_fds(input_fds);
+			input_retry = 0;
 		}
 
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {

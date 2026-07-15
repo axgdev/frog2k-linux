@@ -129,14 +129,17 @@ NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
 DMA ring, and requires QEMU's WAV backend to receive the guest samples.  The
 same driver and device-tree node are used by the physical image.
 
-The two HC16xx-compatible MUSB instances use the vendor endpoint layout
-(seven endpoints, 4 KiB FIFO RAM) and run as PIO host controllers. Their glue
-forwards the device-tree MMIO and named IRQ resources to MUSB core; the normal
-Buildroot smoke requires both USB buses to register. USB1 uses SYSINT sources
-51 and 50, matching the vendor HC16xx device tree.
+The two HC15xx MUSB instances use the vendor endpoint layout (seven endpoints,
+4 KiB FIFO RAM) and run as PIO host controllers. Their glue reproduces the
+SF2000 vendor reset, shared-PHY trim, UTMI power, host-mode, and session-edge
+sequence before handing control to MUSB core. The normal Buildroot smoke
+requires both USB buses to register. USB1 uses SYSINT sources 51 and 50,
+matching the proven SF2000 firmware contract.
 `sf2000-logd` dynamically opens `/dev/input/event0` through `event15`, so a
 physical USB keyboard or mouse produces tick-stamped `source=input` records in
 `/loglinux.txt` without taking exclusive ownership away from applications.
+The on-screen console also refreshes all sixteen event nodes after hotplug,
+reports each input device name, and displays key presses.
 
 `smoke-qemu-unifrog` and `smoke-qemu-mufrog` consume the existing, read-only
 frontend build artifacts, construct disposable FAT images under `build/`, and

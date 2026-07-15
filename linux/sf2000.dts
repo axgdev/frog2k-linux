@@ -166,7 +166,7 @@
 		};
 
 		usb0: usb@18844000 {
-			compatible = "hichip,hc16xx-musb";
+			compatible = "hichip,hc15xx-musb";
 			reg = <0x18844000 0x1000>;
 			interrupts = <53>, <52>;
 			interrupt-names = "mc", "dma";
@@ -177,7 +177,7 @@
 		};
 
 		usb1: usb@18850000 {
-			compatible = "hichip,hc16xx-musb";
+			compatible = "hichip,hc15xx-musb";
 			reg = <0x18850000 0x1000>;
 			interrupts = <51>, <50>;
 			interrupt-names = "mc", "dma";
