@@ -15,8 +15,9 @@ This directory tracks the clean source replacement for the vendor LGPL-2.0+
 - Queue header: seven 32-bit control words followed by an aligned 256-entry
   CLUT. Command nodes begin after the 1,056-byte header.
 - Supported accelerated primitives: fill, blit, cropped stretch blit, pixel
-  format conversion, horizontal/vertical flips, and 90/180/270-degree blit
-  rotation. Blending is encoded by optional node groups.
+  format conversion, horizontal/vertical flips, 90/180/270-degree blit
+  rotation, alpha blending, color modulation and keys, premultiply/demultiply,
+  and XOR. Effects are encoded by the recovered compositor and key groups.
 
 The HCRTOS kernel driver source survives under the read-only reference tree at
 `components/kernel/source/drivers/ge/ge.c`. The userspace archive retains
@@ -33,8 +34,9 @@ IRQ 4 remains masked until a client issues `HCGE_REQUEST_IRQ`; enabling it at
 probe time can starve unrelated deferred probes on this interrupt controller.
 
 QEMU recognizes the register block, walks multi-node command queues, and
-executes the grouped fill, blit, conversion, flip, rotation, and stretch node
-forms in the five destination formats supported by the vendor implementation.
+executes the grouped fill, blit, conversion, flip, rotation, stretch, key, and
+compositor forms in the five destination formats supported by the vendor
+implementation.
 
 The clean source tree now includes the complete command-node serializer. It
 handles all twenty hardware group bits, including the four high-address base
@@ -49,18 +51,19 @@ conservative acceleration capability checks without exposing kernel mappings
 or registers to userspace. Fill, direct blit, and stretch nodes are
 byte-identical to the vendor library for ARGB1555, RGB565, XRGB8888, ARGB8888,
 and ARGB4444. Cropped surfaces use validated physical-address views while
-retaining the hardware pitch. Blit flips and rotations are byte-identical to
-the vendor nodes. `make test-ge-formats` and `make test-ge-effects` compare
-these paths against the original MIPS archive under qemu-user.
+retaining the hardware pitch. Drawing/blitting blend factors, color alpha,
+colorize, source/destination keys, premultiply/demultiply, XOR, flips, and
+rotations are byte-identical to the vendor nodes. `make test-ge-formats` and
+`make test-ge-effects` compare these paths, non-default blend factors, and key
+conversion in every format against the original MIPS archive under qemu-user.
 
-The remaining API work is the optional DirectFB compositing effects which are
-advertised by the vendor header but are not used by the SF2000 native RGB565
-presentation path. They remain deliberately absent from `hcge_check_state()`
-until their nodes are vendor-equivalent. Reconstruction order:
+The remaining ABI surface is not used by the SF2000 or MuFrog display paths and
+is deliberately absent from `hcge_check_state()` until it is vendor-equivalent:
 
-1. alpha blend and source/destination color key;
-2. CLUT, mask, and caller-supplied matrix/filter effects;
-3. cycle-accurate timing for those optional groups in system QEMU.
+1. A8 source-mask alpha and the vendor-specific extended color-key operators;
+2. caller-supplied DirectFB matrices and convolution filters (both marked not
+   supported at present by the surviving vendor header);
+3. cycle-accurate timing for optional compositor groups in system QEMU.
 
 The SF2000 console uses GE for its full-screen background paint and for every
 render-to-scanout presentation. Idle counter frames update only their dynamic

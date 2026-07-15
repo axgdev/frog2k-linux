@@ -148,13 +148,115 @@ static uint32_t hcge_surface_offset(const HCGE_CoreSurface *surface,
 
 static bool hcge_blit_effects_supported(HCGESurfaceBlittingFlags flags)
 {
-	const uint32_t supported = HCGE_DSBLIT_FLIP_HORIZONTAL |
+	const uint32_t supported = HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+		HCGE_DSBLIT_BLEND_COLORALPHA | HCGE_DSBLIT_COLORIZE |
+		HCGE_DSBLIT_SRC_COLORKEY | HCGE_DSBLIT_DST_COLORKEY |
+		HCGE_DSBLIT_SRC_PREMULTIPLY | HCGE_DSBLIT_DST_PREMULTIPLY |
+		HCGE_DSBLIT_DEMULTIPLY | HCGE_DSBLIT_SRC_PREMULTCOLOR |
+		HCGE_DSBLIT_XOR | HCGE_DSBLIT_COLORKEY_PROTECT |
+		HCGE_DSBLIT_FLIP_HORIZONTAL |
 		HCGE_DSBLIT_FLIP_VERTICAL | HCGE_DSBLIT_ROTATE90 |
 		HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270;
 	uint32_t rotations = flags & (HCGE_DSBLIT_ROTATE90 |
 		HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270);
 
 	return !(flags & ~supported) && (!rotations || !(rotations & (rotations - 1u)));
+}
+
+static bool hcge_drawing_effects_supported(HCGESurfaceDrawingFlags flags)
+{
+	const uint32_t supported = HCGE_DSDRAW_BLEND |
+		HCGE_DSDRAW_DST_COLORKEY | HCGE_DSDRAW_SRC_PREMULTIPLY |
+		HCGE_DSDRAW_DST_PREMULTIPLY | HCGE_DSDRAW_DEMULTIPLY |
+		HCGE_DSDRAW_XOR;
+
+	return !(flags & ~supported);
+}
+
+static HCGEColor hcge_premultiply_color(HCGEColor color)
+{
+	unsigned int alpha = (unsigned int)color.a + 1u;
+
+	color.r = (uint8_t)((unsigned int)color.r * alpha >> 8);
+	color.g = (uint8_t)((unsigned int)color.g * alpha >> 8);
+	color.b = (uint8_t)((unsigned int)color.b * alpha >> 8);
+	return color;
+}
+
+static bool hcge_blend_functions_valid(const hcge_state *state, bool enabled)
+{
+	return !enabled || (state->src_blend >= HCGE_DSBF_ZERO &&
+		state->src_blend <= HCGE_DSBF_SRCALPHASAT &&
+		state->dst_blend >= HCGE_DSBF_ZERO &&
+		state->dst_blend <= HCGE_DSBF_SRCALPHASAT);
+}
+
+static uint32_t hcge_color_key_argb(HCGESurfacePixelFormat format,
+	uint32_t color)
+{
+	uint32_t red;
+	uint32_t green;
+	uint32_t blue;
+
+	switch (format) {
+	case HCGE_DSPF_ARGB1555:
+		blue = color & 0x1fu;
+		/* Preserve the vendor's bit-spread operation, including alpha. */
+		return ((color << 4) & 0x00070000u) |
+			((color << 1) & 0x00000700u) | (blue >> 2) |
+			((color << 9) & 0x07f80000u) |
+			((color << 6) & 0x0007f800u) | (blue << 3);
+	case HCGE_DSPF_RGB16:
+		red = color >> 11 & 0x1fu;
+		green = color >> 5 & 0x3fu;
+		blue = color & 0x1fu;
+		return ((red << 3) | (red >> 2)) << 16 |
+			((green << 2) | (green >> 4)) << 8 |
+			(blue << 3) | (blue >> 2);
+	case HCGE_DSPF_ARGB4444:
+		red = color >> 8 & 0xfu;
+		green = color >> 4 & 0xfu;
+		blue = color & 0xfu;
+		return (red << 4 | red) << 16 | (green << 4 | green) << 8 |
+			(blue << 4 | blue);
+	default:
+		return color;
+	}
+}
+
+static uint32_t hcge_blit_rop(const hcge_state *state)
+{
+	uint32_t flags = state->blittingflags;
+	uint32_t blend = flags & (HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+		HCGE_DSBLIT_BLEND_COLORALPHA);
+	uint32_t rop = 0x00004000u;
+
+	if (blend) {
+		rop = 0x00008000u | (((uint32_t)state->src_blend & 0xfu) << 4) |
+			((uint32_t)state->dst_blend & 0xfu);
+		if (blend == HCGE_DSBLIT_BLEND_COLORALPHA)
+			rop |= 0x00000200u;
+		else if (blend == (HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+				HCGE_DSBLIT_BLEND_COLORALPHA))
+			rop |= 0x00000400u;
+	}
+	if (flags & HCGE_DSBLIT_COLORIZE)
+		rop += 0x00000600u;
+	if (flags & HCGE_DSBLIT_SRC_PREMULTIPLY)
+		rop |= 0x00001000u;
+	if (flags & HCGE_DSBLIT_DST_PREMULTIPLY)
+		rop |= 0x00002000u;
+	if (flags & HCGE_DSBLIT_SRC_PREMULTCOLOR)
+		rop |= 0x00000100u;
+	if (flags & HCGE_DSBLIT_DEMULTIPLY)
+		rop |= 0x00040000u;
+	if (flags & HCGE_DSBLIT_XOR)
+		rop |= 0x00080000u;
+	if (flags & HCGE_DSBLIT_SRC_COLORKEY)
+		rop |= 0xe0800000u;
+	if (flags & HCGE_DSBLIT_DST_COLORKEY)
+		rop |= 0x0e100000u;
+	return rop;
 }
 
 int hcge_open_context(hcge_context *ctx)
@@ -287,7 +389,9 @@ void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 		return;
 	if (HCGE_DFB_DRAWING_FUNCTION(accel)) {
 		if (state->render_options != HCGE_DSRO_NONE ||
-		    state->drawingflags != HCGE_DSDRAW_NOFX)
+		    !hcge_drawing_effects_supported(state->drawingflags) ||
+		    !hcge_blend_functions_valid(state,
+			state->drawingflags & HCGE_DSDRAW_BLEND))
 			return;
 		if (accel & HCGE_DFXL_FILLRECTANGLE)
 			state->accel |= accel & HCGE_DFXL_FILLRECTANGLE;
@@ -295,7 +399,10 @@ void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 	if (HCGE_DFB_BLITTING_FUNCTION(accel) &&
 	    hcge_get_format(state->source.config.format) &&
 	    state->render_options == HCGE_DSRO_NONE &&
-	    hcge_blit_effects_supported(state->blittingflags)) {
+	    hcge_blit_effects_supported(state->blittingflags) &&
+	    hcge_blend_functions_valid(state, state->blittingflags &
+		(HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+		 HCGE_DSBLIT_BLEND_COLORALPHA))) {
 		state->accel |= accel & HCGE_DFXL_BLIT;
 		if (!(state->blittingflags & (HCGE_DSBLIT_ROTATE90 |
 				HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270)))
@@ -317,45 +424,76 @@ void hcge_set_state(hcge_context *ctx, hcge_state *state,
 bool hcge_fill_rect(hcge_context *ctx, HCGERectangle *rectangle)
 {
 	const hcge_state *state;
-	uint32_t node[14];
+	uint32_t node[16];
+	uint32_t flags;
+	uint32_t rop;
+	HCGEColor color;
+	bool blend;
+	unsigned int words = 0;
 
 	if (!ctx)
 		return false;
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_FILLRECTANGLE ||
-	    state->drawingflags != HCGE_DSDRAW_NOFX ||
+	    !hcge_drawing_effects_supported(state->drawingflags) ||
+	    !hcge_blend_functions_valid(state,
+		state->drawingflags & HCGE_DSDRAW_BLEND) ||
 	    !hcge_rectangle_in_surface(rectangle, &state->destination) ||
 	    !hcge_surface_valid(&state->destination, &state->dst))
 		return false;
-	node[0] = 0x02008367u;
-	node[1] = 0x00a00003u;
-	node[2] = (uint32_t)state->dst.phys;
-	node[3] = hcge_surface_buffer(state->destination.config.format,
+	flags = state->drawingflags;
+	blend = flags & HCGE_DSDRAW_BLEND;
+	color = state->color;
+	if (flags & HCGE_DSDRAW_SRC_PREMULTIPLY)
+		color = hcge_premultiply_color(color);
+	rop = blend ? 0x00008000u |
+		(((uint32_t)state->src_blend & 0xfu) << 4) |
+		((uint32_t)state->dst_blend & 0xfu) : 0x00030000u;
+	if (flags & HCGE_DSDRAW_DST_COLORKEY)
+		rop |= 0x0e100000u;
+	if (flags & HCGE_DSDRAW_DST_PREMULTIPLY)
+		rop |= 0x00002000u;
+	if (flags & HCGE_DSDRAW_DEMULTIPLY)
+		rop |= 0x00040000u;
+	if (flags & HCGE_DSDRAW_XOR)
+		rop |= 0x00080000u;
+
+	node[words++] = 0x02008367u |
+		(flags & HCGE_DSDRAW_DST_COLORKEY ? 0x80u : 0);
+	node[words++] = blend ? 0x00a00301u : 0x00a00003u;
+	node[words++] = (uint32_t)state->dst.phys;
+	node[words++] = hcge_surface_buffer(state->destination.config.format,
 		state->dst.pitch);
-	node[4] = node[2];
-	node[5] = node[3];
-	node[6] = hcge_surface_color(state->destination.config.format,
-		state->color);
-	node[7] = 0;
-	node[8] = 0;
-	node[9] = hcge_get_format(state->destination.config.format)->code;
-	node[10] = hcge_xy(rectangle->x, rectangle->y);
-	node[11] = hcge_wh(rectangle->w, rectangle->h);
-	node[12] = node[10];
-	node[13] = 0x00030000u;
-	return hcge_linux_submit(ctx, node, sizeof(node) / sizeof(node[0])) == 0;
+	node[words++] = node[2];
+	node[words++] = node[3];
+	node[words++] = hcge_surface_color(blend ? HCGE_DSPF_ARGB :
+		state->destination.config.format, color);
+	node[words++] = 0;
+	node[words++] = 0;
+	node[words++] = blend ? 1u :
+		hcge_get_format(state->destination.config.format)->code;
+	if (flags & HCGE_DSDRAW_DST_COLORKEY) {
+		node[words++] = state->dst_colorkey;
+		node[words++] = 0;
+	}
+	node[words++] = hcge_xy(rectangle->x, rectangle->y);
+	node[words++] = hcge_wh(rectangle->w, rectangle->h);
+	node[words++] = hcge_xy(rectangle->x, rectangle->y);
+	node[words++] = rop;
+	return hcge_linux_submit(ctx, node, words) == 0;
 }
 
 bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 {
 	const hcge_state *state;
-	uint32_t node[22];
+	uint32_t node[24];
 	uint32_t flags;
 	uint32_t source_context;
 	uint32_t destination_address;
 	uint32_t source_address;
 	uint32_t output_width;
 	uint32_t output_height;
+	unsigned int words = 0;
 	const uint32_t *matrix = NULL;
 	static const uint32_t rotate_90[7] = {
 		0, 0, 0x8000ffffu, 0, 0x0000ffffu, 0, 0,
@@ -374,6 +512,9 @@ bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_BLIT ||
 	    !hcge_blit_effects_supported(state->blittingflags) ||
+	    !hcge_blend_functions_valid(state, state->blittingflags &
+		(HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+		 HCGE_DSBLIT_BLEND_COLORALPHA)) ||
 	    !hcge_rectangle_in_surface(source, &state->source) ||
 	    !hcge_surface_valid(&state->destination, &state->dst) ||
 	    !hcge_surface_valid(&state->source, &state->src))
@@ -425,46 +566,62 @@ bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 	else if (flags & HCGE_DSBLIT_ROTATE270)
 		matrix = rotate_270;
 
-	node[0] = matrix ? 0x0206870fu : 0x0202870fu;
-	node[1] = matrix ? 0x00a03009u : 0x00a00009u;
-	node[2] = destination_address;
-	node[3] = hcge_surface_buffer(state->destination.config.format,
+	node[words++] = (matrix ? 0x0206870fu : 0x0202870fu) |
+		(flags & (HCGE_DSBLIT_SRC_COLORKEY | HCGE_DSBLIT_DST_COLORKEY) ?
+			0x80u : 0);
+	node[words++] = matrix ? 0x00a03009u : 0x00a00009u;
+	node[words++] = destination_address;
+	node[words++] = hcge_surface_buffer(state->destination.config.format,
 		state->dst.pitch);
-	node[4] = destination_address;
-	node[5] = node[3];
-	node[6] = source_address;
-	node[7] = (matrix ? 0x40000000u : 0) | source_context;
-	node[8] = 0;
-	node[9] = hcge_wh(output_width, output_height);
-	node[10] = 0;
-	node[11] = 0;
-	node[12] = hcge_wh(source->w, source->h);
-	node[13] = 0x00004000u;
-	node[14] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
-	if (matrix) {
-		memcpy(node + 15, matrix, 7 * sizeof(*node));
-		return hcge_linux_submit(ctx, node, 22) == 0;
+	node[words++] = destination_address;
+	node[words++] = node[3];
+	node[words++] = source_address;
+	node[words++] = (matrix ? 0x40000000u : 0) | source_context;
+	if (flags & (HCGE_DSBLIT_SRC_COLORKEY | HCGE_DSBLIT_DST_COLORKEY)) {
+		node[words++] = flags & HCGE_DSBLIT_DST_COLORKEY ?
+			hcge_color_key_argb(state->destination.config.format,
+				state->dst_colorkey) : 0;
+		node[words++] = flags & HCGE_DSBLIT_SRC_COLORKEY ?
+			hcge_color_key_argb(state->source.config.format,
+				state->src_colorkey) : 0;
 	}
-	return hcge_linux_submit(ctx, node, 15) == 0;
+	node[words++] = 0;
+	node[words++] = hcge_wh(output_width, output_height);
+	node[words++] = 0;
+	node[words++] = 0;
+	node[words++] = hcge_wh(source->w, source->h);
+	node[words++] = hcge_blit_rop(state);
+	node[words++] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
+	if (matrix) {
+		memcpy(node + words, matrix, 7 * sizeof(*node));
+		words += 7;
+	}
+	return hcge_linux_submit(ctx, node, words) == 0;
 }
 
 bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
 	HCGERectangle *destination)
 {
 	const hcge_state *state;
-	uint32_t node[22];
+	uint32_t node[24];
 
 	const struct hcge_format *source_format;
 	const struct hcge_format *destination_format;
 	uint32_t source_address;
 	uint32_t destination_address;
+	uint32_t flags;
+	unsigned int words = 0;
 
 	if (!ctx)
 		return false;
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_STRETCHBLIT ||
-	    (state->blittingflags & ~(HCGE_DSBLIT_FLIP_HORIZONTAL |
-		HCGE_DSBLIT_FLIP_VERTICAL)) ||
+	    !hcge_blit_effects_supported(state->blittingflags) ||
+	    !hcge_blend_functions_valid(state, state->blittingflags &
+		(HCGE_DSBLIT_BLEND_ALPHACHANNEL |
+		 HCGE_DSBLIT_BLEND_COLORALPHA)) ||
+	    (state->blittingflags & (HCGE_DSBLIT_ROTATE90 |
+		HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270)) ||
 	    !hcge_rectangle_in_surface(source, &state->source) ||
 	    !hcge_rectangle_in_surface(destination, &state->destination) ||
 	    !hcge_surface_valid(&state->destination, &state->dst) ||
@@ -478,35 +635,48 @@ bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
 	destination_address = (uint32_t)state->dst.phys +
 		(uint32_t)destination->y * state->dst.pitch +
 		(uint32_t)destination->x * destination_format->bytes;
-	node[0] = 0x0206870fu;
-	node[1] = 0x00a03009u;
-	node[2] = destination_address;
-	node[3] = hcge_surface_buffer(state->destination.config.format,
+	flags = state->blittingflags;
+	node[words++] = 0x0206870fu |
+		(flags & (HCGE_DSBLIT_SRC_COLORKEY | HCGE_DSBLIT_DST_COLORKEY) ?
+			0x80u : 0);
+	node[words++] = 0x00a03009u;
+	node[words++] = destination_address;
+	node[words++] = hcge_surface_buffer(state->destination.config.format,
 		state->dst.pitch);
-	node[4] = node[2];
-	node[5] = node[3];
-	node[6] = source_address;
-	node[7] = 0x40000000u |
+	node[words++] = destination_address;
+	node[words++] = node[3];
+	node[words++] = source_address;
+	node[words++] = 0x40000000u |
 		hcge_surface_buffer(state->source.config.format, state->src.pitch);
-	if (state->blittingflags & HCGE_DSBLIT_FLIP_HORIZONTAL)
+	if (flags & HCGE_DSBLIT_FLIP_HORIZONTAL)
 		node[7] |= 0x00100000u;
-	if (state->blittingflags & HCGE_DSBLIT_FLIP_VERTICAL)
+	if (flags & HCGE_DSBLIT_FLIP_VERTICAL)
 		node[7] |= 0x00200000u;
-	node[8] = 0;
-	node[9] = hcge_wh(destination->w, destination->h);
-	node[10] = 0;
-	node[11] = 0;
-	node[12] = hcge_wh(source->w, source->h);
-	node[13] = 0x00004000u;
-	node[14] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
-	node[15] = 0x00000080u;
-	node[16] = ((uint32_t)source->w << 16) / (uint32_t)destination->w;
-	node[17] = 0;
-	node[18] = (uint32_t)source->w << 15;
-	node[19] = 0;
-	node[20] = ((uint32_t)source->h << 16) / (uint32_t)destination->h;
-	node[21] = (uint32_t)source->h << 15;
-	return hcge_linux_submit(ctx, node, sizeof(node) / sizeof(node[0])) == 0;
+	if (flags & (HCGE_DSBLIT_SRC_COLORKEY | HCGE_DSBLIT_DST_COLORKEY)) {
+		node[words++] = flags & HCGE_DSBLIT_DST_COLORKEY ?
+			hcge_color_key_argb(state->destination.config.format,
+				state->dst_colorkey) : 0;
+		node[words++] = flags & HCGE_DSBLIT_SRC_COLORKEY ?
+			hcge_color_key_argb(state->source.config.format,
+				state->src_colorkey) : 0;
+	}
+	node[words++] = 0;
+	node[words++] = hcge_wh(destination->w, destination->h);
+	node[words++] = 0;
+	node[words++] = 0;
+	node[words++] = hcge_wh(source->w, source->h);
+	node[words++] = hcge_blit_rop(state);
+	node[words++] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
+	node[words++] = 0x00000080u;
+	node[words++] = ((uint32_t)source->w << 16) /
+		(uint32_t)destination->w;
+	node[words++] = 0;
+	node[words++] = (uint32_t)source->w << 15;
+	node[words++] = 0;
+	node[words++] = ((uint32_t)source->h << 16) /
+		(uint32_t)destination->h;
+	node[words++] = (uint32_t)source->h << 15;
+	return hcge_linux_submit(ctx, node, words) == 0;
 }
 
 bool hcge_draw_rect(hcge_context *ctx, HCGERectangle *rectangle)

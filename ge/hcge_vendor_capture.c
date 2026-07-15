@@ -131,6 +131,8 @@ static void setup_surface(HCGE_CoreSurface *surface,
 
 static void setup_state(hcge_state *state)
 {
+	const char *value;
+
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
 	state->drawingflags = HCGE_DSDRAW_NOFX;
@@ -144,10 +146,34 @@ static void setup_state(hcge_state *state)
 	state->mod_hw = HCGE_SMF_CLIP;
 	setup_surface(&state->destination, &state->dst, 0x00200000u, 320, 240);
 	setup_surface(&state->source, &state->src, 0x00300000u, 128, 96);
+	setup_surface(&state->source_mask, &state->src_mask, 0x00400000u, 128, 96);
+	state->source_mask.config.format = HCGE_DSPF_A8;
+	state->src_mask.pitch = 128;
 	state->color.a = 0xff;
 	state->color.r = 0x12;
 	state->color.g = 0x34;
 	state->color.b = 0x56;
+	value = getenv("HCGE_CAPTURE_SRC_KEY");
+	if (value)
+		state->src_colorkey = (uint32_t)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_DST_KEY");
+	if (value)
+		state->dst_colorkey = (uint32_t)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_SRC_BLEND");
+	if (value)
+		state->src_blend = (HCGESurfaceBlendFunction)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_DST_BLEND");
+	if (value)
+		state->dst_blend = (HCGESurfaceBlendFunction)strtoul(value, NULL, 0);
+	value = getenv("HCGE_CAPTURE_COLOR");
+	if (value) {
+		uint32_t color = (uint32_t)strtoul(value, NULL, 0);
+
+		state->color.a = color >> 24;
+		state->color.r = color >> 16;
+		state->color.g = color >> 8;
+		state->color.b = color;
+	}
 }
 
 static void dump_nodes(const char *operation, hcge_context *ctx)
