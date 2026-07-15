@@ -62,7 +62,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-07-11 complete-marker-recovery"
+#define LOADER_BUILD_TAG "2026-07-15 coherent-kernel-cache"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1166,6 +1166,20 @@ static void cache_flush_range(uintptr addr, usize len)
 	__asm__ volatile("sync" ::: "memory");
 }
 
+static void cache_flush_loaded_range(uintptr addr, usize len)
+{
+	/*
+	 * Hit operations are sufficient in QEMU and on a cold cache.  The ROM
+	 * routine also performs the implementation-specific whole-cache/index
+	 * maintenance needed when a warm boot replaces a differently sized
+	 * kernel and an instruction line has no matching hit alias.
+	 */
+	cache_flush_range(addr, len);
+	if (rom_call_present(ROM_CACHE_FLUSH_ADDR))
+		rom_cache_flush((void *)addr, (unsigned long)len);
+	__asm__ volatile("sync" ::: "memory");
+}
+
 static int valid_elf(const struct elf32_ehdr *eh, usize blob_size)
 {
 	if (blob_size < sizeof(*eh))
@@ -1338,8 +1352,8 @@ void linux_loader_main(void)
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	cache_flush_range(load_min, (usize)(load_max - load_min));
-	cache_flush_range(dtb_dest, dtb_size);
+	cache_flush_loaded_range(load_min, (usize)(load_max - load_min));
+	cache_flush_loaded_range(dtb_dest, dtb_size);
 	disable_interrupts();
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);
