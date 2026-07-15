@@ -81,8 +81,10 @@ run a 256 KiB write, `fsync`, reopen, read, and checksum test. The
 `sf2000-logd` service appends `/loglinux.txt` on that card. Every record carries
 the 100 Hz monotonic tick, monotonic microseconds, process elapsed ticks, and
 logger user/system CPU ticks. It drains `/dev/kmsg`, records input events and
-USB/input topology changes, and commits buffered data after 8 KiB or two
-seconds, whichever occurs first. The integrity payload is retained as
+USB/input topology changes, and samples CPU, memory, interrupt, uptime, load,
+and VM counters from `/proc` every two seconds. A 512 KiB RAM buffer captures
+the pre-mount boot and is committed once VFAT is ready; later data is committed
+after 8 KiB or two seconds, whichever occurs first. The integrity payload is retained as
 `/sf2000-storage-test.bin` so persistence can also be checked after shutdown.
 
 `smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
@@ -101,10 +103,11 @@ The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
 the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
-The slower hardware-isolation sequences are likewise opt-in through the
-screen service environment: `SF2000_GE_DIAGNOSTICS=1` enables the three MCU
-GE screens and `SF2000_GMA_PROBE=1` enables G1-G8. The short startup backlight
-sequence remains part of the validated SF2000 panel-settle contract.
+The slow MCU hardware-isolation screens remain opt-in through
+`SF2000_GE_DIAGNOSTICS=1`. G1-G8 remain mandatory: physical log65 proved that
+their descriptor walk conditions HC15xx GMA state required for stable scanout,
+even though all exposed latch registers report success without it. The short
+startup backlight sequence also remains part of the validated panel contract.
 
 When explicitly enabled, init disarms the display watchdog, terminates the
 console by its supervised PID, and waits for kernel-owned GE cleanup without

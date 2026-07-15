@@ -16,7 +16,7 @@
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define TEST_TMP_PATH "/mnt/sd/.sf2000-storage-test.tmp"
 #define TEST_PATH "/mnt/sd/sf2000-storage-test.bin"
-#define LOG_BUFFER_SIZE 16384u
+#define LOG_BUFFER_SIZE (512u * 1024u)
 #define LOG_FLUSH_BYTES 8192u
 #define LOG_FLUSH_MS 2000u
 #define STORAGE_TEST_BYTES (256u * 1024u)
@@ -80,15 +80,26 @@ static int flush_log(void)
 
 static void append_bytes(const char *text, size_t length)
 {
-	if (!length || log_fd < 0)
+	if (!length)
 		return;
 	if (length > sizeof(log_buffer)) {
-		(void)flush_log();
-		(void)write_all(log_fd, text, length);
+		if (log_fd >= 0) {
+			(void)flush_log();
+			(void)write_all(log_fd, text, length);
+		}
 		return;
 	}
-	if (log_used + length > sizeof(log_buffer))
-		(void)flush_log();
+	if (log_used + length > sizeof(log_buffer)) {
+		if (log_fd >= 0)
+			(void)flush_log();
+		else {
+			/* Keep the newest complete pre-mount profiling window. */
+			size_t discard = log_used + length - sizeof(log_buffer);
+
+			memmove(log_buffer, log_buffer + discard, log_used - discard);
+			log_used -= discard;
+		}
+	}
 	memcpy(log_buffer + log_used, text, length);
 	log_used += length;
 	if (log_used >= LOG_FLUSH_BYTES)
@@ -245,6 +256,29 @@ static void append_file_text(char *snapshot, size_t snapshot_size,
 		(*used)--;
 }
 
+static void append_profile_file(const char *source, const char *path)
+{
+	char data[4096];
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
+
+	if (fd < 0)
+		return;
+	while ((got = read(fd, data, sizeof(data))) > 0)
+		append_record(source, data, (size_t)got);
+	close(fd);
+}
+
+static void append_system_profile(void)
+{
+	append_profile_file("proc-stat", "/proc/stat");
+	append_profile_file("proc-meminfo", "/proc/meminfo");
+	append_profile_file("proc-interrupts", "/proc/interrupts");
+	append_profile_file("proc-uptime", "/proc/uptime");
+	append_profile_file("proc-loadavg", "/proc/loadavg");
+	append_profile_file("proc-vmstat", "/proc/vmstat");
+}
+
 static void topology_snapshot(char *snapshot, size_t snapshot_size)
 {
 	static const char *const roots[] = {
@@ -342,22 +376,30 @@ int main(void)
 	ticks_per_second = sysconf(_SC_CLK_TCK);
 	if (ticks_per_second <= 0)
 		ticks_per_second = 100;
-	while (access(MOUNT_MARKER, R_OK) != 0)
-		sleep_ms(100);
+	kmsg_fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	append_record("logd", "--- SF2000 Linux pre-mount profile begin ---",
+		strlen("--- SF2000 Linux pre-mount profile begin ---"));
+	while (access(MOUNT_MARKER, R_OK) != 0) {
+		ssize_t got;
+
+		if (kmsg_fd >= 0)
+			while ((got = read(kmsg_fd, kmsg, sizeof(kmsg))) > 0)
+				append_record("kmsg", kmsg, (size_t)got);
+		sleep_ms(50);
+	}
 	log_fd = open(LOG_PATH, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0644);
 	if (log_fd < 0) {
 		kmsg_line("cannot open /mnt/sd/loglinux.txt\n");
 		return 1;
 	}
-	append_record("logd", "--- SF2000 Linux boot log begin ---",
-		strlen("--- SF2000 Linux boot log begin ---"));
+	append_record("logd", "--- SF2000 Linux storage mounted ---",
+		strlen("--- SF2000 Linux storage mounted ---"));
 	(void)storage_integrity_test(result, sizeof(result));
 	append_record("storage", result, strlen(result));
 	(void)flush_log();
 	kmsg_line(result);
 	kmsg_line("\n");
 
-	kmsg_fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	for (i = 0; i < INPUT_FDS; i++)
 		input_fds[i] = -1;
 	last_flush = last_probe = monotonic_us();
@@ -373,6 +415,7 @@ int main(void)
 		drain_input_fds(input_fds);
 		now = monotonic_us();
 		if (now - last_probe >= LOG_FLUSH_MS * 1000u) {
+			append_system_profile();
 			topology_snapshot(topology, sizeof(topology));
 			if (strcmp(topology, previous_topology)) {
 				append_record("topology", topology, strlen(topology));

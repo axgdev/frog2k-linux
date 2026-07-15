@@ -1211,13 +1211,17 @@ smoke-linux-buildroot-persistent-storage:
 	trap 'rm -f $$tmp_sd $$tmp_log $$tmp_test' EXIT; \
 	truncate -s 64M "$$tmp_sd"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT=30s \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
 	mcopy -i "$$tmp_sd" ::sf2000-storage-test.bin "$$tmp_test"; \
 	grep -q 'source=storage storage-test=pass bytes=262144 hash=ec55efc5' "$$tmp_log"; \
 	grep -q 'source=kmsg ' "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux pre-mount profile begin ---' "$$tmp_log"; \
+	grep -q 'source=proc-stat ' "$$tmp_log"; \
+	grep -q 'source=proc-meminfo ' "$$tmp_log"; \
+	grep -q 'source=proc-interrupts ' "$$tmp_log"; \
 	grep -q 'source=heartbeat alive' "$$tmp_log"; \
 	test "$$(wc -c < "$$tmp_test")" -eq 262144; \
 	echo '61825158a601440496406cded7107a985e4201366c379dccb78f8b8a67398ec4  '"$$tmp_test" | sha256sum -c -; \
@@ -1303,7 +1307,8 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-gma-probe-skip' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000008 name=screen-gma-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	test "$$(grep -c 'name=screen-probe-phase-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -eq 8
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \

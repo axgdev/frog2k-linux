@@ -3950,15 +3950,18 @@ static void run_direct_console(unsigned *frame)
 	panel_commit_rgb_handoff();
 	rgb_active = 1;
 	mark_hc15_display_state(1);
-	if (env_is((const char *const *)environ, "SF2000_GMA_PROBE", "1") ||
-	    cmdline_contains("SF2000_GMA_PROBE=1")) {
-		if (run_gma_descriptor_probe() < 0) {
-			progress_mark("screen-rgb-handoff-abort", 0x3fu,
-				SCREEN_TAG);
-			goto handoff_complete;
-		}
-	} else {
-		progress_mark("screen-gma-probe-skip", 0x3fu, SCREEN_TAG);
+	/*
+	 * This is hardware conditioning, not merely a visual diagnostic.  Every
+	 * physically proven clear run (logs 52, 55, 56 and 64) walks the complete
+	 * descriptor state matrix; log65 skipped it with otherwise identical live
+	 * registers and returned to the moving grouped-pixel failure.  Preserve the
+	 * recovered vendor state transition until a smaller sequence is proven on
+	 * the HC15xx itself.
+	 */
+	if (run_gma_descriptor_probe() < 0) {
+		progress_mark("screen-rgb-handoff-abort", 0x3fu,
+			SCREEN_TAG);
+		goto handoff_complete;
 	}
 	/* Restore the normal console with the native MuFrog descriptor. */
 	draw_console_screen(*frame);

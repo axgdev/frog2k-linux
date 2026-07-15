@@ -718,6 +718,9 @@ int main(void)
 		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
 		storage_started = 1;
 	}
+	/* Buffer the complete boot profile in RAM while display and MMC settle. */
+	spawn_service("sf2000_buildroot: starting persistent logger\n", logd_argv,
+		logd_stack);
 	diagnostic_watchdog_pet();
 	if (!panel_probe) {
 		screen_pid = spawn_service("sf2000_buildroot: starting screen\n",
@@ -728,7 +731,7 @@ int main(void)
 		 * also publish retained records; this avoids both CPU starvation and
 		 * unsynchronised multi-process writes during the RGB/GMA transition.
 		 */
-		while (screen_wait_ticks < 100u &&
+		while (screen_wait_ticks < 300u &&
 		       !path_exists("/run/sf2000-screen-ready")) {
 			diagnostic_watchdog_pet();
 			sleep_ms(100);
@@ -737,8 +740,6 @@ int main(void)
 	}
 	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
 		pad_stack);
-	spawn_service("sf2000_buildroot: starting persistent logger\n", logd_argv,
-		logd_stack);
 	if (cmdline_contains("SF2000_AUDIO_TEST=1"))
 		spawn_service("sf2000_buildroot: starting audio DMA test\n",
 			audio_argv, audio_stack);
