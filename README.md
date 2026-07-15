@@ -132,7 +132,9 @@ same driver and device-tree node are used by the physical image.
 The two HC15xx MUSB instances use the vendor endpoint layout (seven endpoints,
 4 KiB FIFO RAM) and run as PIO host controllers. Their glue reproduces the
 SF2000 vendor reset, shared-PHY trim, UTMI power, host-mode, and session-edge
-sequence before handing control to MUSB core. The normal Buildroot smoke
+sequence. Reset and PHY power run during platform initialization, while the ID
+override and session edge run from the MUSB `set_mode` callback after core has
+finished clearing `POWER` and `DEVCTL`. The normal Buildroot smoke
 requires both USB buses to register. USB1 uses SYSINT sources 51 and 50,
 matching the proven SF2000 firmware contract.
 `sf2000-logd` dynamically opens `/dev/input/event0` through `event15`, so a

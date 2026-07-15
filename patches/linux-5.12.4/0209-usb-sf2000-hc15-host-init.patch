@@ -54,7 +54,7 @@
  static struct musb_fifo_cfg sf2000_fifo_cfg[] = {
  	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512 },
  	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512 },
-@@ -60,8 +92,73 @@
+@@ -60,8 +92,96 @@
  	return ret;
  }
  
@@ -84,10 +84,10 @@
 +	       glue->syscon + SF2000_SYS_USB_LATCH);
 +
 +	/*
-+	 * Host-mode PHY power sequence.  0x9c is the vendor's host value;
++	 * PHY power sequence.  0x8c is the vendor's enabled value;
 +	 * bit zero is a strobe and must be removed after the settle delay.
 +	 */
-+	sf2000_update32(musb->mregs + SF2000_USB_UTMI_CTRL, 0x90, 0x9d);
++	sf2000_update32(musb->mregs + SF2000_USB_UTMI_CTRL, 0x90, 0x8d);
 +	udelay(900);
 +	sf2000_update32(musb->mregs + SF2000_USB_UTMI_CTRL, BIT(0), 0);
 +}
@@ -118,6 +118,29 @@
 +	udelay(1000);
 +}
 +
++static int sf2000_musb_set_mode(struct musb *musb, u8 mode)
++{
++	struct sf2000_glue *glue = dev_get_drvdata(musb->controller->parent);
++
++	if (!glue)
++		return -ENODEV;
++	if (mode != MUSB_HOST)
++		return -EINVAL;
++
++	/*
++	 * MUSB core clears POWER and DEVCTL after platform init.  Apply the
++	 * HC15xx ID override and SESSION edge here, from its set_mode callback,
++	 * exactly where the vendor driver does it: after host setup is complete.
++	 */
++	sf2000_hc15_set_host(glue, musb);
++	dev_info(glue->dev,
++		 "HC15xx host%u active: power=%02x devctl=%02x utmi=%08x\n",
++		 glue->index, musb_readb(musb->mregs, MUSB_POWER),
++		 musb_readb(musb->mregs, MUSB_DEVCTL),
++		 readl(musb->mregs + SF2000_USB_UTMI_CTRL));
++	return 0;
++}
++
  static int sf2000_musb_init(struct musb *musb)
  {
 +	struct sf2000_glue *glue = dev_get_drvdata(musb->controller->parent);
@@ -128,15 +151,14 @@
  	musb->xceiv = devm_usb_get_phy(musb->controller->parent,
  					 USB_PHY_TYPE_USB2);
  	if (IS_ERR(musb->xceiv))
-@@ -69,6 +166,15 @@
+@@ -69,6 +189,14 @@
  
  	musb->dyn_fifo = true;
  	musb->isr = sf2000_musb_interrupt;
 +	sf2000_hc15_reset(glue, musb);
-+	sf2000_hc15_set_host(glue, musb);
 +
 +	dev_info(glue->dev,
-+		 "HC15xx host%u ready: power=%02x devctl=%02x utmi=%08x\n",
++		 "HC15xx host%u reset: power=%02x devctl=%02x utmi=%08x\n",
 +		 glue->index, musb_readb(musb->mregs, MUSB_POWER),
 +		 musb_readb(musb->mregs, MUSB_DEVCTL),
 +		 readl(musb->mregs + SF2000_USB_UTMI_CTRL));
@@ -144,7 +166,15 @@
  	return 0;
  }
  
-@@ -93,11 +199,13 @@
+@@ -81,6 +209,7 @@
+ 	.quirks = MUSB_DMA_INVENTRA | MUSB_INDEXED_EP,
+ 	.init = sf2000_musb_init,
+ 	.exit = sf2000_musb_exit,
++	.set_mode = sf2000_musb_set_mode,
+ };
+ 
+ static int sf2000_usb_probe(struct platform_device *pdev)
+@@ -93,11 +222,13 @@
  	};
  	struct sf2000_glue *glue;
  	struct platform_device *musb;
@@ -158,7 +188,7 @@
  
  	glue->usb_phy = usb_phy_generic_register();
  	if (IS_ERR(glue->usb_phy))
-@@ -105,6 +213,29 @@
+@@ -105,6 +236,29 @@
  	if (!glue->usb_phy)
  		return -ENODEV;
  
@@ -188,7 +218,7 @@
  	musb = platform_device_alloc("musb-hdrc", PLATFORM_DEVID_AUTO);
  	if (!musb) {
  		ret = -ENOMEM;
-@@ -124,12 +255,12 @@
+@@ -124,12 +278,12 @@
  	if (ret)
  		goto err_put;
  
@@ -202,7 +232,7 @@
  
  	dev_info(&pdev->dev, "registered SF2000 musb-hdrc glue\n");
  	return 0;
-@@ -151,6 +282,7 @@
+@@ -151,6 +305,7 @@
  }
  
  static const struct of_device_id sf2000_usb_of_match[] = {
