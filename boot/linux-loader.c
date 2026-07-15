@@ -24,6 +24,7 @@ typedef unsigned long uintptr;
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
 #define CACHE_LINE 16u
+#define PRIMARY_CACHE_SIZE 2048u
 #define PINMUX_R05 0xb88004e5u
 #define PINMUX_L25 0xb88004b9u
 #define GPIO_L_OUT 0xb8800054u
@@ -62,7 +63,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-07-15 coherent-kernel-cache"
+#define LOADER_BUILD_TAG "2026-07-15 indexed-kernel-cache"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1166,17 +1167,39 @@ static void cache_flush_range(uintptr addr, usize len)
 	__asm__ volatile("sync" ::: "memory");
 }
 
-static void cache_flush_loaded_range(uintptr addr, usize len)
+static void cache_writeback_dcache_indices(void)
 {
-	/*
-	 * Hit operations are sufficient in QEMU and on a cold cache.  The ROM
-	 * routine also performs the implementation-specific whole-cache/index
-	 * maintenance needed when a warm boot replaces a differently sized
-	 * kernel and an instruction line has no matching hit alias.
-	 */
-	cache_flush_range(addr, len);
-	if (rom_call_present(ROM_CACHE_FLUSH_ADDR))
-		rom_cache_flush((void *)addr, (unsigned long)len);
+	uintptr p;
+
+	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_SIZE;
+			p += CACHE_LINE) {
+		__asm__ volatile(
+			".set push\n\t"
+			".set mips32\n\t"
+			"cache 0x01, 0(%0)\n\t"
+			".set pop"
+			:
+			: "r"(p)
+			: "memory");
+	}
+	__asm__ volatile("sync" ::: "memory");
+}
+
+static void cache_invalidate_icache_indices(void)
+{
+	uintptr p;
+
+	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_SIZE;
+			p += CACHE_LINE) {
+		__asm__ volatile(
+			".set push\n\t"
+			".set mips32\n\t"
+			"cache 0x00, 0(%0)\n\t"
+			".set pop"
+			:
+			: "r"(p)
+			: "memory");
+	}
 	__asm__ volatile("sync" ::: "memory");
 }
 
@@ -1349,11 +1372,15 @@ void linux_loader_main(void)
 	reset_exception_base_for_linux();
 	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
+	/* Evict dirty aliases before replacing RAM with the new ELF image. */
+	cache_writeback_dcache_indices();
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	cache_flush_loaded_range(load_min, (usize)(load_max - load_min));
-	cache_flush_loaded_range(dtb_dest, dtb_size);
+	cache_flush_range(load_min, (usize)(load_max - load_min));
+	cache_flush_range(dtb_dest, dtb_size);
+	/* Remove every possible warm-boot I-cache alias, not only hit aliases. */
+	cache_invalidate_icache_indices();
 	disable_interrupts();
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);

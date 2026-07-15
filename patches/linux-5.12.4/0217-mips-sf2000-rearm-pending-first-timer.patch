@@ -1,0 +1,54 @@
+From: SF2000 Linux contributors
+Subject: [PATCH] mips: sf2000: rearm a pending timer before first IRQ enable
+
+The boot ROM leaves CP0 Count running across warm boots.  time_init() probes
+Count/Compare with interrupts disabled, and the physical diagnostic work
+before the first local_irq_enable can then carry Count past Compare.  Enabling
+IP7 with Cause.IP7 already asserted enters the exception path before the
+post-enable marker and can strand early boot.
+
+Immediately before the first interrupt enable, acknowledge a pending IP7 by
+placing Compare one normal tick in the future.  Preserve the clockevent's
+normal interrupt source and record Count, Compare and Cause after the rearm.
+This is limited to physical ROM-handoff SF2000 boots; QEMU's normal timer path
+is unchanged.
+
+--- a/init/main.c
++++ b/init/main.c
+@@ -106,6 +106,7 @@
+ #include <asm/cacheflush.h>
+ #include <asm/hazards.h>
+ #include <asm/mipsregs.h>
++#include <asm/time.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/initcall.h>
+@@ -129,6 +130,8 @@
+ 
+ static void sf2000_before_irq_enable(void)
+ {
++	unsigned int count, delta;
++
+ 	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
+ 		return;
+ 
+@@ -137,6 +140,19 @@
+ 	sf2000_progress_mark("irq-compare-before", 4, read_c0_compare());
+ 	if (sf2000_rom_handoff_present() &&
+ 	    ((read_c0_ebase() & 0xfffff000u) == 0x81002000u)) {
++		if (read_c0_cause() & CAUSEF_IP7) {
++			count = read_c0_count();
++			delta = mips_hpt_frequency / HZ;
++			if (delta < 0x10000u)
++				delta = 0x10000u;
++			write_c0_compare(count + delta);
++			back_to_back_c0_hazard();
++			sf2000_progress_mark("irq-count-rearm", 4, count);
++			sf2000_progress_mark("irq-compare-rearm", 4,
++				read_c0_compare());
++			sf2000_progress_mark("irq-cause-rearm", 4,
++				read_c0_cause());
++		}
+ 		change_c0_status(ST0_IM, STATUSF_IP7);
+ 		irq_disable_hazard();
+ 		sf2000_progress_mark("irq-mask-timer-only", 4,
