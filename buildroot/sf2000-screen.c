@@ -3897,21 +3897,17 @@ static void run_direct_console(unsigned *frame)
 	console_input_init_fds(input_fds);
 	console_input_open_fds(input_fds);
 	draw_console_screen(++*frame);
-	if (env_is((const char *const *)environ,
-		    "SF2000_GE_DIAGNOSTICS", "1") ||
-	    cmdline_contains("SF2000_GE_DIAGNOSTICS=1")) {
-		progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
-		panel_push_frame(0);
-		progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
-		run_ge_mcu_probe(*frame);
-	} else {
-		/*
-		 * Production boots go directly from the initialized panel command
-		 * interface to the proven RGB/GMA path.  A full 153600-byte MCU push
-		 * monopolizes this single CPU and exists only to isolate GE diagnostics.
-		 */
-		progress_mark("screen-ge-mcu-probe-skip", 0x3fu, SCREEN_TAG);
-	}
+	/*
+	 * Complete a real GRAM transaction before changing the ST7789 ownership
+	 * from its 8080/MCU port to RGB.  This cannot be reduced to register
+	 * readback: log65 skipped both this and GMA conditioning and scrambled;
+	 * log66 restored all eight GMA states but still scrambled.  Every clear
+	 * physical run (52, 55, 56 and 64) includes this exact MCU/GE sequence.
+	 */
+	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
+	panel_push_frame(0);
+	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	run_ge_mcu_probe(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering

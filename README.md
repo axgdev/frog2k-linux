@@ -103,11 +103,12 @@ The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
 the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
-The slow MCU hardware-isolation screens remain opt-in through
-`SF2000_GE_DIAGNOSTICS=1`. G1-G8 remain mandatory: physical log65 proved that
-their descriptor walk conditions HC15xx GMA state required for stable scanout,
-even though all exposed latch registers report success without it. The short
-startup backlight sequence also remains part of the validated panel contract.
+The MCU/GE screens and G1-G8 remain mandatory parts of the HC15xx display
+handoff. Logs 65 and 66 form a controlled physical comparison: restoring the
+descriptor walk alone does not fix scanout when the completed MCU GRAM
+transaction is omitted. All exposed VOU/GMA latches can report success while
+the panel produces moving bands. The short startup backlight sequence likewise
+remains part of the validated panel contract.
 
 When explicitly enabled, init disarms the display watchdog, terminates the
 console by its supervised PID, and waits for kernel-owned GE cleanup without
