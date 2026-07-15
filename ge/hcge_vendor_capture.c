@@ -15,6 +15,7 @@
 #define HCGE_GET_CMDQ_BUFINFO 0x20002305u
 #define HCGE_SET_CLOCK 0x20002306u
 #define HCGE_GET_GE_REGISTER 0x20002307u
+#define HCGE_SUBMIT 0x20002308u
 #define QUEUE_PHYS 0x01000000u
 #define QUEUE_SIZE 0x0003c000u
 
@@ -23,10 +24,19 @@ struct command_queue_info {
 	uint32_t size;
 };
 
+struct linux_submit {
+	uint32_t data;
+	uint32_t length;
+};
+
+#ifndef HCGE_SOURCE_CAPTURE
 extern void hcge_construct_nodes(void *context, uint32_t **output);
+#endif
 
 static uint32_t fake_registers[64];
 static unsigned char fake_queue[QUEUE_SIZE] __attribute__((aligned(16)));
+static uint32_t submitted_node[178];
+static unsigned int submitted_words;
 
 int __wrap_open(const char *path, int flags, ...)
 {
@@ -67,6 +77,17 @@ int __wrap_ioctl(int fd, unsigned long command, ...)
 	case HCGE_SYNC_TIMEOUT:
 	case HCGE_SET_CLOCK:
 		return 0;
+	case HCGE_SUBMIT: {
+		const struct linux_submit *submit = argument;
+
+		if (!submit || !submit->data || (submit->length & 3u) ||
+		    submit->length > sizeof(submitted_node))
+			return -1;
+		submitted_words = submit->length / sizeof(uint32_t);
+		memcpy(submitted_node, (const void *)(uintptr_t)submit->data,
+			submit->length);
+		return 0;
+	}
 	default:
 		return 0;
 	}
@@ -137,8 +158,14 @@ static void dump_nodes(const char *operation, hcge_context *ctx)
 	unsigned int i;
 
 	memset(node, 0, sizeof(node));
+#ifdef HCGE_SOURCE_CAPTURE
+	(void)ctx;
+	words = submitted_words;
+	memcpy(node, submitted_node, words * sizeof(uint32_t));
+#else
 	hcge_construct_nodes(ctx, &last);
 	words = (unsigned int)(last - node);
+#endif
 
 	printf("%s %u", operation, words);
 	for (i = 0; i < words; i++)
@@ -157,16 +184,41 @@ int main(int argc, char **argv)
 		&destination.x, &destination.y, &destination.w, &destination.h,
 	};
 	unsigned int coordinate;
+	static const HCGESurfacePixelFormat formats[] = {
+		HCGE_DSPF_ARGB1555, HCGE_DSPF_RGB16, HCGE_DSPF_RGB24,
+		HCGE_DSPF_RGB32, HCGE_DSPF_ARGB, HCGE_DSPF_A8,
+		HCGE_DSPF_LUT8, HCGE_DSPF_ARGB4444,
+	};
+	HCGESurfacePixelFormat format = HCGE_DSPF_RGB16;
+	unsigned int bytes_per_pixel = 2;
+	HCGESurfaceBlittingFlags blittingflags = HCGE_DSBLIT_NOFX;
+	HCGESurfaceDrawingFlags drawingflags = HCGE_DSDRAW_NOFX;
 
-	if (argc != 1 && argc != 9)
+	if (argc != 1 && argc != 9 && argc != 10 && argc != 12)
 		return 2;
-	for (coordinate = 0; coordinate < 8 && argc == 9; coordinate++)
+	for (coordinate = 0; coordinate < 8 && argc >= 9; coordinate++)
 		*coordinates[coordinate] = (int)strtol(argv[coordinate + 1], NULL, 0);
+	if (argc >= 10) {
+		unsigned long index = strtoul(argv[9], NULL, 0);
+
+		if (index >= sizeof(formats) / sizeof(formats[0]))
+			return 2;
+		format = formats[index];
+		bytes_per_pixel = index == 5 || index == 6 ? 1 :
+			(index == 2 ? 3 : (index == 3 || index == 4 ? 4 : 2));
+	}
+	if (argc == 12) {
+		blittingflags = (HCGESurfaceBlittingFlags)strtoul(argv[10], NULL, 0);
+		drawingflags = (HCGESurfaceDrawingFlags)strtoul(argv[11], NULL, 0);
+	}
 
 	memset(fake_queue, 0, sizeof(fake_queue));
 	if (hcge_open(&ctx) != 0 || !ctx)
 		return 1;
 	setup_state(&state);
+	state.destination.config.format = format;
+	state.dst.pitch = 320u * bytes_per_pixel;
+	state.drawingflags = drawingflags;
 
 	state.accel = HCGE_DFXL_FILLRECTANGLE;
 	ctx->state = state;
@@ -181,6 +233,11 @@ int main(int argc, char **argv)
 	if (hcge_open(&ctx) != 0 || !ctx)
 		return 1;
 	setup_state(&state);
+	state.destination.config.format = format;
+	state.dst.pitch = 320u * bytes_per_pixel;
+	state.source.config.format = format;
+	state.src.pitch = 128u * bytes_per_pixel;
+	state.blittingflags = blittingflags;
 	state.accel = HCGE_DFXL_BLIT;
 	ctx->state = state;
 	hcge_set_state(ctx, &ctx->state, ctx->state.accel);
@@ -194,6 +251,11 @@ int main(int argc, char **argv)
 	if (hcge_open(&ctx) != 0 || !ctx)
 		return 1;
 	setup_state(&state);
+	state.destination.config.format = format;
+	state.dst.pitch = 320u * bytes_per_pixel;
+	state.source.config.format = format;
+	state.src.pitch = 128u * bytes_per_pixel;
+	state.blittingflags = blittingflags;
 	state.accel = HCGE_DFXL_STRETCHBLIT;
 	ctx->state = state;
 	hcge_set_state(ctx, &ctx->state, ctx->state.accel);

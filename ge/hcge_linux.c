@@ -32,22 +32,28 @@ struct hcge_linux_submit {
 	uint32_t length;
 };
 
-static bool hcge_format_supported(HCGESurfacePixelFormat format, bool source)
+struct hcge_format {
+	HCGESurfacePixelFormat format;
+	uint8_t code;
+	uint8_t bytes;
+};
+
+static const struct hcge_format hcge_formats[] = {
+	{ HCGE_DSPF_ARGB1555, 5, 2 },
+	{ HCGE_DSPF_RGB16, 6, 2 },
+	{ HCGE_DSPF_RGB32, 0, 4 },
+	{ HCGE_DSPF_ARGB, 1, 4 },
+	{ HCGE_DSPF_ARGB4444, 3, 2 },
+};
+
+static const struct hcge_format *hcge_get_format(HCGESurfacePixelFormat format)
 {
-	switch (format) {
-	case HCGE_DSPF_ARGB1555:
-	case HCGE_DSPF_RGB16:
-	case HCGE_DSPF_RGB24:
-	case HCGE_DSPF_RGB32:
-	case HCGE_DSPF_ARGB:
-	case HCGE_DSPF_A8:
-	case HCGE_DSPF_LUT8:
-	case HCGE_DSPF_ARGB4444:
-		return true;
-	default:
-		(void)source;
-		return false;
-	}
+	unsigned int i;
+
+	for (i = 0; i < sizeof(hcge_formats) / sizeof(hcge_formats[0]); i++)
+		if (hcge_formats[i].format == format)
+			return &hcge_formats[i];
+	return NULL;
 }
 
 static int hcge_context_fd(const hcge_context *ctx)
@@ -66,30 +72,51 @@ static uint32_t hcge_wh(int width, int height)
 		((uint32_t)width & 0xfffu);
 }
 
-static uint32_t hcge_rgb565(HCGEColor color)
+static uint32_t hcge_surface_color(HCGESurfacePixelFormat format,
+	HCGEColor color)
 {
-	return ((uint32_t)(color.r & 0xf8u) << 8) |
-		((uint32_t)(color.g & 0xfcu) << 3) | color.b >> 3;
+	switch (format) {
+	case HCGE_DSPF_ARGB1555:
+		return ((uint32_t)(color.a >> 7) << 15) |
+			((uint32_t)(color.r >> 3) << 10) |
+			((uint32_t)(color.g >> 3) << 5) | (color.b >> 3);
+	case HCGE_DSPF_RGB16:
+		/* Bit 16 is the vendor RGB565 paint-format tag. */
+		return 0x00010000u | ((uint32_t)(color.r & 0xf8u) << 8) |
+			((uint32_t)(color.g & 0xfcu) << 3) | color.b >> 3;
+	case HCGE_DSPF_ARGB4444:
+		return ((uint32_t)(color.a >> 4) << 12) |
+			((uint32_t)(color.r >> 4) << 8) |
+			((uint32_t)(color.g >> 4) << 4) | (color.b >> 4);
+	default:
+		return (uint32_t)color.a << 24 | (uint32_t)color.r << 16 |
+			(uint32_t)color.g << 8 | color.b;
+	}
 }
 
-static uint32_t hcge_argb8888(HCGEColor color)
-{
-	return (uint32_t)color.a << 24 | (uint32_t)color.r << 16 |
-		(uint32_t)color.g << 8 | color.b;
-}
-
-static bool hcge_rgb16_surface_valid(const HCGE_CoreSurface *surface,
+static bool hcge_surface_valid(const HCGE_CoreSurface *surface,
 	const HCGE_CoreSurfaceBuffer *buffer)
 {
-	return surface && buffer && surface->config.format == HCGE_DSPF_RGB16 &&
-		surface->config.size.w > 0 && surface->config.size.h > 0 &&
-		buffer->phys && !(buffer->phys & 1u) && buffer->pitch >= 2u &&
-		!(buffer->pitch & 1u) && buffer->pitch <= HCGE_IMAGE_PITCH_MAX;
+	const struct hcge_format *format;
+
+	if (!surface || !buffer)
+		return false;
+	format = hcge_get_format(surface->config.format);
+	return format && surface->config.size.w > 0 &&
+		surface->config.size.h > 0 && buffer->phys &&
+		!(buffer->phys & (format->bytes - 1u)) &&
+		buffer->pitch >= format->bytes &&
+		!(buffer->pitch % format->bytes) &&
+		buffer->pitch <= HCGE_IMAGE_PITCH_MAX;
 }
 
-static uint32_t hcge_rgb16_buffer(uint32_t pitch)
+static uint32_t hcge_surface_buffer(HCGESurfacePixelFormat format,
+	uint32_t pitch)
 {
-	return 0x00006000u | ((pitch / 2u) & 0xfffu);
+	const struct hcge_format *description = hcge_get_format(format);
+
+	return description ? (uint32_t)description->code << 12 |
+		((pitch / description->bytes) & 0xfffu) : 0;
 }
 
 static bool hcge_rectangle_valid(const HCGERectangle *rectangle)
@@ -199,6 +226,14 @@ int hcge_engine_sync(hcge_context *ctx)
 	return ioctl(ctx->ge_fd, HCGE_SYNC_TIMEOUT, 1000ul) < 0 ? -errno : 0;
 }
 
+int hcge_set_clock(hcge_context *ctx, unsigned int selector)
+{
+	if (hcge_context_fd(ctx) < 0 || selector > 3u)
+		return -EINVAL;
+	return ioctl(ctx->ge_fd, HCGE_SET_CLOCK, (unsigned long)selector) < 0 ?
+		-errno : 0;
+}
+
 int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, size_t words)
 {
 	struct hcge_linux_submit submit;
@@ -218,19 +253,20 @@ void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 	if (!state || !(accel & (HCGE_DFXL_FILLRECTANGLE | HCGE_DFXL_BLIT |
 				 HCGE_DFXL_STRETCHBLIT)))
 		return;
-	if (!hcge_format_supported(state->destination.config.format, false))
+	if (!hcge_get_format(state->destination.config.format))
 		return;
 	if (HCGE_DFB_DRAWING_FUNCTION(accel)) {
-		if (state->render_options != HCGE_DSRO_NONE &&
-		    state->render_options != HCGE_DSRO_MATRIX)
+		if (state->render_options != HCGE_DSRO_NONE ||
+		    state->drawingflags != HCGE_DSDRAW_NOFX)
 			return;
-		if ((accel & HCGE_DFXL_FILLRECTANGLE) &&
-		    SUPPORTED_DRAW_FLAG(state->drawingflags))
+		if (accel & HCGE_DFXL_FILLRECTANGLE)
 			state->accel |= accel & HCGE_DFXL_FILLRECTANGLE;
 	}
 	if (HCGE_DFB_BLITTING_FUNCTION(accel) &&
-	    hcge_format_supported(state->source.config.format, true) &&
-	    SUPPORTED_BLIT_FLAG(state->blittingflags))
+	    hcge_get_format(state->source.config.format) &&
+	    state->source.config.format == state->destination.config.format &&
+	    state->render_options == HCGE_DSRO_NONE &&
+	    state->blittingflags == HCGE_DSBLIT_NOFX)
 		state->accel |= accel & (HCGE_DFXL_BLIT | HCGE_DFXL_STRETCHBLIT);
 }
 
@@ -255,18 +291,20 @@ bool hcge_fill_rect(hcge_context *ctx, HCGERectangle *rectangle)
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_FILLRECTANGLE ||
 	    state->drawingflags != HCGE_DSDRAW_NOFX ||
-	    !hcge_rgb16_surface_valid(&state->destination, &state->dst))
+	    !hcge_surface_valid(&state->destination, &state->dst))
 		return false;
 	node[0] = 0x02008367u;
 	node[1] = 0x00a00003u;
 	node[2] = (uint32_t)state->dst.phys;
-	node[3] = hcge_rgb16_buffer(state->dst.pitch);
+	node[3] = hcge_surface_buffer(state->destination.config.format,
+		state->dst.pitch);
 	node[4] = node[2];
 	node[5] = node[3];
-	node[6] = hcge_rgb565(state->color);
+	node[6] = hcge_surface_color(state->destination.config.format,
+		state->color);
 	node[7] = 0;
 	node[8] = 0;
-	node[9] = 6;
+	node[9] = hcge_get_format(state->destination.config.format)->code;
 	node[10] = hcge_xy(rectangle->x, rectangle->y);
 	node[11] = hcge_wh(rectangle->w, rectangle->h);
 	node[12] = node[10];
@@ -285,15 +323,18 @@ bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_BLIT ||
 	    state->blittingflags != HCGE_DSBLIT_NOFX ||
-	    !hcge_rgb16_surface_valid(&state->destination, &state->dst) ||
-	    !hcge_rgb16_surface_valid(&state->source, &state->src))
+	    state->destination.config.format != state->source.config.format ||
+	    !hcge_surface_valid(&state->destination, &state->dst) ||
+	    !hcge_surface_valid(&state->source, &state->src))
 		return false;
 	node[0] = 0x02000307u;
 	node[1] = 0x00000002u;
 	node[2] = (uint32_t)state->dst.phys;
-	node[3] = hcge_rgb16_buffer(state->dst.pitch);
+	node[3] = hcge_surface_buffer(state->destination.config.format,
+		state->dst.pitch);
 	node[4] = (uint32_t)state->src.phys;
-	node[5] = hcge_rgb16_buffer(state->src.pitch);
+	node[5] = hcge_surface_buffer(state->source.config.format,
+		state->src.pitch);
 	node[6] = hcge_xy(dx, dy);
 	node[7] = hcge_wh(source->w, source->h);
 	node[8] = hcge_xy(source->x, source->y);
@@ -313,24 +354,27 @@ bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_STRETCHBLIT ||
 	    state->blittingflags != HCGE_DSBLIT_NOFX ||
-	    !hcge_rgb16_surface_valid(&state->destination, &state->dst) ||
-	    !hcge_rgb16_surface_valid(&state->source, &state->src))
+	    state->destination.config.format != state->source.config.format ||
+	    !hcge_surface_valid(&state->destination, &state->dst) ||
+	    !hcge_surface_valid(&state->source, &state->src))
 		return false;
 	node[0] = 0x0206870fu;
 	node[1] = 0x00a03009u;
 	node[2] = (uint32_t)state->dst.phys;
-	node[3] = hcge_rgb16_buffer(state->dst.pitch);
+	node[3] = hcge_surface_buffer(state->destination.config.format,
+		state->dst.pitch);
 	node[4] = node[2];
 	node[5] = node[3];
 	node[6] = (uint32_t)state->src.phys;
-	node[7] = 0x40000000u | hcge_rgb16_buffer(state->src.pitch);
+	node[7] = 0x40000000u |
+		hcge_surface_buffer(state->source.config.format, state->src.pitch);
 	node[8] = 0;
 	node[9] = hcge_wh(destination->w, destination->h);
 	node[10] = 0;
 	node[11] = 0;
 	node[12] = hcge_wh(source->w, source->h);
 	node[13] = 0x00004000u;
-	node[14] = hcge_argb8888(state->color);
+	node[14] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
 	node[15] = 0x00000080u;
 	node[16] = ((uint32_t)source->w << 16) / (uint32_t)destination->w;
 	node[17] = 0;

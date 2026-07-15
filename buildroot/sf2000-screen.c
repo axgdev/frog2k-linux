@@ -301,6 +301,7 @@ static unsigned console_line_start;
 static unsigned console_view_offset;
 
 static uint16_t *framebuffer(void);
+static int ge_fill_render(uint16_t color);
 static hcge_context *display_ge;
 static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
@@ -2850,13 +2851,31 @@ static void console_add_kmsg_record(const char *record, size_t len)
 	console_add_text(record + i, len - i);
 }
 
+static void draw_console_dynamic(unsigned frame, uint16_t bg, uint16_t bar)
+{
+	char title[48];
+
+	fill_rect(0, 0, WIDTH, 12, bar);
+	snprintf(title, sizeof(title), "SF2000 LOG %06u +%03u/%03u",
+		frame, console_view_offset, console_max_view_offset());
+	draw_text(2, 2, title, rgb565(31, 63, 20), bar, 1);
+	/* Dynamic anchor proving that the GE copied this specific frame. */
+	fill_rect(WIDTH - 2u, HEIGHT - 2u, 2u, 2u,
+		(uint16_t)(0x8000u | (frame & 0x7fffu)));
+	(void)bg;
+}
+
+static void draw_console_tick(unsigned frame)
+{
+	draw_console_dynamic(frame, rgb565(0, 2, 3), rgb565(0, 10, 14));
+}
+
 static void draw_console_screen(unsigned frame)
 {
 	uint16_t fg = rgb565(26, 58, 26);
 	uint16_t dim = rgb565(12, 32, 22);
 	uint16_t bg = rgb565(0, 2, 3);
 	uint16_t bar = rgb565(0, 10, 14);
-	char title[48];
 	unsigned visible = console_visible_lines();
 	unsigned start = console_line_count > visible ?
 		console_line_count - visible : 0;
@@ -2868,14 +2887,9 @@ static void draw_console_screen(unsigned frame)
 	else
 		start = 0;
 
-	fill_rect(0, 0, WIDTH, HEIGHT, bg);
-	fill_rect(0, 0, WIDTH, 12, bar);
-	snprintf(title, sizeof(title), "SF2000 LOG %06u +%03u/%03u",
-		frame, console_view_offset, console_max_view_offset());
-	draw_text(2, 2, title, rgb565(31, 63, 20), bar, 1);
-	/* Dynamic anchor proving that the GE copied this specific frame. */
-	fill_rect(WIDTH - 2u, HEIGHT - 2u, 2u, 2u,
-		(uint16_t)(0x8000u | (frame & 0x7fffu)));
+	if (ge_fill_render(bg) < 0)
+		fill_rect(0, 0, WIDTH, HEIGHT, bg);
+	draw_console_dynamic(frame, bg, bar);
 	for (row = 0; row < visible; row++) {
 		unsigned y = 16u + row * 8u;
 		const char *line = console_line_at(start + row);
@@ -3156,6 +3170,47 @@ static void ge_display_open(void)
 		log_line(line);
 		progress_mark("screen-ge-open-fail", 0x3fu, (uint32_t)ret);
 	}
+}
+
+static int ge_fill_render(uint16_t color)
+{
+	static int logged;
+	hcge_state *state;
+	HCGERectangle rectangle = { 0, 0, WIDTH, HEIGHT };
+	int sync_ret;
+
+	if (!display_ge)
+		return -1;
+	/* Discard all stale CPU lines before the GE becomes the buffer writer. */
+	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	state = &display_ge->state;
+	memset(state, 0, sizeof(*state));
+	state->render_options = HCGE_DSRO_NONE;
+	state->drawingflags = HCGE_DSDRAW_NOFX;
+	state->destination.config.format = HCGE_DSPF_RGB16;
+	state->destination.config.size.w = WIDTH;
+	state->destination.config.size.h = HEIGHT;
+	state->dst.phys = GMA_RENDER_PHYS;
+	state->dst.pitch = PITCH;
+	state->color.a = 0xff;
+	state->color.r = (uint8_t)(((color >> 11) & 0x1fu) << 3);
+	state->color.g = (uint8_t)(((color >> 5) & 0x3fu) << 2);
+	state->color.b = (uint8_t)((color & 0x1fu) << 3);
+	state->accel = HCGE_DFXL_FILLRECTANGLE;
+	hcge_set_state(display_ge, state, state->accel);
+	if (!hcge_fill_rect(display_ge, &rectangle))
+		return -1;
+	sync_ret = hcge_engine_sync(display_ge);
+	if (sync_ret < 0)
+		return -1;
+	/* The CPU draws glyphs next; invalidate the GE-written cache lines. */
+	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	if (!logged) {
+		log_line("sf2000-screen: GE accelerated console clear active\n");
+		progress_mark("screen-ge-console-fill-ok", 0x3fu, SCREEN_TAG);
+		logged = 1;
+	}
+	return 0;
 }
 
 static void ge_copy_render_to_scanout(void)
@@ -3949,7 +4004,11 @@ handoff_complete:
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
 			if (*frame < 4u)
 				progress_mark("screen-loop-draw", 0x3fu, *frame + 1u);
-			draw_console_screen(++*frame);
+			++*frame;
+			if (changed)
+				draw_console_screen(*frame);
+			else
+				draw_console_tick(*frame);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present", 0x3fu, *frame);
 			if (rgb_active)

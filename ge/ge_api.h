@@ -551,6 +551,7 @@ void hcge_reset(struct hcge_context *ctx);
 void hcge_check_state(hcge_state  *state, HCGEAccelerationMask  accel);
 
 int hcge_engine_sync(hcge_context *ctx);
+int hcge_set_clock(hcge_context *ctx, unsigned int selector);
 void hcge_engine_reset( void *drv, void *dev);
 void hcge_flush_texture_cache(void *drv, void *dev);
 void hcge_emit_jommands(void *drv, void *dev);

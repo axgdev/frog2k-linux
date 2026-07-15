@@ -42,17 +42,27 @@ surviving MIPS vendor serializer under qemu-user and byte-compares its complete
 172-word output with the source implementation.
 
 The surviving public `ge_api.h` ABI is now mirrored in this directory. The
-Linux backend implements context lifetime, reset, IRQ ownership, synchronous
-completion, validated copied-node submission, and conservative acceleration
-capability checks without exposing kernel mappings or registers to userspace.
+Linux backend implements context lifetime, reset, IRQ ownership, clock
+selection, synchronous completion, validated copied-node submission, and
+conservative acceleration capability checks without exposing kernel mappings
+or registers to userspace. Fill, direct blit, and zero-origin stretch nodes are
+byte-identical to the vendor library for ARGB1555, RGB565, XRGB8888, ARGB8888,
+and ARGB4444; `make test-ge-formats` checks every operation and format against
+the original MIPS archive under qemu-user.
 
-The remaining work is populating the recovered node context from public API
-state and executing every group exactly in system QEMU. Reconstruction order:
+The remaining API work is the optional DirectFB effects which are advertised by
+the vendor header but are not used by the SF2000 native RGB565 presentation
+path. They remain deliberately absent from `hcge_check_state()` until their
+nodes are vendor-equivalent. Reconstruction order:
 
-1. `FILLRECTANGLE` with RGB565 and ARGB destinations;
-2. same-format direct `BLIT`;
-3. scaled `STRETCHBLIT` and filter coefficients;
-4. clip, rotation, alpha blend, color key, CLUT, and matrix groups.
+1. non-zero-origin stretch clipping and filter coefficients;
+2. clip, rotation, alpha blend, color key, CLUT, mask, and matrix effects;
+3. cycle-accurate execution of those optional groups in system QEMU.
+
+The SF2000 console uses GE for its full-screen background paint and for every
+render-to-scanout presentation. Idle counter frames update only their dynamic
+title and anchor before the hardware BLIT, avoiding a CPU redraw of the full
+320x240 surface.
 
 No vendor object is linked into Linux. The eventual library will keep the
 public `hcge_*` API so MuFrog can switch from `libge.a` to source without

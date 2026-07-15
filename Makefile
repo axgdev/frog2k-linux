@@ -173,7 +173,9 @@ GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
 GE_VENDOR_NODE_TEST := $(BUILD_DIR)/hcge-vendor-node-test
 GE_LINUX_OBJ := $(BUILD_DIR)/hcge-linux.o
 GE_VENDOR_CAPTURE := $(BUILD_DIR)/hcge-vendor-capture
+GE_SOURCE_CAPTURE := $(BUILD_DIR)/hcge-source-capture
 GE_VENDOR_CAPTURE_GOLDEN := ge/hcge_vendor_capture.golden
+GE_SOURCE_CAPTURE_GOLDEN := ge/hcge_source_capture.golden
 GE_ELF_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc.br_real
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
@@ -205,7 +207,8 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
-	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture clean
+	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
+	test-ge-source-capture test-ge-formats clean
 
 all: status
 
@@ -277,6 +280,25 @@ capture-ge-vendor: $(GE_VENDOR_CAPTURE)
 
 test-ge-vendor-capture: $(GE_VENDOR_CAPTURE) $(GE_VENDOR_CAPTURE_GOLDEN)
 	qemu-mipsel '$(GE_VENDOR_CAPTURE)' | cmp - '$(GE_VENDOR_CAPTURE_GOLDEN)'
+
+$(GE_SOURCE_CAPTURE): ge/hcge_vendor_capture.c ge/hcge_linux.c ge/ge_api.h \
+		$(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -DHCGE_SOURCE_CAPTURE \
+		-o '$@' ge/hcge_vendor_capture.c ge/hcge_linux.c \
+		-Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl \
+		-Wl,--wrap=mmap -Wl,--wrap=munmap -Wl,--wrap=usleep
+
+test-ge-source-capture: $(GE_SOURCE_CAPTURE) $(GE_SOURCE_CAPTURE_GOLDEN)
+	qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 | \
+		cmp - '$(GE_SOURCE_CAPTURE_GOLDEN)'
+
+test-ge-formats: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
+	set -e; for format in 0 1 3 4 7; do \
+		qemu-mipsel '$(GE_VENDOR_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			"$$format" > '$(BUILD_DIR)/.hcge-vendor-format'; \
+		qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			"$$format" | cmp - '$(BUILD_DIR)/.hcge-vendor-format'; \
+	done; rm -f '$(BUILD_DIR)/.hcge-vendor-format'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
