@@ -1,0 +1,101 @@
+From: SF2000 Linux port
+Subject: mips: nommu: initialize FLAT ABI and provide signal trampolines
+
+MIPS normally selects current->thread.abi from the ELF header in
+SET_PERSONALITY2().  A bFLT executable never passes through the ELF loader,
+leaving the ABI pointer inherited from the kernel thread which performed the
+first exec.  The first userspace signal which needs a frame then faults in
+mips_stack_top() while dereferencing current->thread.abi->vdso.
+
+There is a second NOMMU-specific issue after initializing the pointer: MIPS
+arch_setup_additional_pages() deliberately leaves mm->context.vdso NULL when
+there is no MMU, but signal delivery unconditionally uses the VDSO sigreturn
+entry.  The native signal frames retain the two words formerly used for an
+on-stack trampoline, so populate those words for NOMMU and return through
+them.  The instructions load the native syscall number into v0 and issue a
+syscall, matching the MIPS VDSO trampoline.
+
+This makes signal handlers and SIGCHLD-based shell process management usable
+by MIPS bFLT programs instead of relying on display-service workarounds.
+
+--- a/arch/mips/include/asm/flat.h
++++ b/arch/mips/include/asm/flat.h
+@@ -5,6 +5,17 @@
+ #include <asm/byteorder.h>
+ #include <asm/unaligned.h>
+ 
++struct mips_abi;
++extern struct mips_abi mips_abi;
++
++/* bFLT does not pass through the ELF personality setup path. */
++#define FLAT_PLAT_INIT(regs)                                           \
++	do {                                                            \
++		clear_thread_flag(TIF_HYBRID_FPREGS);                    \
++		set_thread_flag(TIF_32BIT_FPREGS);                       \
++		current->thread.abi = &mips_abi;                          \
++	} while (0)
++
+ #define FLAT_MIPS_R_32		0x00000000
+ #define FLAT_MIPS_R_26		0x40000000
+ #define FLAT_MIPS_R_HI16	0x80000000
+--- a/arch/mips/kernel/signal.c
++++ b/arch/mips/kernel/signal.c
+@@ -704,6 +704,23 @@ badframe:
+ }
+ 
+ #ifdef CONFIG_TRAD_SIGNALS
++static int install_nommu_sigtramp(u32 __user *tramp, unsigned int syscall)
++{
++	u32 code[2] = {
++		0x24020000u | (syscall & 0xffffu), /* addiu v0, zero, syscall */
++		0x0000000cu,                       /* syscall */
++	};
++
++	if (IS_ENABLED(CONFIG_MMU))
++		return 0;
++	if (__put_user(code[0], &tramp[0]) ||
++	    __put_user(code[1], &tramp[1]))
++		return -EFAULT;
++	flush_icache_user_range((unsigned long)tramp,
++		(unsigned long)(tramp + 2));
++	return 0;
++}
++
+ static int setup_frame(void *sig_return, struct ksignal *ksig,
+ 		       struct pt_regs *regs, sigset_t *set)
+ {
+@@ -718,6 +735,11 @@ static int setup_frame(void *sig_return,
+ 	err |= __copy_to_user(&frame->sf_mask, set, sizeof(*set));
+ 	if (err)
+ 		return -EFAULT;
++	if (!IS_ENABLED(CONFIG_MMU)) {
++		if (install_nommu_sigtramp(frame->sf_pad, __NR_sigreturn))
++			return -EFAULT;
++		sig_return = frame->sf_pad;
++	}
+ 
+ 	/*
+ 	 * Arguments to signal handler:
+@@ -760,6 +782,12 @@ static int setup_rt_frame(void *sig_retu
+ 	if (err)
+ 		return -EFAULT;
+ 
++	if (!IS_ENABLED(CONFIG_MMU)) {
++		if (install_nommu_sigtramp(frame->rs_pad, __NR_rt_sigreturn))
++			return -EFAULT;
++		sig_return = frame->rs_pad;
++	}
++
+ 	/*
+ 	 * Arguments to signal handler:
+ 	 *
+@@ -808,7 +836,8 @@ static void handle_signal(struct ksignal
+ 	sigset_t *oldset = sigmask_to_save();
+ 	int ret;
+ 	struct mips_abi *abi = current->thread.abi;
+-	void *vdso = current->mm->context.vdso;
++	void *vdso = IS_ENABLED(CONFIG_MMU) ?
++		current->mm->context.vdso : NULL;
+ 
+ 	/*
+ 	 * If we were emulating a delay slot instruction, exit that frame such

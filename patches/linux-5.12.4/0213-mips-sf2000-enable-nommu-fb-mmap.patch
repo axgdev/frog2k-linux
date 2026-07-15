@@ -1,0 +1,23 @@
+From: SF2000 Linux port
+Subject: mips: sf2000: provide the no-MMU fbdev mapping address
+
+The no-MMU mmap core can only create a shared character-device mapping when
+the file operation reports the device's actual address through
+get_unmapped_area.  fbdev has a generic implementation for this exact case,
+guarded by FB_PROVIDE_GET_FB_UNMAPPED_AREA, but the hidden option has to be
+selected by a platform.
+
+Select it for SF2000 whenever fbdev is enabled.  This lets ordinary fbdev
+applications mmap the simple-framebuffer at 0x00f10000 instead of failing
+with ENODEV after otherwise successful FBIOGET_* ioctls.
+
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -262,6 +262,7 @@ config MIPS_SF2000
+ 	select CEVT_R4K
+ 	select CSRC_R4K
+ 	select DMA_NONCOHERENT
++	select FB_PROVIDE_GET_FB_UNMAPPED_AREA if FB
+ 	select IRQ_MIPS_CPU
+ 	select MIPS_GENERIC
+ 	select NO_EXCEPT_FILL

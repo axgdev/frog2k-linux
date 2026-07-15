@@ -85,6 +85,9 @@ static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "sf2000", 0 };
 static char *const audio_argv[] = { "/usr/sbin/sf2000-audio", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = { "/etc/init.d/S05sf2000-storage", 0 };
+static char *const fb_test_argv[] = {
+	"/etc/init.d/S06sf2000-fb-test", "start", 0
+};
 static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
@@ -98,6 +101,7 @@ static unsigned long screen_stack[SERVICE_STACK_WORDS];
 static unsigned long pad_stack[SERVICE_STACK_WORDS];
 static unsigned long audio_stack[SERVICE_STACK_WORDS];
 static unsigned long storage_late_stack[SERVICE_STACK_WORDS];
+static unsigned long fb_test_stack[SERVICE_STACK_WORDS];
 
 static void log_message(const char *message);
 extern long sf2000_clone_service(unsigned long child_stack, char *const argv[]);
@@ -630,12 +634,15 @@ int main(void)
 	unsigned int screen_wait_ticks = 0;
 	unsigned int spawn_storage = 0;
 	unsigned int panel_probe = 0;
+	unsigned int fb_test_started = 0;
+	unsigned int fb_test_enabled = 1;
 	log_message("sf2000_buildroot: init main entry\n");
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
 	progress_mark("init-stdio", 0x3eu, INIT_TAG);
 	(void)mount_procfs();
 	panel_probe = cmdline_contains("SF2000_PANEL_PROBE=1");
+	fb_test_enabled = !cmdline_contains("SF2000_FB_TEST=0");
 #ifdef PANEL_PROBE_INIT
 	panel_probe = 1;
 #endif
@@ -705,6 +712,13 @@ int main(void)
 	progress_mark("init-supervisor", 0x3eu, INIT_TAG);
 	for (;;) {
 		reap_children();
+		if (!panel_probe && fb_test_enabled && !fb_test_started &&
+		    path_exists("/run/sf2000-screen-ready")) {
+			spawn_service("sf2000_buildroot: starting framebuffer test\n",
+				fb_test_argv, fb_test_stack);
+			fb_test_started = 1;
+			progress_mark("init-fb-test-started", 0x3eu, INIT_TAG);
+		}
 		if (!storage_started) {
 			spawn_storage = 0;
 			if (path_exists("/run/sf2000-storage-started")) {

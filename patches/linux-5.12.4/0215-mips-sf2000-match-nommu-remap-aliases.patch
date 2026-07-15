@@ -1,0 +1,46 @@
+From: SF2000 Linux port
+Subject: mips: sf2000: match KSEG aliases in NOMMU PFN remaps
+
+NOMMU's remap_pfn_range() normally requires the VMA address to equal the
+physical PFN address exactly.  MIPS ioremap returns a KSEG1 address, however,
+so a framebuffer mapping at screen_base 0xa0f10000 is rejected against PFN
+0x00f10 even though both addresses name the same HC15 RAM.
+
+Add a small architecture matching hook and implement it for the SF2000 KSEG
+execution model.  Strip only the standard MIPS segment bits when comparing;
+the application still receives the uncached KSEG1 address selected by the
+device driver.  This fixes mmap for fbdev and other directly mapped devices
+without weakening NOMMU checks on other architectures.
+
+--- a/arch/mips/include/asm/page.h
++++ b/arch/mips/include/asm/page.h
+@@ -32,6 +32,13 @@
+ #define PAGE_SIZE	(_AC(1,UL) << PAGE_SHIFT)
+ #define PAGE_MASK	(~((1 << PAGE_SHIFT) - 1))
+ 
++#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
++#define ARCH_NOMMU_REMAP_PFN_MATCHES
++#define arch_nommu_remap_pfn_matches(addr, pfn) \
++	((((unsigned long)(addr)) & 0x1fffffffUL) == \
++	 ((unsigned long)(pfn) << PAGE_SHIFT))
++#endif
++
+ /*
+  * This is used for calculating the real page sizes
+  * for FTLB or VTLB + FTLB configurations.
+--- a/mm/nommu.c
++++ b/mm/nommu.c
+@@ -1622,7 +1622,12 @@ struct page *follow_page(struct vm_area_
+ int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
+ 		unsigned long pfn, unsigned long size, pgprot_t prot)
+ {
++#ifdef ARCH_NOMMU_REMAP_PFN_MATCHES
++	if (!arch_nommu_remap_pfn_matches(addr, pfn))
++		return -EINVAL;
++#else
+ 	if (addr != (pfn << PAGE_SHIFT))
+ 		return -EINVAL;
++#endif
+ 
+ 	vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
+ 	return 0;

@@ -1,0 +1,42 @@
+#!/bin/sh
+
+log()
+{
+	printf 'sf2000_fb_test: %s\n' "$*" > /dev/kmsg 2>/dev/null || true
+}
+
+run_test()
+{
+	waited=0
+	while [ ! -e /run/sf2000-screen-ready ] && [ "$waited" -lt 60 ]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+	if [ ! -e /run/sf2000-screen-ready ]; then
+		log "screen ready timeout"
+		return 1
+	fi
+
+	log "stopping diagnostic console after ${waited}s"
+	/etc/init.d/S04sf2000-screen stop
+	# The console owns GMA setup, but /dev/fb0 is its live RGB565 scanout.
+	# Leave that hardware state intact and wait for the process to release GE.
+	sleep 1
+	log "launch /usr/bin/fb-test -p 0"
+	/usr/bin/fb-test -p 0
+	rc=$?
+	sync
+	log "complete rc=$rc"
+	printf '%s\n' "$rc" > /run/sf2000-fb-test.status
+	return "$rc"
+}
+
+case "$1" in
+	start)
+		[ "${SF2000_FB_TEST:-1}" = 0 ] && exit 0
+		# /init already starts this script as an independent service.  Keep the
+		# shell attached so that no-MMU systems do not need a second background
+		# fork and the supervisor can observe its real exit status.
+		run_test
+		;;
+esac

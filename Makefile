@@ -194,8 +194,8 @@ smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-storage-enumer
 smoke-linux-buildroot-storage-enumeration run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
-smoke-linux-buildroot-rom run-linux-buildroot-display \
-	smoke-linux-buildroot-display run-linux-buildroot-panel \
+	smoke-linux-buildroot-rom run-linux-buildroot-display \
+	smoke-linux-buildroot-display smoke-linux-buildroot-fb-test run-linux-buildroot-panel \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
@@ -845,6 +845,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable MEDIA_SUPPORT \
 		--disable DRM \
 		--enable FB \
+		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
 		--enable FB_SIMPLE
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
@@ -1307,8 +1308,26 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'panel entered RGB mode before VOU/GMA raster was active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000_fb_test: launch /usr/bin/fb-test -p 0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'fb-test 1.1.1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'fb res 320x240 virtual 320x240, line_len 640, bpp 16' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000_fb_test: complete rc=0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+	pixel() { \
+		dd if='$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm \
+			bs=1 skip=$$((15 + 3 * ($$2 * 320 + $$1))) count=3 2>/dev/null | \
+			od -An -tx1 | tr -d ' \n'; \
+	}; \
+	test "$$(pixel 0 0)" = ffffff; \
+	test "$$(pixel 100 0)" = 00ff00; \
+	test "$$(pixel 0 100)" = 0000ff; \
+	test "$$(pixel 319 100)" = ff0000; \
+	test "$$(pixel 100 239)" = ffff00
+
+smoke-linux-buildroot-fb-test: smoke-linux-buildroot-display
 
 run-linux-buildroot-audio: qemu
 	$(MAKE) ROOTFS=buildroot \
