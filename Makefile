@@ -59,6 +59,8 @@ BUILDROOT_AUDIO_ENTRY := buildroot/sf2000-audio-entry.S
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
+BUILDROOT_LOGD_SRC := buildroot/sf2000-logd.c
+BUILDROOT_LOGD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-logd
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN_CFLAGS :=
@@ -191,7 +193,8 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
 smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
 smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-storage-enumeration \
-smoke-linux-buildroot-storage-enumeration run-linux-buildroot-rom \
+smoke-linux-buildroot-storage-enumeration smoke-linux-buildroot-persistent-storage \
+run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
@@ -517,6 +520,12 @@ $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) 
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
+$(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) \
 		ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -571,7 +580,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1193,6 +1202,26 @@ smoke-linux-buildroot-storage-enumeration:
 	grep -q 'mmc0: new SDXC card' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-dma-read .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log
+
+smoke-linux-buildroot-persistent-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-persistent-storage.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-loglinux.XXXXXX.txt); \
+	tmp_test=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-test.XXXXXX.bin); \
+	trap 'rm -f $$tmp_sd $$tmp_log $$tmp_test' EXIT; \
+	truncate -s 64M "$$tmp_sd"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT=30s \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
+	mcopy -i "$$tmp_sd" ::sf2000-storage-test.bin "$$tmp_test"; \
+	grep -q 'source=storage storage-test=pass bytes=262144 hash=ec55efc5' "$$tmp_log"; \
+	grep -q 'source=kmsg ' "$$tmp_log"; \
+	grep -q 'source=heartbeat alive' "$$tmp_log"; \
+	test "$$(wc -c < "$$tmp_test")" -eq 262144; \
+	echo '61825158a601440496406cded7107a985e4201366c379dccb78f8b8a67398ec4  '"$$tmp_test" | sha256sum -c -; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-launch:
 	$(MAKE) ROOTFS=buildroot \

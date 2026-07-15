@@ -76,6 +76,15 @@ then verifies the same signature in QEMU's SD image. Linux QEMU runs default
 to the MIPS32r1 `4Km` fixed-mapping CPU model; `4Kc` models an R4000-style TLB
 and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 
+Normal Buildroot boots keep the detected VFAT card mounted at `/mnt/sd` and
+run a 256 KiB write, `fsync`, reopen, read, and checksum test. The
+`sf2000-logd` service appends `/loglinux.txt` on that card. Every record carries
+the 100 Hz monotonic tick, monotonic microseconds, process elapsed ticks, and
+logger user/system CPU ticks. It drains `/dev/kmsg`, records input events and
+USB/input topology changes, and commits buffered data after 8 KiB or two
+seconds, whichever occurs first. The integrity payload is retained as
+`/sf2000-storage-test.bin` so persistence can also be checked after shutdown.
+
 `smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
 the screen service's ready marker and rejects data-bus faults.
 `smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
@@ -114,6 +123,9 @@ The two HC16xx-compatible MUSB instances use the vendor endpoint layout
 forwards the device-tree MMIO and named IRQ resources to MUSB core; the normal
 Buildroot smoke requires both USB buses to register. USB1 uses SYSINT sources
 51 and 50, matching the vendor HC16xx device tree.
+`sf2000-logd` dynamically opens `/dev/input/event0` through `event15`, so a
+physical USB keyboard or mouse produces tick-stamped `source=input` records in
+`/loglinux.txt` without taking exclusive ownership away from applications.
 
 `smoke-qemu-unifrog` and `smoke-qemu-mufrog` consume the existing, read-only
 frontend build artifacts, construct disposable FAT images under `build/`, and
