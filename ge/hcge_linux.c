@@ -103,11 +103,13 @@ static bool hcge_surface_valid(const HCGE_CoreSurface *surface,
 		return false;
 	format = hcge_get_format(surface->config.format);
 	return format && surface->config.size.w > 0 &&
-		surface->config.size.h > 0 && buffer->phys &&
+		surface->config.size.w <= 0xfff &&
+		surface->config.size.h > 0 && surface->config.size.h <= 0xfff &&
+		buffer->phys &&
 		!(buffer->phys & (format->bytes - 1u)) &&
-		buffer->pitch >= format->bytes &&
+		buffer->pitch >= (uint32_t)surface->config.size.w * format->bytes &&
 		!(buffer->pitch % format->bytes) &&
-		buffer->pitch <= HCGE_IMAGE_PITCH_MAX;
+		buffer->pitch / format->bytes <= 0xfff;
 }
 
 static uint32_t hcge_surface_buffer(HCGESurfacePixelFormat format,
@@ -125,6 +127,34 @@ static bool hcge_rectangle_valid(const HCGERectangle *rectangle)
 		rectangle->w > 0 && rectangle->h > 0 && rectangle->x <= 0xfff &&
 		rectangle->y <= 0xfff && rectangle->w <= 0xfff &&
 		rectangle->h <= 0xfff;
+}
+
+static bool hcge_rectangle_in_surface(const HCGERectangle *rectangle,
+	const HCGE_CoreSurface *surface)
+{
+	return hcge_rectangle_valid(rectangle) && surface &&
+		rectangle->x + rectangle->w <= surface->config.size.w &&
+		rectangle->y + rectangle->h <= surface->config.size.h;
+}
+
+static uint32_t hcge_surface_offset(const HCGE_CoreSurface *surface,
+	const HCGE_CoreSurfaceBuffer *buffer, int x, int y)
+{
+	const struct hcge_format *format = hcge_get_format(surface->config.format);
+
+	return (uint32_t)buffer->phys + (uint32_t)y * buffer->pitch +
+		(uint32_t)x * format->bytes;
+}
+
+static bool hcge_blit_effects_supported(HCGESurfaceBlittingFlags flags)
+{
+	const uint32_t supported = HCGE_DSBLIT_FLIP_HORIZONTAL |
+		HCGE_DSBLIT_FLIP_VERTICAL | HCGE_DSBLIT_ROTATE90 |
+		HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270;
+	uint32_t rotations = flags & (HCGE_DSBLIT_ROTATE90 |
+		HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270);
+
+	return !(flags & ~supported) && (!rotations || !(rotations & (rotations - 1u)));
 }
 
 int hcge_open_context(hcge_context *ctx)
@@ -264,10 +294,13 @@ void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 	}
 	if (HCGE_DFB_BLITTING_FUNCTION(accel) &&
 	    hcge_get_format(state->source.config.format) &&
-	    state->source.config.format == state->destination.config.format &&
 	    state->render_options == HCGE_DSRO_NONE &&
-	    state->blittingflags == HCGE_DSBLIT_NOFX)
-		state->accel |= accel & (HCGE_DFXL_BLIT | HCGE_DFXL_STRETCHBLIT);
+	    hcge_blit_effects_supported(state->blittingflags)) {
+		state->accel |= accel & HCGE_DFXL_BLIT;
+		if (!(state->blittingflags & (HCGE_DSBLIT_ROTATE90 |
+				HCGE_DSBLIT_ROTATE180 | HCGE_DSBLIT_ROTATE270)))
+			state->accel |= accel & HCGE_DFXL_STRETCHBLIT;
+	}
 }
 
 void hcge_set_state(hcge_context *ctx, hcge_state *state,
@@ -286,11 +319,12 @@ bool hcge_fill_rect(hcge_context *ctx, HCGERectangle *rectangle)
 	const hcge_state *state;
 	uint32_t node[14];
 
-	if (!ctx || !hcge_rectangle_valid(rectangle))
+	if (!ctx)
 		return false;
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_FILLRECTANGLE ||
 	    state->drawingflags != HCGE_DSDRAW_NOFX ||
+	    !hcge_rectangle_in_surface(rectangle, &state->destination) ||
 	    !hcge_surface_valid(&state->destination, &state->dst))
 		return false;
 	node[0] = 0x02008367u;
@@ -315,30 +349,103 @@ bool hcge_fill_rect(hcge_context *ctx, HCGERectangle *rectangle)
 bool hcge_blit(hcge_context *ctx, HCGERectangle *source, int dx, int dy)
 {
 	const hcge_state *state;
-	uint32_t node[9];
+	uint32_t node[22];
+	uint32_t flags;
+	uint32_t source_context;
+	uint32_t destination_address;
+	uint32_t source_address;
+	uint32_t output_width;
+	uint32_t output_height;
+	const uint32_t *matrix = NULL;
+	static const uint32_t rotate_90[7] = {
+		0, 0, 0x8000ffffu, 0, 0x0000ffffu, 0, 0,
+	};
+	static const uint32_t rotate_180[7] = {
+		0, 0x8000ffffu, 0x80000000u, 0, 0, 0x8000ffffu, 0,
+	};
+	static const uint32_t rotate_270[7] = {
+		0, 0x80000000u, 0x0000ffffu, 0,
+		0x8000ffffu, 0x80000000u, 0,
+	};
 
-	if (!ctx || !hcge_rectangle_valid(source) || dx < 0 || dy < 0 ||
+	if (!ctx || dx < 0 || dy < 0 ||
 	    dx > 0xfff || dy > 0xfff)
 		return false;
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_BLIT ||
-	    state->blittingflags != HCGE_DSBLIT_NOFX ||
-	    state->destination.config.format != state->source.config.format ||
+	    !hcge_blit_effects_supported(state->blittingflags) ||
+	    !hcge_rectangle_in_surface(source, &state->source) ||
 	    !hcge_surface_valid(&state->destination, &state->dst) ||
 	    !hcge_surface_valid(&state->source, &state->src))
 		return false;
-	node[0] = 0x02000307u;
-	node[1] = 0x00000002u;
-	node[2] = (uint32_t)state->dst.phys;
+	flags = state->blittingflags;
+	output_width = source->w;
+	output_height = source->h;
+	if (flags & (HCGE_DSBLIT_ROTATE90 | HCGE_DSBLIT_ROTATE270)) {
+		output_width = source->h;
+		output_height = source->w;
+	}
+	if ((uint32_t)dx + output_width >
+			(uint32_t)state->destination.config.size.w ||
+		(uint32_t)dy + output_height >
+			(uint32_t)state->destination.config.size.h)
+		return false;
+
+	if (flags == HCGE_DSBLIT_NOFX &&
+	    state->destination.config.format == state->source.config.format) {
+		node[0] = 0x02000307u;
+		node[1] = 0x00000002u;
+		node[2] = (uint32_t)state->dst.phys;
+		node[3] = hcge_surface_buffer(state->destination.config.format,
+			state->dst.pitch);
+		node[4] = (uint32_t)state->src.phys;
+		node[5] = hcge_surface_buffer(state->source.config.format,
+			state->src.pitch);
+		node[6] = hcge_xy(dx, dy);
+		node[7] = hcge_wh(source->w, source->h);
+		node[8] = hcge_xy(source->x, source->y);
+		return hcge_linux_submit(ctx, node, 9) == 0;
+	}
+
+	/* Generic compositor path: cropped surfaces are zero-origin views. */
+	destination_address = hcge_surface_offset(&state->destination, &state->dst,
+		dx, dy);
+	source_address = hcge_surface_offset(&state->source, &state->src,
+		source->x, source->y);
+	source_context = hcge_surface_buffer(state->source.config.format,
+		state->src.pitch);
+	if (flags & HCGE_DSBLIT_FLIP_HORIZONTAL)
+		source_context |= 0x00100000u;
+	if (flags & HCGE_DSBLIT_FLIP_VERTICAL)
+		source_context |= 0x00200000u;
+	if (flags & HCGE_DSBLIT_ROTATE90)
+		matrix = rotate_90;
+	else if (flags & HCGE_DSBLIT_ROTATE180)
+		matrix = rotate_180;
+	else if (flags & HCGE_DSBLIT_ROTATE270)
+		matrix = rotate_270;
+
+	node[0] = matrix ? 0x0206870fu : 0x0202870fu;
+	node[1] = matrix ? 0x00a03009u : 0x00a00009u;
+	node[2] = destination_address;
 	node[3] = hcge_surface_buffer(state->destination.config.format,
 		state->dst.pitch);
-	node[4] = (uint32_t)state->src.phys;
-	node[5] = hcge_surface_buffer(state->source.config.format,
-		state->src.pitch);
-	node[6] = hcge_xy(dx, dy);
-	node[7] = hcge_wh(source->w, source->h);
-	node[8] = hcge_xy(source->x, source->y);
-	return hcge_linux_submit(ctx, node, sizeof(node) / sizeof(node[0])) == 0;
+	node[4] = destination_address;
+	node[5] = node[3];
+	node[6] = source_address;
+	node[7] = (matrix ? 0x40000000u : 0) | source_context;
+	node[8] = 0;
+	node[9] = hcge_wh(output_width, output_height);
+	node[10] = 0;
+	node[11] = 0;
+	node[12] = hcge_wh(source->w, source->h);
+	node[13] = 0x00004000u;
+	node[14] = hcge_surface_color(HCGE_DSPF_ARGB, state->color);
+	if (matrix) {
+		memcpy(node + 15, matrix, 7 * sizeof(*node));
+		return hcge_linux_submit(ctx, node, 22) == 0;
+	}
+	return hcge_linux_submit(ctx, node, 15) == 0;
 }
 
 bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
@@ -347,27 +454,44 @@ bool hcge_stretch_blit(hcge_context *ctx, HCGERectangle *source,
 	const hcge_state *state;
 	uint32_t node[22];
 
-	if (!ctx || !hcge_rectangle_valid(source) ||
-	    !hcge_rectangle_valid(destination) || source->x || source->y ||
-	    destination->x || destination->y)
+	const struct hcge_format *source_format;
+	const struct hcge_format *destination_format;
+	uint32_t source_address;
+	uint32_t destination_address;
+
+	if (!ctx)
 		return false;
 	state = &ctx->state;
 	if (state->accel != HCGE_DFXL_STRETCHBLIT ||
-	    state->blittingflags != HCGE_DSBLIT_NOFX ||
-	    state->destination.config.format != state->source.config.format ||
+	    (state->blittingflags & ~(HCGE_DSBLIT_FLIP_HORIZONTAL |
+		HCGE_DSBLIT_FLIP_VERTICAL)) ||
+	    !hcge_rectangle_in_surface(source, &state->source) ||
+	    !hcge_rectangle_in_surface(destination, &state->destination) ||
 	    !hcge_surface_valid(&state->destination, &state->dst) ||
 	    !hcge_surface_valid(&state->source, &state->src))
 		return false;
+	source_format = hcge_get_format(state->source.config.format);
+	destination_format = hcge_get_format(state->destination.config.format);
+	source_address = (uint32_t)state->src.phys +
+		(uint32_t)source->y * state->src.pitch +
+		(uint32_t)source->x * source_format->bytes;
+	destination_address = (uint32_t)state->dst.phys +
+		(uint32_t)destination->y * state->dst.pitch +
+		(uint32_t)destination->x * destination_format->bytes;
 	node[0] = 0x0206870fu;
 	node[1] = 0x00a03009u;
-	node[2] = (uint32_t)state->dst.phys;
+	node[2] = destination_address;
 	node[3] = hcge_surface_buffer(state->destination.config.format,
 		state->dst.pitch);
 	node[4] = node[2];
 	node[5] = node[3];
-	node[6] = (uint32_t)state->src.phys;
+	node[6] = source_address;
 	node[7] = 0x40000000u |
 		hcge_surface_buffer(state->source.config.format, state->src.pitch);
+	if (state->blittingflags & HCGE_DSBLIT_FLIP_HORIZONTAL)
+		node[7] |= 0x00100000u;
+	if (state->blittingflags & HCGE_DSBLIT_FLIP_VERTICAL)
+		node[7] |= 0x00200000u;
 	node[8] = 0;
 	node[9] = hcge_wh(destination->w, destination->h);
 	node[10] = 0;

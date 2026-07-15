@@ -208,7 +208,7 @@ smoke-linux-buildroot-rom run-linux-buildroot-display \
 	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
-	test-ge-source-capture test-ge-formats clean
+	test-ge-source-capture test-ge-formats test-ge-effects clean
 
 all: status
 
@@ -299,6 +299,15 @@ test-ge-formats: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
 		qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
 			"$$format" | cmp - '$(BUILD_DIR)/.hcge-vendor-format'; \
 	done; rm -f '$(BUILD_DIR)/.hcge-vendor-format'
+
+test-ge-effects: $(GE_VENDOR_CAPTURE) $(GE_SOURCE_CAPTURE)
+	set -e; for flags in 0x1000 0x2000 0x4000 0x01000000 0x02000000; do \
+		qemu-mipsel '$(GE_VENDOR_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 "$$flags" 0 | sed -n '2p' > '$(BUILD_DIR)/.hcge-vendor-effect'; \
+		qemu-mipsel '$(GE_SOURCE_CAPTURE)' 0 0 64 48 0 0 160 120 \
+			1 "$$flags" 0 | sed -n '2p' | \
+			cmp - '$(BUILD_DIR)/.hcge-vendor-effect'; \
+	done; rm -f '$(BUILD_DIR)/.hcge-vendor-effect'
 
 qemu:
 	$(MAKE) -C '$(QEMU_DIR)' build
@@ -1161,6 +1170,8 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'simple-framebuffer .*fb0: simplefb registered' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000_buildroot: framebuffer ready /dev/fb0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'sf2000-screen: GE accelerated console clear active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
