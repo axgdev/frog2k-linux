@@ -49,9 +49,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define SCREEN_TAG 0x0239u
-#define SF2000_PANEL_SYNC_ENABLE _IO('p', 0)
-#define SF2000_PANEL_SYNC_COUNT _IOR('p', 2, uint32_t)
-
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
@@ -323,11 +320,10 @@ static int panel_te_rising = 1;
 static unsigned panel_te_rearms;
 static int panel_rgb_vsync_enabled = 1;
 static uint32_t panel_rgb_clock_word = 0xb6060606u;
-static int gma_fixed_scanout;
-static int panel_sync_fd = -1;
 static void panel_set_window(void);
 static void panel_restart_frame(void);
 static void panel_te_service_sample(void);
+static void ge_copy_render_to_scanout(void);
 static void panel_te_irq_disable(void);
 
 struct glyph {
@@ -3190,12 +3186,6 @@ static void flush_present_memory(void)
 		gma_frame_flush_bytes, BCACHE);
 }
 
-static void flush_scanout_memory(void)
-{
-	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF),
-		gma_frame_flush_bytes, BCACHE);
-}
-
 static void ge_display_open(void)
 {
 	char line[96];
@@ -3215,17 +3205,22 @@ static void ge_display_open(void)
 	}
 }
 
-static int ge_fill_render(uint16_t color)
+static int ge_fill_rgb565(uint32_t destination, uint16_t color)
 {
-	static int logged;
 	hcge_state *state;
 	HCGERectangle rectangle = { 0, 0, WIDTH, HEIGHT };
 	int sync_ret;
 
 	if (!display_ge)
 		return -1;
-	/* Discard all stale CPU lines before the GE becomes the buffer writer. */
-	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	/*
+	 * Discard stale CPU lines before the GE becomes the buffer writer.  The
+	 * original SF2000 firmware performs a direct GE clear of its eventual
+	 * GMA bitmap before the first descriptor is installed; do the same for
+	 * both the render and scanout surfaces.
+	 */
+	(void)cacheflush((void *)(gma_ram + destination - GMA_RAM_PHYS),
+		FRAME_BYTES, BCACHE);
 	state = &display_ge->state;
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
@@ -3233,7 +3228,7 @@ static int ge_fill_render(uint16_t color)
 	state->destination.config.format = HCGE_DSPF_RGB16;
 	state->destination.config.size.w = WIDTH;
 	state->destination.config.size.h = HEIGHT;
-	state->dst.phys = GMA_RENDER_PHYS;
+	state->dst.phys = destination;
 	state->dst.pitch = PITCH;
 	state->color.a = 0xff;
 	state->color.r = (uint8_t)(((color >> 11) & 0x1fu) << 3);
@@ -3246,13 +3241,37 @@ static int ge_fill_render(uint16_t color)
 	sync_ret = hcge_engine_sync(display_ge);
 	if (sync_ret < 0)
 		return -1;
-	/* The CPU draws glyphs next; invalidate the GE-written cache lines. */
-	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	/* Invalidate cache lines written by the GE DMA master. */
+	(void)cacheflush((void *)(gma_ram + destination - GMA_RAM_PHYS),
+		FRAME_BYTES, BCACHE);
+	return 0;
+}
+
+static int ge_fill_render(uint16_t color)
+{
+	static int logged;
+
+	if (ge_fill_rgb565(GMA_RENDER_PHYS, color) < 0)
+		return -1;
 	if (!logged) {
 		log_line("sf2000-screen: GE accelerated console clear active\n");
 		progress_mark("screen-ge-console-fill-ok", 0x3fu, SCREEN_TAG);
 		logged = 1;
 	}
+	return 0;
+}
+
+static int ge_prepare_scanout(void)
+{
+	progress_mark("screen-ge-scanout-init-begin", 0x3fu, GMA_FRAME_PHYS);
+	if (ge_fill_rgb565(GMA_FRAME_PHYS, 0) < 0) {
+		progress_mark("screen-ge-scanout-init-fail", 0x3fu,
+			GMA_FRAME_PHYS);
+		return -1;
+	}
+	progress_mark("screen-ge-scanout-clear-ok", 0x3fu, GMA_FRAME_PHYS);
+	ge_copy_render_to_scanout();
+	progress_mark("screen-ge-scanout-init-done", 0x3fu, GMA_FRAME_PHYS);
 	return 0;
 }
 
@@ -3652,24 +3671,12 @@ static void present_frame(void)
 	static unsigned presents;
 
 	/*
-	 * The console always scans the same physical RGB565 surface.  Descriptor
-	 * doorbells are required only while establishing ownership: repeatedly
-	 * alternating two otherwise identical descriptors races the recovered
-	 * ST7789 TE/RAMWR transaction and was the actual difference between the
-	 * stable G1 dwell in log76 and the shortened static-producing path.
-	 *
-	 * Submit two independently latched descriptors before RGB ownership moves
-	 * to the panel.  Once the native descriptor is fixed, update only its
-	 * source pixels; GMA continues scanning that surface without a new DMBA.
+	 * Match gma_dmba_update() from the vendor framebuffer driver: build the
+	 * inactive 0x280-byte block, ring DMBA, then alternate blocks on every
+	 * update.  This keeps the active descriptor immutable while giving HC15 a
+	 * real frame-boundary transaction for each completed GE frame.
 	 */
 	presents++;
-	if (presents > 2u && gma_fixed_scanout) {
-		ge_copy_render_to_scanout();
-		flush_scanout_memory();
-		if (presents <= 6u)
-			progress_mark("screen-scanout-refresh", 0x3fu, presents);
-		return;
-	}
 	if (presents > 1u)
 		build_gma_descriptor();
 	if (presents <= 4u)
@@ -3944,16 +3951,25 @@ static int condition_native_scanout(void)
 	unsigned milestone = 0;
 	unsigned elapsed_ms = 0;
 	unsigned rearmed;
-	uint32_t kernel_edges = 0;
 
 	/*
-	 * Keep one already-latched native descriptor completely immutable while
-	 * validating the userspace TE/RAMWR path.  The previous "four edge"
-	 * implementation rebuilt and rang a different descriptor on every loop
-	 * iteration, so it never tested a stable raster.
+	 * G1 is the first sharp frame in every successful physical run.  Its
+	 * defining operation is a native descriptor update after RAMCTRL and the
+	 * shared pads have changed to RGB ownership.  Submit that frame once, wait
+	 * for its hardware mirror, then allow the first four TE/RAMWR boundaries
+	 * to complete before leaving the panel in continuous RGB mode.
 	 */
 	progress_mark("screen-native-hold-begin", 0x3fu,
 		CONDITIONING_TE_EDGES);
+	draw_console_screen(0);
+	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
+	progress_mark("screen-native-present", 0x3fu, gma_desc_phys);
+	present_frame_profile(&gma_scanout_profiles[3]);
+	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
+		progress_mark("screen-native-present-fail", 0x3fu,
+			gma_desc_phys);
+		return -1;
+	}
 	while (!stopping) {
 		uint64_t now_us;
 
@@ -3996,58 +4012,16 @@ static int condition_native_scanout(void)
 	}
 
 	/*
-	 * MuFrog does not stop after an arbitrary conditioning interval: its
-	 * vsync_irq() repeats this transaction on every L08 TE edge for the life
-	 * of the display.  Transfer that job to the kernel only after the fixed
-	 * descriptor and userspace path have both been proven.  No later code may
-	 * change DMBA, so the interrupt cannot race a descriptor swap.
+	 * The physical log77 interrupt count was about twice the panel frame rate,
+	 * proving that the experimental kernel handler was retriggering on the
+	 * GPIO level rather than servicing one edge.  That repeatedly disconnected
+	 * the RGB pads and recreated the moving static.  The ownership transaction
+	 * is complete here; steady RGB scanout needs no further MCU commands.
 	 */
-	panel_sync_fd = open("/dev/sf2000-panel-sync", O_RDWR | O_CLOEXEC);
-	progress_mark("screen-panel-sync-fd", 0x3fu,
-		(uint32_t)panel_sync_fd);
-	if (panel_sync_fd < 0 ||
-	    ioctl(panel_sync_fd, SF2000_PANEL_SYNC_ENABLE, 0) < 0) {
-		progress_mark("screen-panel-sync-fail", 0x3fu,
-			(uint32_t)errno);
-		if (panel_sync_fd >= 0) {
-			close(panel_sync_fd);
-			panel_sync_fd = -1;
-		}
-		return -1;
-	}
 	panel_te_streaming = 0;
-	gma_fixed_scanout = 1;
-	(void)ioctl(panel_sync_fd, SF2000_PANEL_SYNC_COUNT, &kernel_edges);
-	progress_mark("screen-panel-sync-edges", 0x3fu, kernel_edges);
-	progress_mark("screen-panel-sync-enabled", 0x3fu, kernel_edges);
 	progress_mark("screen-native-hold-done", 0x3fu, rearmed);
 	progress_mark("screen-te-conditioning-done", 0x3fu, panel_te_rearms);
-	progress_mark("screen-gma-fixed-scanout", 0x3fu, gma_desc_phys);
 	return 0;
-}
-
-static void sample_panel_sync(unsigned frame)
-{
-	uint32_t edges = 0;
-
-	if (panel_sync_fd < 0 || (frame > 8u && (frame & 31u)))
-		return;
-	if (ioctl(panel_sync_fd, SF2000_PANEL_SYNC_COUNT, &edges) == 0) {
-		progress_mark("screen-panel-sync-live", 0x3fu, edges);
-		if (frame <= 2u || !(frame & 31u)) {
-			progress_mark("screen-fixed-dmba-live", 0x3fu,
-				mmio_read32(gma, GMA_DMBA_HW));
-			progress_mark("screen-fixed-gma-live", 0x3fu,
-				mmio_read32(gma, GMA_CTL_HW));
-			progress_mark("screen-sync-pin-clock", 0x3fu,
-				mmio_read32(sysio, PINMUX_L_OFF + 0x04u));
-			progress_mark("screen-sync-pin-control", 0x3fu,
-				mmio_read32(sysio, PINMUX_L_OFF + 0x08u));
-		}
-	} else {
-		progress_mark("screen-panel-sync-read-fail", 0x3fu,
-			(uint32_t)errno);
-	}
 }
 
 static void run_direct_console(unsigned *frame)
@@ -4095,6 +4069,14 @@ static void run_direct_console(unsigned *frame)
 		cmdline_contains("SF2000_GE_DIAG=1");
 	if (ge_diagnostics)
 		run_ge_mcu_probe(*frame);
+	/*
+	 * The closed firmware clears its future GMA bitmap with GE before its
+	 * first doorbell.  E2 accidentally supplied this initialization in all
+	 * sharp test runs; make it an explicit, non-visible production step.
+	 */
+	if (ge_prepare_scanout() < 0)
+		progress_mark("screen-ge-scanout-init-degraded", 0x3fu,
+			GMA_FRAME_PHYS);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering
@@ -4155,10 +4137,7 @@ static void run_direct_console(unsigned *frame)
 		}
 		panel_te_streaming = 1;
 	}
-	/*
-	 * Complete the recovered ownership transition with the final native
-	 * descriptor fixed, then hand continuous TE/RAMWR service to the kernel.
-	 */
+	/* Complete the recovered ownership transition with one post-switch frame. */
 	if (condition_native_scanout() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu,
 			SCREEN_TAG);
@@ -4226,7 +4205,6 @@ handoff_complete:
 				present_frame();
 			else
 				panel_push_frame(0);
-			sample_panel_sync(*frame);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present-done", 0x3fu, *frame);
 			idle = 0;

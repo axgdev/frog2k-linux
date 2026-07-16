@@ -601,7 +601,6 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
-		printf 'nod /dev/sf2000-panel-sync 0660 0 0 c 10 244\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -847,7 +846,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
 		--enable SF2000_GE \
-		--enable SF2000_PANEL_SYNC \
+		--disable SF2000_PANEL_SYNC \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
 		--disable SND_PCM_OSS \
@@ -1294,7 +1293,10 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-scanout-refresh' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-scanout-init-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-scanout-clear-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-scanout-init-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-ge-scanout-init-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1314,20 +1316,11 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x00000004 name=screen-native-hold-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000004 name=screen-native-hold-count' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000004 name=screen-native-hold-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-native-hold-ms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-sync-enabled' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-sync-edges' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-sync-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00040001 name=screen-fixed-gma-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-fixed-dmba-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0xb6060606 name=screen-sync-pin-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	sync_control="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-sync-pin-control.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
-		test $$((sync_control & 0x00ffffff)) -eq 394752
-	! grep -q 'name=screen-panel-sync-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-panel-sync-read-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-gma-fixed-scanout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-native-present-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
