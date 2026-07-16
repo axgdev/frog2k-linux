@@ -16,6 +16,7 @@
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "ge_api.h"
@@ -276,6 +277,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_INPUT_REOPEN_TICKS 100u
 #define CONSOLE_KMSG_READS_PER_FRAME 64u
 #define CONDITIONING_FRAME_DWELL_MS 80u
+#define CONDITIONING_TE_EDGES 4u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -1034,8 +1036,25 @@ static void progress_mark_reset_snapshot_fast(void)
 
 static void sleep_ms(unsigned msec)
 {
+	struct timespec delay;
 	volatile unsigned spin;
 	unsigned i;
+
+	/*
+	 * Only the short RGB ownership interval needs cycle-level polling of the
+	 * narrow L08 TE pulse.  The old diagnostic delay busy-spun permanently,
+	 * consuming the entire CPU after handoff.  Use the kernel clock whenever
+	 * TE sampling is not active.
+	 */
+	if (!panel_te_streaming) {
+		delay.tv_sec = msec / 1000u;
+		delay.tv_nsec = (long)(msec % 1000u) * 1000000L;
+		watchdog_pet();
+		while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
+			;
+		watchdog_pet();
+		return;
+	}
 
 	for (i = 0; i < msec && !stopping; i++) {
 		if ((i & 31u) == 0)
@@ -3857,48 +3876,47 @@ static void panel_apply_sync_profile(
 
 static int run_gma_descriptor_probe(void)
 {
-	unsigned i;
+	const struct gma_descriptor_profile *profile =
+		&gma_descriptor_profiles[0];
+	unsigned start_rearms = panel_te_rearms;
+	unsigned elapsed;
 
-	progress_mark("screen-gma-probe-begin", 0x3fu,
-		ARRAY_SIZE(gma_descriptor_profiles));
-	for (i = 0; i < ARRAY_SIZE(gma_descriptor_profiles) && !stopping; i++) {
-		const struct gma_descriptor_profile *profile =
-			&gma_descriptor_profiles[i];
-		uint32_t detail = (i << 24) |
-			((uint32_t)profile->src_w << 12) | profile->src_h;
-
-		/* Each label is drawn into the exact source buffer under test. */
-		draw_diag_screen("GMA GEOMETRY PROBE", profile->name,
-			0x70, 0x400u + i);
+	/*
+	 * Logs 52/55/56 showed that G1 was already sharp.  The later G2-G8
+	 * descriptors therefore supplied no format discovery; their only lasting
+	 * effect was allowing several TE/frame-boundary transactions before the
+	 * native descriptor was restored.  Condition that hardware contract
+	 * directly with the proven MuFrog descriptor and stop polling once the
+	 * required edges have occurred.
+	 */
+	progress_mark("screen-gma-condition-begin", 0x3fu,
+		CONDITIONING_TE_EDGES);
+	draw_console_screen(0);
+	for (elapsed = 0; elapsed < 500u && !stopping; elapsed++) {
 		build_gma_descriptor_profile(profile);
-		progress_mark("screen-probe-phase-render", 0x3fu, detail);
-		progress_mark("screen-probe-d0", 0x3fu, profile->d0);
-		progress_mark("screen-probe-d4", 0x3fu,
-			((uint32_t)profile->src_h << 16) | profile->src_w);
-		progress_mark("screen-probe-d5", 0x3fu,
-			((uint32_t)profile->pitch << 16) | 0xffu);
-		progress_mark("screen-probe-d9", 0x3fu, profile->d9);
 		present_frame_profile(&gma_scanout_profiles[3]);
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
-			progress_mark("screen-probe-raster-fail", 0x3fu, detail);
+			progress_mark("screen-gma-condition-raster-fail", 0x3fu,
+				gma_desc_phys);
 			return -1;
 		}
-
-		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
-		progress_mark("screen-probe-phase-live", 0x3fu, detail);
-		/*
-		 * Raster observation above is the hardware completion contract.  Keep
-		 * one comfortably visible panel interval without turning the recovered
-		 * state walk into a twelve-second boot animation.
-		 */
-		sleep_ms(CONDITIONING_FRAME_DWELL_MS);
-		progress_mark("screen-probe-phase-rearms", 0x3fu,
-			(i << 24) | (panel_te_rearms & 0x00ffffffu));
-		progress_mark("screen-probe-phase-done", 0x3fu, detail);
+		if (panel_te_rearms - start_rearms >= CONDITIONING_TE_EDGES)
+			break;
+		sleep_ms(1);
 	}
-	progress_mark("screen-gma-probe-done", 0x3fu,
-		ARRAY_SIZE(gma_descriptor_profiles));
-	return stopping ? -1 : 0;
+	progress_mark("screen-gma-condition-edges", 0x3fu,
+		panel_te_rearms - start_rearms);
+	if (elapsed == 500u || stopping)
+		return -1;
+
+	/*
+	 * RAMWR rearming is needed to transfer ownership, not to render steady
+	 * RGB frames.  Leaving it enabled forced every later sleep to poll GPIO
+	 * in userspace and kept the CPU at 100%.
+	 */
+	panel_te_streaming = 0;
+	progress_mark("screen-te-conditioning-done", 0x3fu, panel_te_rearms);
+	return 0;
 }
 
 static void run_direct_console(unsigned *frame)
@@ -3974,14 +3992,7 @@ static void run_direct_console(unsigned *frame)
 	panel_commit_rgb_handoff();
 	rgb_active = 1;
 	mark_hc15_display_state(1);
-	/*
-	 * This is hardware conditioning, not merely a visual diagnostic.  Every
-	 * physically proven clear run (logs 52, 55, 56 and 64) walks the complete
-	 * descriptor state matrix; log65 skipped it with otherwise identical live
-	 * registers and returned to the moving grouped-pixel failure.  Preserve the
-	 * recovered vendor state transition until a smaller sequence is proven on
-	 * the HC15xx itself.
-	 */
+	/* Complete the recovered TE/frame-boundary ownership transition. */
 	if (run_gma_descriptor_probe() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu,
 			SCREEN_TAG);

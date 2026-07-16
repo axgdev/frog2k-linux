@@ -103,12 +103,20 @@ The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
 the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
-The MCU/GE screens and G1-G8 remain mandatory parts of the HC15xx display
-handoff. Logs 65 and 66 form a controlled physical comparison: restoring the
-descriptor walk alone does not fix scanout when the completed MCU GRAM
-transaction is omitted. All exposed VOU/GMA latches can report success while
-the panel produces moving bands. The short startup backlight sequence likewise
-remains part of the validated panel contract.
+The MCU/GE checks remain part of the HC15xx display handoff, but the former
+G1-G8 animation has been reduced to its actual hardware purpose. Logs 52, 55
+and 56 showed that the first native MuFrog descriptor was already sharp; the
+remaining descriptor variants only allowed several TE/frame-boundary ownership
+transactions to occur. Production now keeps the native 320x240 RGB565
+descriptor fixed, waits for four observed L08 TE edges and matching GMA hardware
+latches, then stops userspace TE polling. This preserves the recovered panel
+contract without testing deliberately invalid geometries on every boot.
+
+The display service uses `nanosleep` outside that bounded TE-conditioning
+window. The earlier diagnostic delay loop busy-spun forever after RGB handoff;
+physical profiles showed it consuming essentially 100% of the only CPU. Panel
+reset and command delays now use the kernel clock, while only the narrow initial
+TE pulse is sampled at cycle-level resolution.
 
 When explicitly enabled, init disarms the display watchdog, terminates the
 console by its supervised PID, and waits for kernel-owned GE cleanup without
