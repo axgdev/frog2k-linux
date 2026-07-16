@@ -49,6 +49,8 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define SCREEN_TAG 0x0239u
+#define SF2000_PANEL_SYNC_ENABLE _IO('p', 0)
+#define SF2000_PANEL_SYNC_COUNT _IOR('p', 2, uint32_t)
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -278,7 +280,6 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_KMSG_READS_PER_FRAME 64u
 #define CONDITIONING_FRAME_DWELL_MS 80u
 #define CONDITIONING_TE_EDGES 4u
-#define PANEL_MCU_PRIME_FRAMES 4u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -3465,34 +3466,6 @@ static void run_ge_mcu_probe(unsigned frame)
 	progress_mark("screen-ge-mcu-probe-done", 0x3fu, 3u);
 }
 
-static void panel_prime_rgb_handoff(unsigned frame)
-{
-	unsigned i;
-
-	/*
-	 * The ST7789 shares its data pins between the 8080/MCU writer and live
-	 * RGB input.  Every sharp physical run (52, 55, 56 and 64) completed the
-	 * initial console write plus four further full GRAM transactions before
-	 * transferring those pins.  Removing the visible GE probe accidentally
-	 * removed those transactions and log73 immediately returned to a moving,
-	 * unlocked RGB raster even though VOU/GMA shadow latches were correct.
-	 *
-	 * Prime that panel-side ownership boundary explicitly.  Each iteration
-	 * is a complete CASET/RASET/RAMWR frame, so its completion—not an
-	 * arbitrary sleep—defines the wait.  Keep the same console in GRAM
-	 * throughout; GE diagnostics remain optional and are not part of the
-	 * production hardware contract.
-	 */
-	progress_mark("screen-mcu-prime-begin", 0x3fu,
-		PANEL_MCU_PRIME_FRAMES);
-	for (i = 0; i < PANEL_MCU_PRIME_FRAMES && !stopping; i++) {
-		draw_console_screen(frame);
-		panel_push_frame(0);
-		progress_mark("screen-mcu-prime-frame", 0x3fu, i + 1u);
-	}
-	progress_mark("screen-mcu-prime-done", 0x3fu, i);
-}
-
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 {
 	uint32_t value = mmio_read32(gma, off);
@@ -3904,12 +3877,37 @@ static int run_gma_descriptor_probe(void)
 	if (elapsed == 500u || stopping)
 		return -1;
 
-	/*
-	 * RAMWR rearming is needed to transfer ownership, not to render steady
-	 * RGB frames.  Leaving it enabled forced every later sleep to poll GPIO
-	 * in userspace and kept the CPU at 100%.
-	 */
-	panel_te_streaming = 0;
+	{
+		int sync_fd = open("/dev/sf2000-panel-sync",
+			O_RDWR | O_CLOEXEC);
+
+		progress_mark("screen-panel-sync-fd", 0x3fu,
+			(uint32_t)sync_fd);
+		if (sync_fd >= 0 &&
+		    ioctl(sync_fd, SF2000_PANEL_SYNC_ENABLE, 0) == 0) {
+			uint32_t count = 0;
+
+			/*
+			 * The kernel now mirrors the vendor TE interrupt on every
+			 * frame.  Stop userspace sampling only after that ownership
+			 * transfer succeeds.  Keep the descriptor open for process
+			 * lifetime so the synchronizer cannot be removed underneath
+			 * scanout.
+			 */
+			panel_te_streaming = 0;
+			(void)ioctl(sync_fd, SF2000_PANEL_SYNC_COUNT, &count);
+			progress_mark("screen-panel-sync-enabled", 0x3fu, count);
+		} else {
+			if (sync_fd >= 0)
+				close(sync_fd);
+			/*
+			 * Correctness fallback for an older kernel: continue servicing
+			 * TE in userspace even though polling costs CPU.
+			 */
+			progress_mark("screen-panel-sync-fallback", 0x3fu,
+				(uint32_t)errno);
+		}
+	}
 	progress_mark("screen-te-conditioning-done", 0x3fu, panel_te_rearms);
 	return 0;
 }
@@ -3956,8 +3954,6 @@ static void run_direct_console(unsigned *frame)
 	if (env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
 	    cmdline_contains("SF2000_GE_DIAG=1"))
 		run_ge_mcu_probe(*frame);
-	else
-		panel_prime_rgb_handoff(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering
