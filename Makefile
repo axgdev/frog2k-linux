@@ -973,8 +973,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
 		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
 		printf 'Display handoff:\n'; \
-		printf '  Normal boot emits one loader health blink, then keeps the backlight dark.\n'; \
-		printf '  The display service enables it only after a complete controlled frame is in panel GRAM.\n'; \
+		printf '  Normal boot emits one loader health blink and leaves the backlight visible.\n'; \
+		printf '  Inherited panel RAM may appear briefly until the selected controlled frame is ready.\n'; \
 		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
 			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
@@ -1267,10 +1267,11 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-clock-fast' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
-		test "$$panel_push_line" -lt "$$backlight_line"
+	grep -q 'name=screen-boot-backlight-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000012 name=screen-panel-seq-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-panel-seq-invalid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1340,10 +1341,10 @@ smoke-linux-buildroot-boot-logo:
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_BOOT_VISUAL=logo SF2000_BOOT_COLOR=0x0010 SF2000_BOOT_HOLD_MS=0' \
 		run-linux-buildroot-display
 	grep -q 'value=0x00000002 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
-		test "$$panel_push_line" -lt "$$backlight_line"
+	grep -q 'name=screen-boot-backlight-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000012 name=screen-panel-seq-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-panel-seq-invalid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 
 smoke-linux-buildroot-fb-test:
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \

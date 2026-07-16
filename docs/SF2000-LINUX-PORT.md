@@ -44,11 +44,11 @@ address of a large static BSS object in a non-PIC MIPS FLAT executable can
 leave the link-time low address in generated code even though the process
 itself entered through its KSEG0 alias. The GE context was therefore reported
 as `0x00027768` instead of an address in the process mapping and faulted on its
-first initialization store. Long-lived caller-owned objects that must be
-passed by address are now kept in the persistent `main()` stack frame (or
-allocated by a proven allocator), and retained address markers make this
-failure visible. The valid QEMU address is in the process KSEG0 range. This was
-not a GE register or `memset()` problem.
+first initialization store. The small GE context is therefore kept in
+`main()`'s persistent stack frame; the minimal NOMMU process deliberately has
+no usable general-purpose heap. Retained address markers make this failure
+visible. The valid QEMU address is in the process KSEG0 range. This was not a
+GE register or `memset()` problem.
 
 ## Boot artifacts and loader handoff
 
@@ -71,7 +71,8 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves the backlight dark until userspace owns a complete frame.
+5. leaves the backlight visible so a later userspace failure cannot look like
+   a dead device.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -135,11 +136,11 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. keep the backlight off;
+1. keep the backlight visible as the boot liveness fallback;
 2. configure and reset the SF2000 ST7789 panel in the original command order;
 3. render the selected console, solid color, or built-in logo;
 4. push one complete 320x240 MCU GRAM transaction;
-5. turn on the backlight, so inherited panel RAM is never visible;
+5. replace inherited panel RAM with the configured controlled frame;
 6. use GE to clear the exact future GMA scanout surface and copy the prepared
    render surface into it;
 7. start and latch VOU while the panel pins remain MCU-owned;
@@ -185,9 +186,16 @@ production does not traverse them.
   shared MCU/RGB bus, reproducing static.
 - Descriptor readback alone is insufficient. The hardware `CTL_HW` and
   `DMBA_HW` mirrors must be observed after VOU is live.
-- The brief pre-Linux noise frame was old ST7789 GRAM exposed by the backlight,
-  not a need for another GMA diagnostic. Keeping the backlight dark through the
-  first complete MCU push removes it.
+- The recovered panel tables are length-delimited, not reliably
+  zero-sentinel-terminated. The old interpreter read one byte past the SF2000
+  table and only stopped when the next static object happened to begin with
+  zero. A later data-layout change made physical log79 execute unrelated bytes
+  as panel commands. The interpreter now receives the array size, validates
+  every count, and records each command in retained RAM.
+- The brief pre-Linux noise frame is old ST7789 GRAM exposed by the backlight,
+  not a need for another GMA diagnostic. Hiding it entirely also hides every
+  failure before the first userspace frame, so production keeps the panel
+  visible and accepts the short dirty frame as a liveness indicator.
 
 ### Configurable first frame
 

@@ -1,0 +1,19 @@
+From: SF2000 Linux Port <sf2000-linux@example.invalid>
+Subject: [PATCH] MIPS: sf2000: keep boot progress visible
+
+The userspace display owner can fail before committing its first frame.  A
+dark-backlight policy then makes a running kernel look like a dead handheld and
+removes the only immediate physical liveness signal.
+
+Keep the nonblocking kernel progress helpers visible.  They do not add delays;
+the display service replaces inherited panel RAM with its configured frame as
+soon as the guarded panel initialization succeeds.
+
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -649 +649 @@ void sf2000_visible_stage(const char *name, unsigned int pulses)
+-	sf2000_backlight_set(0);
++	sf2000_backlight_set(1);
+@@ -664 +664 @@ void sf2000_visible_tick(const char *name)
+-	sf2000_backlight_set(0);
++	sf2000_backlight_set(1);
