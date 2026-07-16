@@ -14,7 +14,7 @@
  #include <linux/platform_device.h>
  #include <linux/usb/phy.h>
  #include <linux/usb/usb_phy_generic.h>
-@@ -14,10 +17,39 @@
+@@ -14,10 +17,38 @@
  #include "musb_core.h"
  
  struct sf2000_glue {
@@ -40,7 +40,6 @@
 +#define SF2000_USB_UTMI_CTRL		0x380
 +#define SF2000_USB0_PHY_TRIM		0x004
 +#define SF2000_USB1_PHY_TRIM		0x104
-+#define SF2000_USB0_HOST_TRIM		0x020
 +
 +static void sf2000_update32(void __iomem *addr, u32 clear, u32 set)
 +{
@@ -54,7 +53,7 @@
  static struct musb_fifo_cfg sf2000_fifo_cfg[] = {
  	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512 },
  	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512 },
-@@ -60,8 +92,96 @@
+@@ -60,8 +91,96 @@
  	return ret;
  }
  
@@ -97,13 +96,13 @@
 +{
 +	u8 value;
 +
++	/* Exact __hcmusb_15xx_set_mode(..., USB_DR_MODE_HOST=1) branch. */
 +	if (!glue->index) {
 +		value = readb(musb->mregs + SF2000_USB_UTMI_CTRL);
-+		writeb(value & ~BIT(7), musb->mregs + SF2000_USB_UTMI_CTRL);
-+		writew(0x10c0, glue->phy + SF2000_USB0_HOST_TRIM);
++		writeb(value | BIT(7), musb->mregs + SF2000_USB_UTMI_CTRL);
 +	} else {
 +		value = readb(musb->mregs + SF2000_USB_UTMI_CTRL);
-+		writeb(value | BIT(6), musb->mregs + SF2000_USB_UTMI_CTRL);
++		writeb(value & ~BIT(6), musb->mregs + SF2000_USB_UTMI_CTRL);
 +	}
 +
 +	/* Force a clean A-device session edge, as required by HC15xx. */
@@ -151,7 +150,7 @@
  	musb->xceiv = devm_usb_get_phy(musb->controller->parent,
  					 USB_PHY_TYPE_USB2);
  	if (IS_ERR(musb->xceiv))
-@@ -69,6 +189,14 @@
+@@ -69,6 +188,14 @@
  
  	musb->dyn_fifo = true;
  	musb->isr = sf2000_musb_interrupt;
@@ -166,7 +165,7 @@
  	return 0;
  }
  
-@@ -81,6 +209,7 @@
+@@ -81,6 +208,7 @@
  	.quirks = MUSB_DMA_INVENTRA | MUSB_INDEXED_EP,
  	.init = sf2000_musb_init,
  	.exit = sf2000_musb_exit,
@@ -174,7 +173,7 @@
  };
  
  static int sf2000_usb_probe(struct platform_device *pdev)
-@@ -93,11 +222,13 @@
+@@ -93,11 +221,13 @@
  	};
  	struct sf2000_glue *glue;
  	struct platform_device *musb;
@@ -188,7 +187,7 @@
  
  	glue->usb_phy = usb_phy_generic_register();
  	if (IS_ERR(glue->usb_phy))
-@@ -105,6 +236,29 @@
+@@ -105,6 +235,29 @@
  	if (!glue->usb_phy)
  		return -ENODEV;
  
@@ -218,7 +217,7 @@
  	musb = platform_device_alloc("musb-hdrc", PLATFORM_DEVID_AUTO);
  	if (!musb) {
  		ret = -ENOMEM;
-@@ -124,12 +278,12 @@
+@@ -124,12 +277,12 @@
  	if (ret)
  		goto err_put;
  
@@ -232,7 +231,7 @@
  
  	dev_info(&pdev->dev, "registered SF2000 musb-hdrc glue\n");
  	return 0;
-@@ -151,6 +305,7 @@
+@@ -151,6 +304,7 @@
  }
  
  static const struct of_device_id sf2000_usb_of_match[] = {

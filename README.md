@@ -134,7 +134,10 @@ The two HC15xx MUSB instances use the vendor endpoint layout (seven endpoints,
 SF2000 vendor reset, shared-PHY trim, UTMI power, host-mode, and session-edge
 sequence. Reset and PHY power run during platform initialization, while the ID
 override and session edge run from the MUSB `set_mode` callback after core has
-finished clearing `POWER` and `DEVCTL`. The normal Buildroot smoke
+finished clearing `POWER` and `DEVCTL`. HC15xx uses opposite ID-override
+polarity on its two ports: host mode sets USB0 UTMI bit 7 and clears USB1 UTMI
+bit 6, matching the vendor `USB_DR_MODE_HOST` branch and the SF2000 USB-A
+routing to USB1. The normal Buildroot smoke
 requires both USB buses to register. USB1 uses SYSINT sources 51 and 50,
 matching the proven SF2000 firmware contract.
 `sf2000-logd` dynamically opens `/dev/input/event0` through `event15`, so a
