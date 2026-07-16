@@ -165,6 +165,14 @@
 			status = "okay";
 		};
 
+		panel_sync: panel-sync@18800000 {
+			compatible = "hichip,sf2000-panel-sync";
+			reg = <0x18800000 0x1000>,
+			      <0x18808000 0x1000>;
+			interrupts = <0>;
+			status = "okay";
+		};
+
 		usb0: usb@18844000 {
 			compatible = "hichip,hc15xx-musb";
 			reg = <0x18844000 0x1000>;

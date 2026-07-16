@@ -103,14 +103,24 @@ The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
 the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
-The MCU/GE checks remain part of the HC15xx display handoff, but the former
-G1-G8 animation has been reduced to its actual hardware purpose. Logs 52, 55
-and 56 showed that the first native MuFrog descriptor was already sharp; the
-remaining descriptor variants only allowed several TE/frame-boundary ownership
-transactions to occur. Production now keeps the native 320x240 RGB565
-descriptor fixed, waits for four observed L08 TE edges and matching GMA hardware
-latches, then stops userspace TE polling. This preserves the recovered panel
-contract without testing deliberately invalid geometries on every boot.
+The broad MCU/GE and G1-G8 cards are available with `SF2000_GE_DIAG=1`, but
+normal boot no longer depends on displaying them. Physical log76 exposed their
+real side effect: G1 kept one native descriptor unchanged for 203 panel
+TE/RAMWR transactions. The shortened replacement accidentally rebuilt and rang
+an alternate descriptor on every loop iteration while claiming to wait for a
+stable raster. A later interrupt-backed experiment did service the panel
+continuously, but could preempt those same asynchronous descriptor swaps.
+
+Production now latches the native 320x240 RGB565 descriptor twice before panel
+ownership changes, verifies four L08 TE/RAMWR transactions without touching
+that descriptor, and then transfers continuous TE service to a kernel interrupt
+handler matching MuFrog's recovered `vsync_irq()`. Normal GE updates change only
+the pixels in the fixed scanout surface; they do not ring an identical DMBA on
+every console refresh. The failed interrupt experiment in log75 had started
+the handler before later descriptor changes, allowing shared-bus ownership and
+DMBA updates to race. The fixed ordering removes both the visible diagnostic
+dependency and that race while preserving continuous vendor-style panel
+synchronization and accelerated RGB scanout.
 
 The display service uses `nanosleep` outside that bounded TE-conditioning
 window. The earlier diagnostic delay loop busy-spun forever after RGB handoff;

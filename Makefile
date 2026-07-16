@@ -601,6 +601,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
+		printf 'nod /dev/sf2000-panel-sync 0660 0 0 c 10 244\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -846,6 +847,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
 		--enable SF2000_GE \
+		--enable SF2000_PANEL_SYNC \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
 		--disable SND_PCM_OSS \
@@ -1292,12 +1294,13 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-scanout-refresh' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000008 name=screen-gma-probe-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-gma-probe-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1308,8 +1311,23 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000004 name=screen-gma-condition-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-gma-condition-edges' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-count' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-native-hold-ms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-sync-enabled' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-sync-edges' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-sync-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00040001 name=screen-fixed-gma-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-fixed-dmba-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0xb6060606 name=screen-sync-pin-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	sync_control="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-sync-pin-control.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
+		test $$((sync_control & 0x00ffffff)) -eq 394752
+	! grep -q 'name=screen-panel-sync-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-panel-sync-read-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-gma-fixed-scanout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1317,8 +1335,8 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 		test $$((gate1 & 0x600)) -eq 1536
 	grep -q 'name=screen-panel-id' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-panel-aux' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-gma-condition-raster-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-native-hold-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
