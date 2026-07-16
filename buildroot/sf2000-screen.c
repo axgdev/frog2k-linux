@@ -271,7 +271,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 
 #define CONSOLE_INPUT_FDS 16u
 #define CONSOLE_POLL_MS 50u
-#define CONSOLE_IDLE_REDRAW_TICKS 40u
+#define CONSOLE_IDLE_REDRAW_TICKS 20u
 #define CONSOLE_REPEAT_DELAY_TICKS 5u
 #define CONSOLE_REPEAT_INTERVAL_TICKS 1u
 #define CONSOLE_INPUT_REOPEN_TICKS 100u
@@ -616,27 +616,9 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
 };
 
-/*
- * The first entry is the descriptor emitted by MuFrog's proven SF2000
- * framebuffer configuration: native 320x240 RGB565, no scale, full alpha.
- * The remaining entries form a single-boot differential probe.  They isolate
- * descriptor semantics from the already-proven panel timing/TE transaction;
- * G8 deliberately reproduces the obsolete Linux 2x source contract which is
- * visible as the repeating diagonal groups in log50's photograph.
- */
+/* MuFrog's proven native 320x240 RGB565, no-scale descriptor. */
 static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
 	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
-	{ "G2 NATIVE NO CSC", 0xaa200b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
-	{ "G3 NATIVE MIN LAST", 0xaa200161u, WIDTH, HEIGHT, PITCH, 0, 0 },
-	{ "G4 EARLY EXACT", 0xaa200160u, WIDTH, HEIGHT, PITCH, 0, 0 },
-	{ "G5 SCALE ONE TO ONE", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
-		0, 0x10001000u },
-	{ "G6 SCALE INC TWO", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
-		0, 0x20002000u },
-	{ "G7 NATIVE PITCH1280", 0xaa201b61u, WIDTH, HEIGHT,
-		LEGACY_SCAN_PITCH, 0, 0 },
-	{ "G8 LEGACY 640X480", 0xaa200b65u, LEGACY_SCAN_WIDTH,
-		LEGACY_SCAN_HEIGHT, LEGACY_SCAN_PITCH, 0, 0x20002000u },
 };
 
 static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
@@ -1896,27 +1878,11 @@ static void diagnostic_pulse(unsigned count, unsigned on_ms, unsigned off_ms)
 
 static void startup_backlight_diagnostic(void)
 {
-	log_line("sf2000-screen: startup backlight off/on diagnostic begin\n");
-	append_file_log("sf2000-screen: startup backlight off/on diagnostic begin\n");
-
-	log_line("sf2000-screen: diag step 1 backlight off\n");
-	progress_mark("screen-bl-off-1", 0x3fu, SCREEN_TAG);
-	backlight_set(0);
-	sleep_ms(80);
-	log_line("sf2000-screen: diag step 2 backlight on\n");
-	progress_mark("screen-bl-on-1", 0x3fu, SCREEN_TAG);
+	log_line("sf2000-screen: taking backlight ownership\n");
+	append_file_log("sf2000-screen: taking backlight ownership\n");
+	progress_mark("screen-bl-owned", 0x3fu, SCREEN_TAG);
 	backlight_set(1);
-	sleep_ms(80);
-	log_line("sf2000-screen: diag step 3 backlight off\n");
-	progress_mark("screen-bl-off-2", 0x3fu, SCREEN_TAG);
-	backlight_set(0);
-	sleep_ms(80);
-	log_line("sf2000-screen: diag step 4 backlight on\n");
-	progress_mark("screen-bl-on-2", 0x3fu, SCREEN_TAG);
-	backlight_set(1);
-
-	log_line("sf2000-screen: startup backlight off/on diagnostic end\n");
-	append_file_log("sf2000-screen: startup backlight off/on diagnostic end\n");
+	status_led_set(0);
 }
 
 static void panel_control_pinmux(void)
@@ -3953,7 +3919,14 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
-	run_ge_mcu_probe(*frame);
+	/*
+	 * The normal console already exercises accelerated fill and blit on every
+	 * frame.  Keep the destructive E1-E3 presentation suite available for
+	 * hardware development without delaying or covering production boot.
+	 */
+	if (env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
+	    cmdline_contains("SF2000_GE_DIAG=1"))
+		run_ge_mcu_probe(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering

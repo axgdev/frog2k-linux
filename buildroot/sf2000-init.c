@@ -398,7 +398,6 @@ static int visible_userspace_stage(void)
 {
 	volatile unsigned char *sysio;
 	long fd;
-	unsigned int i;
 
 	fd = syscall3(SYS_open, (long)"/dev/mem", O_RDWR, 0);
 	if (fd < 0) {
@@ -413,17 +412,6 @@ static int visible_userspace_stage(void)
 
 	userspace_backlight_set(sysio, 1);
 	userspace_status_led_set(sysio, 0);
-	sleep_ms(200);
-	for (i = 0; i < 4; i++) {
-		userspace_backlight_set(sysio, 0);
-		userspace_status_led_set(sysio, 1);
-		sleep_ms(80);
-		userspace_backlight_set(sysio, 1);
-		userspace_status_led_set(sysio, 0);
-		sleep_ms(80);
-	}
-	userspace_status_led_set(sysio, 0);
-	sleep_ms(200);
 	return 0;
 }
 

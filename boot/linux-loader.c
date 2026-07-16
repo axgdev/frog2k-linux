@@ -926,7 +926,7 @@ static void status_led_set(int on)
 
 static void backlight_stage_mark(const char *name, unsigned int pulses)
 {
-	unsigned int i;
+	static int health_blink_done;
 
 	uart_puts("linux-loader: visible stage ");
 	uart_puts(name);
@@ -934,19 +934,15 @@ static void backlight_stage_mark(const char *name, unsigned int pulses)
 	uart_hex(pulses);
 	uart_puts("\n");
 
+	if (health_blink_done)
+		return;
+	health_blink_done = 1;
+
+	backlight_set(0);
+	status_led_set(1);
+	delay_count_ticks(BACKLIGHT_OFF_TICKS);
 	backlight_set(1);
 	status_led_set(0);
-	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
-	for (i = 0; i < pulses; i++) {
-		backlight_set(0);
-		status_led_set(1);
-		delay_count_ticks(BACKLIGHT_OFF_TICKS);
-		backlight_set(1);
-		status_led_set(0);
-		delay_count_ticks(BACKLIGHT_ON_TICKS);
-	}
-	status_led_set(0);
-	delay_count_ticks(BACKLIGHT_STAGE_GAP_TICKS);
 }
 
 static void loader_panic(const char *message)
