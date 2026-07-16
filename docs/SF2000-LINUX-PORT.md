@@ -71,8 +71,7 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves the backlight visible so a later userspace failure cannot look like
-   a dead device.
+5. leaves the backlight visible until the display service takes ownership.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -136,23 +135,25 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. keep the backlight visible as the boot liveness fallback;
-2. configure and reset the SF2000 ST7789 panel in the original command order;
-3. render the selected console, solid color, or built-in logo;
-4. push one complete 320x240 MCU GRAM transaction;
-5. replace inherited panel RAM with the configured controlled frame;
-6. use GE to clear the exact future GMA scanout surface and copy the prepared
+1. keep the inherited frame visible through loader and kernel bring-up;
+2. have the display service take ownership and blank the backlight before it
+   resets or reprograms the panel;
+3. configure and reset the SF2000 ST7789 panel in the original command order;
+4. render the selected console, solid color, or built-in logo;
+5. push one complete 320x240 MCU GRAM transaction;
+6. enable the backlight only after panel GRAM contains the controlled frame;
+7. use GE to clear the exact future GMA scanout surface and copy the prepared
    render surface into it;
-7. start and latch VOU while the panel pins remain MCU-owned;
-8. build the inactive native 320x240 RGB565 GMA descriptor, ring its DMBA
+8. start and latch VOU while the panel pins remain MCU-owned;
+9. build the inactive native 320x240 RGB565 GMA descriptor, ring its DMBA
    doorbell, and verify the hardware mirror;
-9. repeat using the alternate 0x280-byte descriptor block, proving that the
+10. repeat using the alternate 0x280-byte descriptor block, proving that the
    live fetcher—not a stale mirror—is responding;
-10. program ST7789 `RAMCTRL`, `RGBCTRL`, `COLMOD`, address window, inversion,
+11. program ST7789 `RAMCTRL`, `RGBCTRL`, `COLMOD`, address window, inversion,
     and display-on state, then switch the shared pads to RGB;
-11. submit one native descriptor after the ownership switch and service four
+12. submit one native descriptor after the ownership switch and service four
     bounded L08 TE/RAMWR boundaries in userspace;
-12. stop touching the MCU bus and leave VOU/GMA in continuous RGB mode.
+13. stop touching the MCU bus and leave VOU/GMA in continuous RGB mode.
 
 Subsequent frames match the recovered vendor framebuffer behavior: GE copies
 the completed render surface, then software alternates two immutable
@@ -186,26 +187,24 @@ production does not traverse them.
   shared MCU/RGB bus, reproducing static.
 - Descriptor readback alone is insufficient. The hardware `CTL_HW` and
   `DMBA_HW` mirrors must be observed after VOU is live.
-- The recovered panel tables are length-delimited, not reliably
-  zero-sentinel-terminated. The old interpreter read one byte past the SF2000
-  table and only stopped when the next static object happened to begin with
-  zero. A later data-layout change made physical log79 execute unrelated bytes
-  as panel commands. The interpreter now receives the array size and validates
-  every count before touching the panel.
-- Physical log80 completed all 18 validated ST7789 commands, but stopped before
-  the following `CASET`/`RASET`/`RAMWR` transaction. The first bounded
-  implementation had inserted a retained-memory write before every LCD
-  command, changing the timing and generated code of a path which had only
-  been proven with the tight vendor loop. Validation and execution are now
-  separate passes: the first pass proves all table bounds, and the second is
-  transaction-equivalent to MuFrog's recovered driver with no diagnostics
-  between commands. Retained markers bracket table validation, the complete
-  table, frame restart, `DISPON`, status formatting, and the first full frame,
-  so a future failure is localized without perturbing the control bus.
+- The recovered MuFrog panel tables carry an explicit zero command-count
+  terminator. Physical log78 proved the original tight table walker, panel
+  transaction, GE clear, MCU frame, and RGB handoff as one complete path.
+- Logs 79 through 81 progressively moved the watchdog boundary as table
+  validation, per-command retained writes, and post-command markers changed
+  the display executable. Log81 completed the entire panel sequence,
+  `CASET`/`RASET`/`RAMWR`, `DISPON`, formatting, and file logging, then reset
+  before the first GE-render marker. That disproves the earlier conclusion
+  that the command table itself was malformed.
+- The production screen service therefore uses the exact source path from the
+  physically successful log78 build. Diagnostics remain outside the
+  timing-sensitive panel transaction. The loader and kernel may expose the
+  inherited frame for early liveness, but userspace blanks the backlight while
+  it resets the panel, renders the controlled frame, and completes the first
+  MCU transfer.
 - The brief pre-Linux noise frame is old ST7789 GRAM exposed by the backlight,
-  not a need for another GMA diagnostic. Hiding it entirely also hides every
-  failure before the first userspace frame, so production keeps the panel
-  visible and accepts the short dirty frame as a liveness indicator.
+  not a need for another GMA diagnostic. It remains visible during loader and
+  kernel bring-up, then disappears when the display service takes ownership.
 
 ### Configurable first frame
 

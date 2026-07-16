@@ -130,8 +130,9 @@ while idle console ticks redraw only the small changing regions.
 
 The loader emits one health blink and then leaves the backlight visible. This
 deliberately favors an inherited or dirty panel frame over an apparently dead
-device if userspace fails. The display service replaces it with a configurable
-controlled frame as soon as panel initialization completes:
+device during early bring-up. The display service then takes ownership, blanks
+the backlight while it resets the panel and transfers a complete controlled
+frame, and enables it again only after that frame is committed:
 
 ```sh
 # Immediate console (default)

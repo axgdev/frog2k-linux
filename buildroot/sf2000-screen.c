@@ -559,7 +559,6 @@ static const uint8_t st7789_009306_init[] = {
 struct panel_variant {
 	const char *name;
 	const uint8_t *init;
-	size_t init_size;
 	uint8_t madctl[4];
 };
 
@@ -602,18 +601,12 @@ static void panel_apply_sync_profile(
 	const struct hc15_panel_sync_profile *profile);
 
 static const struct panel_variant panel_variants[] = {
-	{ "SF2000", st7789_sf2000_init, ARRAY_SIZE(st7789_sf2000_init),
-		{ 0x60, 0x00, 0x80, 0xc0 } },
-	{ "X60 OLD", st7789_x60_old_init, ARRAY_SIZE(st7789_x60_old_init),
-		{ 0xa8, 0x68, 0x28, 0xe8 } },
-	{ "X60 NEW", st7789_x60_new_init, ARRAY_SIZE(st7789_x60_new_init),
-		{ 0xe8, 0x88, 0x28, 0x68 } },
-	{ "Q19", st7789_q19_init, ARRAY_SIZE(st7789_q19_init),
-		{ 0x28, 0x68, 0xa8, 0xe8 } },
-	{ "DY12", st7789_dy12_init, ARRAY_SIZE(st7789_dy12_init),
-		{ 0x68, 0x28, 0xa8, 0xe8 } },
-	{ "009306", st7789_009306_init, ARRAY_SIZE(st7789_009306_init),
-		{ 0x28, 0x68, 0xa8, 0xe8 } },
+	{ "SF2000", st7789_sf2000_init, { 0x60, 0x00, 0x80, 0xc0 } },
+	{ "X60 OLD", st7789_x60_old_init, { 0xa8, 0x68, 0x28, 0xe8 } },
+	{ "X60 NEW", st7789_x60_new_init, { 0xe8, 0x88, 0x28, 0x68 } },
+	{ "Q19", st7789_q19_init, { 0x28, 0x68, 0xa8, 0xe8 } },
+	{ "DY12", st7789_dy12_init, { 0x68, 0x28, 0xa8, 0xe8 } },
+	{ "009306", st7789_009306_init, { 0x28, 0x68, 0xa8, 0xe8 } },
 };
 
 static const struct gma_scanout_profile gma_scanout_profiles[] = {
@@ -1542,14 +1535,11 @@ static void startup_backlight_diagnostic(void)
 	append_file_log("sf2000-screen: taking backlight ownership\n");
 	progress_mark("screen-bl-owned", 0x3fu, SCREEN_TAG);
 	/*
-	 * Visibility is the recovery contract: a dirty inherited frame is more
-	 * useful than a black screen when panel initialization or userspace
-	 * fails.  The selected boot visual replaces it after the first complete
-	 * MCU transfer.
+	 * The loader has already emitted the single health blink.  Keep inherited
+	 * panel GRAM hidden until the complete, selected boot frame is committed.
 	 */
-	backlight_set(1);
+	backlight_set(0);
 	status_led_set(0);
-	progress_mark("screen-boot-backlight-visible", 0x3fu, SCREEN_TAG);
 }
 
 static void panel_control_pinmux(void)
@@ -2072,71 +2062,11 @@ static void panel_reset_sf2000(void)
 	sleep_ms(500);
 }
 
-static int panel_validate_init_sequence(const uint8_t *sequence, size_t size,
-	unsigned *command_count)
+static void panel_apply_init_sequence(const uint8_t *sequence)
 {
 	const uint8_t *p = sequence;
-	const uint8_t *end;
-	unsigned command_index = 0;
+	unsigned clock_skewed = *p++;
 
-	if (!sequence || !command_count || size < 2u)
-		return -EINVAL;
-	end = sequence + size;
-	p++;
-	while (p < end) {
-		unsigned count = *p++;
-
-		if (!count)
-			break;
-		if (p >= end ||
-		    (size_t)(end - p) < (size_t)count + 1u)
-			goto malformed;
-		p += count + 1u;
-		command_index++;
-	}
-	/*
-	 * Vendor tables use their final zero as the last command's delay byte;
-	 * some also carry a separate zero count.  Exact end-of-array and an
-	 * in-range zero terminator are both valid, but non-zero trailing data is
-	 * never accepted.
-	 */
-	while (p < end) {
-		if (*p++)
-			goto malformed;
-	}
-	*command_count = command_index;
-	return 0;
-
-malformed:
-	progress_mark("screen-panel-seq-invalid", 0x3fu,
-		(uint32_t)(p - sequence));
-	return -EINVAL;
-}
-
-static int panel_apply_init_sequence(const uint8_t *sequence, size_t size)
-{
-	const uint8_t *p = sequence;
-	const uint8_t *end;
-	unsigned clock_skewed;
-	unsigned command_count;
-
-	progress_mark("screen-panel-seq-begin", 0x3fu,
-		(uint32_t)(uintptr_t)sequence);
-	progress_mark("screen-panel-seq-size", 0x3fu, (uint32_t)size);
-	if (panel_validate_init_sequence(sequence, size, &command_count) < 0)
-		return -EINVAL;
-	end = sequence + size;
-	progress_mark("screen-panel-seq-valid", 0x3fu, command_count);
-
-	/*
-	 * Keep the hardware phase identical to the recovered MuFrog driver.
-	 * Retained logging between individual commands changes the GPIO bus
-	 * cadence and made physical log80 stop immediately after the final INVON
-	 * even though the table itself validated.  All bounds are proven by the
-	 * first pass, so this loop remains safe and transaction-equivalent to the
-	 * vendor implementation.
-	 */
-	clock_skewed = *p++;
 	watchdog_pet();
 	panel_lcd_setup_enable();
 	if (clock_skewed)
@@ -2146,12 +2076,10 @@ static int panel_apply_init_sequence(const uint8_t *sequence, size_t size)
 		mmio_write32(sysio, SYS_CLK_CTR_OFF,
 			mmio_read32(sysio, SYS_CLK_CTR_OFF) & ~(1u << 15));
 
-	while (p < end) {
+	while (*p) {
 		unsigned count = *p++;
 		unsigned delay_ms;
 
-		if (!count)
-			break;
 		watchdog_pet();
 		panel_cmd(*p++);
 		while (--count)
@@ -2161,8 +2089,6 @@ static int panel_apply_init_sequence(const uint8_t *sequence, size_t size)
 			sleep_ms(delay_ms);
 	}
 	watchdog_pet();
-	progress_mark("screen-panel-seq-done", 0x3fu, command_count);
-	return 0;
 }
 
 static int panel_init_variant(const struct panel_variant *variant)
@@ -2184,12 +2110,9 @@ static int panel_init_variant(const struct panel_variant *variant)
 	log_line("sf2000-screen: panel init read id\n");
 	panel_id = panel_read_id();
 	log_line("sf2000-screen: panel init sequence\n");
-	if (panel_apply_init_sequence(variant->init, variant->init_size) < 0)
-		return -EINVAL;
-	progress_mark("screen-panel-frame-begin", 0x3fu, SCREEN_TAG);
+	panel_apply_init_sequence(variant->init);
 	panel_cmd(ST7789_DISPON);
 	panel_restart_frame();
-	progress_mark("screen-panel-frame-done", 0x3fu, SCREEN_TAG);
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: panel init done id=0x%06x init=%s\n",
@@ -2226,22 +2149,14 @@ static int panel_init_sf2000_original_order(void)
 	panel_aux = panel_read_sf2000_aux_id();
 	progress_mark("screen-panel-id", 0x3fu, panel_id);
 	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
-	if (panel_apply_init_sequence(st7789_sf2000_init,
-			ARRAY_SIZE(st7789_sf2000_init)) < 0)
-		return -EINVAL;
-	progress_mark("screen-panel-frame-begin", 0x3fu, SCREEN_TAG);
+	panel_apply_init_sequence(st7789_sf2000_init);
 	panel_restart_frame();
-	progress_mark("screen-panel-ramwr-ready", 0x3fu, SCREEN_TAG);
 	panel_cmd(ST7789_DISPON);
-	progress_mark("screen-panel-display-on", 0x3fu, SCREEN_TAG);
-	progress_mark("screen-panel-format-begin", 0x3fu, SCREEN_TAG);
 	snprintf(line, sizeof(line),
 		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
 		panel_id & 0xffffffu, panel_aux, variant->name);
-	progress_mark("screen-panel-format-done", 0x3fu, SCREEN_TAG);
 	log_line(line);
 	append_file_log(line);
-	progress_mark("screen-panel-init-done", 0x3fu, SCREEN_TAG);
 	return 0;
 }
 
@@ -2909,7 +2824,6 @@ static void ge_display_open(hcge_context *storage)
 		progress_mark(clock_ret == 0 ? "screen-ge-clock-fast" :
 			"screen-ge-clock-fail", 0x3fu, (uint32_t)clock_ret);
 	} else {
-		display_ge = NULL;
 		snprintf(line, sizeof(line),
 			"sf2000-screen: GE unavailable ret=%d errno=%d, using direct framebuffer\n",
 			ret, errno);
@@ -3607,9 +3521,7 @@ static void panel_apply_sync_profile(
 	if (profile->reset) {
 		panel_reset_sf2000();
 		sleep_ms(120);
-		if (panel_apply_init_sequence(st7789_sf2000_init,
-				ARRAY_SIZE(st7789_sf2000_init)) < 0)
-			return;
+		panel_apply_init_sequence(st7789_sf2000_init);
 	} else {
 		panel_cmd(ST7789_MADCTL);
 		panel_data(profile->madctl);
@@ -3805,9 +3717,9 @@ static void run_direct_console(unsigned *frame)
 	/*
 	 * Complete a real GRAM transaction before changing the ST7789 ownership
 	 * from its 8080/MCU port to RGB.  This cannot be reduced to register
-	 * readback: the controlled frame must be valid before the RGB handoff,
-	 * which depends on a completed address-window transaction rather than
-	 * inherited panel state.
+	 * readback: the first visible frame must be valid before the backlight is
+	 * enabled, and the RGB handoff later depends on a completed address-window
+	 * transaction rather than inherited panel state.
 	 */
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
@@ -4119,9 +4031,11 @@ int main(int argc, char **argv, char **envp)
 	}
 	map_framebuffer_device();
 	/*
-	 * Keep the 1.2 KiB GE context in main's persistent stack frame.  A static
-	 * address can retain its low link-time value in MIPS bFLT, while the heap
-	 * allocator is intentionally unavailable in this minimal NOMMU process.
+	 * Keep the GE context in main's persistent stack frame.  FLAT NOMMU
+	 * executables must not depend on an absolute address-of-BSS relocation:
+	 * the MIPS elf2flt path can otherwise leave that pointer in the low,
+	 * unmapped link-time address range.  The process stack already carries
+	 * the correct KSEG0 execution alias.
 	 */
 	ge_display_open(&display_ge_storage);
 	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
