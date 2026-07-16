@@ -49,8 +49,6 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define SCREEN_TAG 0x0239u
-#define SF2000_PANEL_SYNC_ENABLE _IO('p', 0)
-#define SF2000_PANEL_SYNC_COUNT _IOR('p', 2, uint32_t)
 
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
@@ -618,9 +616,24 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
 };
 
-/* MuFrog's proven native 320x240 RGB565, no-scale descriptor. */
+/*
+ * G1 is the proven MuFrog descriptor.  The last consistently sharp physical
+ * runs traversed all eight descriptor states before restoring G1; repeating
+ * G1 alone did not reproduce that hardware state.
+ */
 static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
 	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G2 NATIVE NO CSC", 0xaa200b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G3 NATIVE MIN LAST", 0xaa200161u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G4 EARLY EXACT", 0xaa200160u, WIDTH, HEIGHT, PITCH, 0, 0 },
+	{ "G5 SCALE ONE TO ONE", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
+		0, 0x10001000u },
+	{ "G6 SCALE INC TWO", 0xaa201b65u, WIDTH, HEIGHT, PITCH,
+		0, 0x20002000u },
+	{ "G7 NATIVE PITCH1280", 0xaa201b61u, WIDTH, HEIGHT,
+		LEGACY_SCAN_PITCH, 0, 0 },
+	{ "G8 LEGACY 640X480", 0xaa200b65u, LEGACY_SCAN_WIDTH,
+		LEGACY_SCAN_HEIGHT, LEGACY_SCAN_PITCH, 0, 0x20002000u },
 };
 
 static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
@@ -3844,72 +3857,51 @@ static void panel_apply_sync_profile(
 
 static int run_gma_descriptor_probe(void)
 {
-	const struct gma_descriptor_profile *profile =
-		&gma_descriptor_profiles[0];
-	unsigned start_rearms = panel_te_rearms;
-	unsigned elapsed;
+	unsigned i;
 
-	/*
-	 * Logs 52/55/56 showed that G1 was already sharp.  The later G2-G8
-	 * descriptors therefore supplied no format discovery; their only lasting
-	 * effect was allowing several TE/frame-boundary transactions before the
-	 * native descriptor was restored.  Condition that hardware contract
-	 * directly with the proven MuFrog descriptor and stop polling once the
-	 * required edges have occurred.
-	 */
-	progress_mark("screen-gma-condition-begin", 0x3fu,
-		CONDITIONING_TE_EDGES);
-	draw_console_screen(0);
-	for (elapsed = 0; elapsed < 500u && !stopping; elapsed++) {
+	progress_mark("screen-gma-probe-begin", 0x3fu,
+		ARRAY_SIZE(gma_descriptor_profiles));
+	for (i = 0; i < ARRAY_SIZE(gma_descriptor_profiles) && !stopping; i++) {
+		const struct gma_descriptor_profile *profile =
+			&gma_descriptor_profiles[i];
+		uint32_t detail = (i << 24) |
+			((uint32_t)profile->src_w << 12) | profile->src_h;
+		unsigned before_rearms = panel_te_rearms;
+
+		draw_diag_screen("GMA GEOMETRY PROBE", profile->name,
+			0x70, 0x400u + i);
 		build_gma_descriptor_profile(profile);
+		progress_mark("screen-probe-phase-render", 0x3fu, detail);
+		progress_mark("screen-probe-d0", 0x3fu, profile->d0);
+		progress_mark("screen-probe-d4", 0x3fu,
+			((uint32_t)profile->src_h << 16) | profile->src_w);
+		progress_mark("screen-probe-d5", 0x3fu,
+			((uint32_t)profile->pitch << 16) | 0xffu);
+		progress_mark("screen-probe-d9", 0x3fu, profile->d9);
 		present_frame_profile(&gma_scanout_profiles[3]);
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
-			progress_mark("screen-gma-condition-raster-fail", 0x3fu,
-				gma_desc_phys);
+			progress_mark("screen-probe-raster-fail", 0x3fu, detail);
 			return -1;
 		}
-		if (panel_te_rearms - start_rearms >= CONDITIONING_TE_EDGES)
-			break;
-		sleep_ms(1);
+
+		progress_mark("screen-probe-phase-begin", 0x3fu, detail);
+		sleep_ms(1500u);
+		progress_mark("screen-probe-phase-rearms", 0x3fu,
+			(i << 24) |
+			((panel_te_rearms - before_rearms) & 0x00ffffffu));
+		progress_mark("screen-probe-phase-vou", 0x3fu,
+			mmio_read32(gma, VOU_HD_TIMING2));
+		progress_mark("screen-probe-phase-gma", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+		progress_mark("screen-probe-phase-dmba", 0x3fu,
+			mmio_read32(gma, GMA_DMBA_HW));
+		progress_mark("screen-probe-phase-done", 0x3fu, detail);
 	}
-	progress_mark("screen-gma-condition-edges", 0x3fu,
-		panel_te_rearms - start_rearms);
-	if (elapsed == 500u || stopping)
-		return -1;
-
-	{
-		int sync_fd = open("/dev/sf2000-panel-sync",
-			O_RDWR | O_CLOEXEC);
-
-		progress_mark("screen-panel-sync-fd", 0x3fu,
-			(uint32_t)sync_fd);
-		if (sync_fd >= 0 &&
-		    ioctl(sync_fd, SF2000_PANEL_SYNC_ENABLE, 0) == 0) {
-			uint32_t count = 0;
-
-			/*
-			 * The kernel now mirrors the vendor TE interrupt on every
-			 * frame.  Stop userspace sampling only after that ownership
-			 * transfer succeeds.  Keep the descriptor open for process
-			 * lifetime so the synchronizer cannot be removed underneath
-			 * scanout.
-			 */
-			panel_te_streaming = 0;
-			(void)ioctl(sync_fd, SF2000_PANEL_SYNC_COUNT, &count);
-			progress_mark("screen-panel-sync-enabled", 0x3fu, count);
-		} else {
-			if (sync_fd >= 0)
-				close(sync_fd);
-			/*
-			 * Correctness fallback for an older kernel: continue servicing
-			 * TE in userspace even though polling costs CPU.
-			 */
-			progress_mark("screen-panel-sync-fallback", 0x3fu,
-				(uint32_t)errno);
-		}
-	}
+	progress_mark("screen-gma-probe-done", 0x3fu,
+		ARRAY_SIZE(gma_descriptor_profiles));
+	panel_te_streaming = 0;
 	progress_mark("screen-te-conditioning-done", 0x3fu, panel_te_rearms);
-	return 0;
+	return stopping ? -1 : 0;
 }
 
 static void run_direct_console(unsigned *frame)
@@ -3947,13 +3939,13 @@ static void run_direct_console(unsigned *frame)
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
 	/*
-	 * The normal console already exercises accelerated fill and blit on every
-	 * frame.  Keep the destructive E1-E3 presentation suite available for
-	 * hardware development without delaying or covering production boot.
+	 * Restore the complete transition from the last reproducibly sharp runs.
+	 * Besides validating GE output through the known-good MCU bus, this leaves
+	 * the GE and its DMA/cache path in the exact state that preceded their
+	 * successful RGB handoff.  The shortened production path removed this and
+	 * immediately regressed to a drifting raster.
 	 */
-	if (env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
-	    cmdline_contains("SF2000_GE_DIAG=1"))
-		run_ge_mcu_probe(*frame);
+	run_ge_mcu_probe(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering
