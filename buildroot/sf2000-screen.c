@@ -278,6 +278,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_KMSG_READS_PER_FRAME 64u
 #define CONDITIONING_FRAME_DWELL_MS 80u
 #define CONDITIONING_TE_EDGES 4u
+#define PANEL_MCU_PRIME_FRAMES 4u
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -3464,6 +3465,34 @@ static void run_ge_mcu_probe(unsigned frame)
 	progress_mark("screen-ge-mcu-probe-done", 0x3fu, 3u);
 }
 
+static void panel_prime_rgb_handoff(unsigned frame)
+{
+	unsigned i;
+
+	/*
+	 * The ST7789 shares its data pins between the 8080/MCU writer and live
+	 * RGB input.  Every sharp physical run (52, 55, 56 and 64) completed the
+	 * initial console write plus four further full GRAM transactions before
+	 * transferring those pins.  Removing the visible GE probe accidentally
+	 * removed those transactions and log73 immediately returned to a moving,
+	 * unlocked RGB raster even though VOU/GMA shadow latches were correct.
+	 *
+	 * Prime that panel-side ownership boundary explicitly.  Each iteration
+	 * is a complete CASET/RASET/RAMWR frame, so its completion—not an
+	 * arbitrary sleep—defines the wait.  Keep the same console in GRAM
+	 * throughout; GE diagnostics remain optional and are not part of the
+	 * production hardware contract.
+	 */
+	progress_mark("screen-mcu-prime-begin", 0x3fu,
+		PANEL_MCU_PRIME_FRAMES);
+	for (i = 0; i < PANEL_MCU_PRIME_FRAMES && !stopping; i++) {
+		draw_console_screen(frame);
+		panel_push_frame(0);
+		progress_mark("screen-mcu-prime-frame", 0x3fu, i + 1u);
+	}
+	progress_mark("screen-mcu-prime-done", 0x3fu, i);
+}
+
 static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 {
 	uint32_t value = mmio_read32(gma, off);
@@ -3927,6 +3956,8 @@ static void run_direct_console(unsigned *frame)
 	if (env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
 	    cmdline_contains("SF2000_GE_DIAG=1"))
 		run_ge_mcu_probe(*frame);
+	else
+		panel_prime_rgb_handoff(*frame);
 	/*
 	 * Start the VOU timing generator while the panel still owns the GPIO bus,
 	 * then submit and observe a real GMA hardware latch.  The former ordering
