@@ -1268,8 +1268,13 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-ge-clock-fast' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-boot-backlight-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000012 name=screen-panel-seq-valid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000012 name=screen-panel-seq-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-panel-seq-invalid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-ramwr-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-display-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-format-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-init-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1342,8 +1347,13 @@ smoke-linux-buildroot-boot-logo:
 		run-linux-buildroot-display
 	grep -q 'value=0x00000002 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-boot-backlight-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000012 name=screen-panel-seq-valid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000012 name=screen-panel-seq-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-panel-seq-invalid' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-ramwr-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-display-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-format-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-init-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 
 smoke-linux-buildroot-fb-test:

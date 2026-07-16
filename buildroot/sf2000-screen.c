@@ -2072,20 +2072,71 @@ static void panel_reset_sf2000(void)
 	sleep_ms(500);
 }
 
+static int panel_validate_init_sequence(const uint8_t *sequence, size_t size,
+	unsigned *command_count)
+{
+	const uint8_t *p = sequence;
+	const uint8_t *end;
+	unsigned command_index = 0;
+
+	if (!sequence || !command_count || size < 2u)
+		return -EINVAL;
+	end = sequence + size;
+	p++;
+	while (p < end) {
+		unsigned count = *p++;
+
+		if (!count)
+			break;
+		if (p >= end ||
+		    (size_t)(end - p) < (size_t)count + 1u)
+			goto malformed;
+		p += count + 1u;
+		command_index++;
+	}
+	/*
+	 * Vendor tables use their final zero as the last command's delay byte;
+	 * some also carry a separate zero count.  Exact end-of-array and an
+	 * in-range zero terminator are both valid, but non-zero trailing data is
+	 * never accepted.
+	 */
+	while (p < end) {
+		if (*p++)
+			goto malformed;
+	}
+	*command_count = command_index;
+	return 0;
+
+malformed:
+	progress_mark("screen-panel-seq-invalid", 0x3fu,
+		(uint32_t)(p - sequence));
+	return -EINVAL;
+}
+
 static int panel_apply_init_sequence(const uint8_t *sequence, size_t size)
 {
 	const uint8_t *p = sequence;
-	const uint8_t *end = sequence + size;
+	const uint8_t *end;
 	unsigned clock_skewed;
-	unsigned command_index = 0;
+	unsigned command_count;
 
-	if (!sequence || size < 2u)
-		return -EINVAL;
-	clock_skewed = *p++;
 	progress_mark("screen-panel-seq-begin", 0x3fu,
 		(uint32_t)(uintptr_t)sequence);
 	progress_mark("screen-panel-seq-size", 0x3fu, (uint32_t)size);
+	if (panel_validate_init_sequence(sequence, size, &command_count) < 0)
+		return -EINVAL;
+	end = sequence + size;
+	progress_mark("screen-panel-seq-valid", 0x3fu, command_count);
 
+	/*
+	 * Keep the hardware phase identical to the recovered MuFrog driver.
+	 * Retained logging between individual commands changes the GPIO bus
+	 * cadence and made physical log80 stop immediately after the final INVON
+	 * even though the table itself validated.  All bounds are proven by the
+	 * first pass, so this loop remains safe and transaction-equivalent to the
+	 * vendor implementation.
+	 */
+	clock_skewed = *p++;
 	watchdog_pet();
 	panel_lcd_setup_enable();
 	if (clock_skewed)
@@ -2095,46 +2146,23 @@ static int panel_apply_init_sequence(const uint8_t *sequence, size_t size)
 		mmio_write32(sysio, SYS_CLK_CTR_OFF,
 			mmio_read32(sysio, SYS_CLK_CTR_OFF) & ~(1u << 15));
 
-	while (p < end && *p) {
+	while (p < end) {
 		unsigned count = *p++;
-		unsigned command;
 		unsigned delay_ms;
-		const uint8_t *arguments;
-		unsigned i;
 
-		if (!count || p >= end ||
-		    (size_t)(end - p) < (size_t)count + 1u)
-			goto malformed;
-		command = *p++;
-		arguments = p;
-		p += count - 1u;
-		delay_ms = *p++;
-		progress_mark("screen-panel-seq-cmd", 0x3fu,
-			(command_index << 24) | (command << 16) |
-			(count << 8) | delay_ms);
+		if (!count)
+			break;
 		watchdog_pet();
-		panel_cmd(command);
-		for (i = 1u; i < count; i++)
-			panel_data(arguments[i - 1u]);
+		panel_cmd(*p++);
+		while (--count)
+			panel_data(*p++);
+		delay_ms = *p++;
 		if (delay_ms)
 			sleep_ms(delay_ms);
-		command_index++;
 	}
-	/*
-	 * Vendor tables use their final zero as the last command's delay byte;
-	 * some also carry a separate zero count.  Both exact end-of-array and an
-	 * in-range zero count are valid termination forms.
-	 */
-	if (p < end && *p)
-		goto malformed;
 	watchdog_pet();
-	progress_mark("screen-panel-seq-done", 0x3fu, command_index);
+	progress_mark("screen-panel-seq-done", 0x3fu, command_count);
 	return 0;
-
-malformed:
-	progress_mark("screen-panel-seq-invalid", 0x3fu,
-		(uint32_t)(p - sequence));
-	return -EINVAL;
 }
 
 static int panel_init_variant(const struct panel_variant *variant)
@@ -2158,8 +2186,10 @@ static int panel_init_variant(const struct panel_variant *variant)
 	log_line("sf2000-screen: panel init sequence\n");
 	if (panel_apply_init_sequence(variant->init, variant->init_size) < 0)
 		return -EINVAL;
+	progress_mark("screen-panel-frame-begin", 0x3fu, SCREEN_TAG);
 	panel_cmd(ST7789_DISPON);
 	panel_restart_frame();
+	progress_mark("screen-panel-frame-done", 0x3fu, SCREEN_TAG);
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: panel init done id=0x%06x init=%s\n",
@@ -2199,13 +2229,19 @@ static int panel_init_sf2000_original_order(void)
 	if (panel_apply_init_sequence(st7789_sf2000_init,
 			ARRAY_SIZE(st7789_sf2000_init)) < 0)
 		return -EINVAL;
+	progress_mark("screen-panel-frame-begin", 0x3fu, SCREEN_TAG);
 	panel_restart_frame();
+	progress_mark("screen-panel-ramwr-ready", 0x3fu, SCREEN_TAG);
 	panel_cmd(ST7789_DISPON);
+	progress_mark("screen-panel-display-on", 0x3fu, SCREEN_TAG);
+	progress_mark("screen-panel-format-begin", 0x3fu, SCREEN_TAG);
 	snprintf(line, sizeof(line),
 		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
 		panel_id & 0xffffffu, panel_aux, variant->name);
+	progress_mark("screen-panel-format-done", 0x3fu, SCREEN_TAG);
 	log_line(line);
 	append_file_log(line);
+	progress_mark("screen-panel-init-done", 0x3fu, SCREEN_TAG);
 	return 0;
 }
 

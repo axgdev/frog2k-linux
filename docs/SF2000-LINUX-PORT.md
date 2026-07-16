@@ -190,8 +190,18 @@ production does not traverse them.
   zero-sentinel-terminated. The old interpreter read one byte past the SF2000
   table and only stopped when the next static object happened to begin with
   zero. A later data-layout change made physical log79 execute unrelated bytes
-  as panel commands. The interpreter now receives the array size, validates
-  every count, and records each command in retained RAM.
+  as panel commands. The interpreter now receives the array size and validates
+  every count before touching the panel.
+- Physical log80 completed all 18 validated ST7789 commands, but stopped before
+  the following `CASET`/`RASET`/`RAMWR` transaction. The first bounded
+  implementation had inserted a retained-memory write before every LCD
+  command, changing the timing and generated code of a path which had only
+  been proven with the tight vendor loop. Validation and execution are now
+  separate passes: the first pass proves all table bounds, and the second is
+  transaction-equivalent to MuFrog's recovered driver with no diagnostics
+  between commands. Retained markers bracket table validation, the complete
+  table, frame restart, `DISPON`, status formatting, and the first full frame,
+  so a future failure is localized without perturbing the control bus.
 - The brief pre-Linux noise frame is old ST7789 GRAM exposed by the backlight,
   not a need for another GMA diagnostic. Hiding it entirely also hides every
   failure before the first userspace frame, so production keeps the panel
