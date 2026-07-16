@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
+#define REBOOT_MARKER "/run/sf2000-reboot-request"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define TEST_TMP_PATH "/mnt/sd/.sf2000-storage-test.tmp"
 #define TEST_PATH "/mnt/sd/sf2000-storage-test.bin"
@@ -27,6 +28,11 @@ static char log_buffer[LOG_BUFFER_SIZE];
 static size_t log_used;
 static int log_fd = -1;
 static long ticks_per_second = 100;
+
+static int stop_requested(void)
+{
+	return access(REBOOT_MARKER, F_OK) == 0;
+}
 
 static uint64_t monotonic_us(void)
 {
@@ -376,6 +382,8 @@ int main(void)
 	ticks_per_second = sysconf(_SC_CLK_TCK);
 	if (ticks_per_second <= 0)
 		ticks_per_second = 100;
+	for (i = 0; i < INPUT_FDS; i++)
+		input_fds[i] = -1;
 	kmsg_fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	append_record("logd", "--- SF2000 Linux pre-mount profile begin ---",
 		strlen("--- SF2000 Linux pre-mount profile begin ---"));
@@ -400,11 +408,9 @@ int main(void)
 	kmsg_line(result);
 	kmsg_line("\n");
 
-	for (i = 0; i < INPUT_FDS; i++)
-		input_fds[i] = -1;
 	last_flush = last_probe = monotonic_us();
 
-	for (;;) {
+	while (!stop_requested()) {
 		ssize_t got;
 		uint64_t now;
 
@@ -435,4 +441,17 @@ int main(void)
 		}
 		sleep_ms(50);
 	}
+
+	append_record("logd", "--- SF2000 Linux logger shutdown ---",
+		strlen("--- SF2000 Linux logger shutdown ---"));
+	(void)flush_log();
+	for (i = 0; i < INPUT_FDS; i++)
+		if (input_fds[i] >= 0)
+			close(input_fds[i]);
+	if (kmsg_fd >= 0)
+		close(kmsg_fd);
+	if (log_fd >= 0)
+		close(log_fd);
+	sync();
+	return 0;
 }

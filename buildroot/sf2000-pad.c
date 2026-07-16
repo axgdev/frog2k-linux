@@ -107,7 +107,7 @@ enum button_index {
 	BUTTON_RIGHT,
 };
 
-#define REBOOT_BUTTON_MASK BUTTON_BIT(SELECT)
+#define REBOOT_BUTTON_MASK (BUTTON_BIT(SELECT) | BUTTON_BIT(START))
 
 static volatile uint8_t *sysio_mapping;
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
@@ -383,6 +383,8 @@ static void log_button_state(uint32_t mask)
 static void maybe_reboot(uint32_t state)
 {
 	static int armed = 1;
+	int fd;
+	unsigned wait;
 
 	if ((state & REBOOT_BUTTON_MASK) != REBOOT_BUTTON_MASK) {
 		armed = 1;
@@ -392,7 +394,15 @@ static void maybe_reboot(uint32_t state)
 	if (!armed)
 		return;
 	armed = 0;
-	log_line("sf2000-pad: SELECT pressed, rebooting\n");
+	log_line("sf2000-pad: START+SELECT pressed, requesting clean restart\n");
+	fd = open("/run/sf2000-reboot-request",
+		O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd >= 0) {
+		(void)write(fd, "restart\n", 8);
+		close(fd);
+	}
+	for (wait = 0; wait < 60u; wait++)
+		sleep_ms(100);
 	sync();
 	reboot(LINUX_REBOOT_CMD_RESTART);
 	log_line("sf2000-pad: reboot syscall returned\n");

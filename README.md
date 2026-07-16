@@ -7,9 +7,9 @@ related HC15xx/SF2000-family handhelds. The first hardware target is SF2000.
 
 The goal is a small, fast iteration loop:
 
-1. build the minimum Linux kernel and initramfs needed for a serial console;
-2. boot it in the local `external/sf2000_qemu` submodule;
-3. add storage, framebuffer, input, and audio only after the kernel is alive.
+1. build the SF2000 NOMMU kernel and soft-float Buildroot userspace;
+2. boot the same ASD in the local `external/sf2000_qemu` board model;
+3. verify the physical display, SD, input, audio, and retained-log contracts.
 
 Generated files stay under `build/`. Large vendor trees are referenced through
 local links instead of copied into this repository.
@@ -39,6 +39,10 @@ Buildroot is the preferred userspace generator for phase 1 because it can make
 tiny reproducible soft-float root filesystems. Alpine/postmarketOS can be
 revisited after the kernel ABI and core devices are proven.
 
+The detailed hardware contract, bring-up history, failed assumptions, current
+support matrix, and application-porting constraints are documented in
+[`docs/SF2000-LINUX-PORT.md`](docs/SF2000-LINUX-PORT.md).
+
 ## Commands
 
 ```sh
@@ -51,7 +55,9 @@ make smoke-qemu-display
 make ROOTFS=buildroot smoke-linux-buildroot-storage
 make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
 make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
+make ROOTFS=buildroot smoke-linux-buildroot-persistent-storage
 make ROOTFS=buildroot smoke-linux-buildroot-display
+make ROOTFS=buildroot smoke-linux-buildroot-boot-logo
 make ROOTFS=buildroot smoke-linux-buildroot-fb-test
 make smoke-linux-buildroot-audio
 make smoke-qemu-unifrog
@@ -104,29 +110,44 @@ the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
 The broad MCU/GE and G1-G8 cards are available with `SF2000_GE_DIAG=1`, but
-normal boot no longer depends on displaying them. Physical log76 exposed their
-real side effect: G1 kept one native descriptor unchanged for 203 panel
-TE/RAMWR transactions. The shortened replacement accidentally rebuilt and rang
-an alternate descriptor on every loop iteration while claiming to wait for a
-stable raster. A later interrupt-backed experiment did service the panel
-continuously, but could preempt those same asynchronous descriptor swaps.
+normal boot does not display or depend on them.
 
-Production now latches the native 320x240 RGB565 descriptor twice before panel
-ownership changes, verifies four L08 TE/RAMWR transactions without touching
-that descriptor, and then transfers continuous TE service to a kernel interrupt
-handler matching MuFrog's recovered `vsync_irq()`. Normal GE updates change only
-the pixels in the fixed scanout surface; they do not ring an identical DMBA on
-every console refresh. The failed interrupt experiment in log75 had started
-the handler before later descriptor changes, allowing shared-bus ownership and
-DMBA updates to race. The fixed ordering removes both the visible diagnostic
-dependency and that race while preserving continuous vendor-style panel
-synchronization and accelerated RGB scanout.
+The missing production operation was found by tracing the closed firmware:
+before its first GMA doorbell it clears the exact future scanout bitmap through
+GE. The visible E2 diagnostic had accidentally done that in every sharp test
+run. Production now performs that GE clear and render-to-scanout copy while the
+ST7789 remains MCU-owned, starts VOU, alternates the two immutable 0x280-byte
+descriptor blocks used by the vendor framebuffer driver, verifies both hardware
+latches, transfers the panel to RGB mode, and completes four bounded userspace
+TE/RAMWR boundaries. Steady RGB scanout then needs no panel interrupt.
 
-The display service uses `nanosleep` outside that bounded TE-conditioning
-window. The earlier diagnostic delay loop busy-spun forever after RGB handoff;
-physical profiles showed it consuming essentially 100% of the only CPU. Panel
-reset and command delays now use the kernel clock, while only the narrow initial
-TE pulse is sampled at cycle-level resolution.
+The level-triggered kernel TE experiment was removed after physical log77
+showed roughly 113 interrupts per second and recreated moving static by
+repeatedly reclaiming the shared LCD bus. The display service sleeps through
+all ordinary delays and redraw polling; it no longer consumes a core in a
+diagnostic busy loop. GE performs full-screen clears and every presentation,
+while idle console ticks redraw only the small changing regions.
+
+The loader emits one health blink and then leaves the backlight off until the
+display service has pushed a complete controlled frame. The first visible frame
+is configurable:
+
+```sh
+# Immediate console (default)
+make ROOTFS=buildroot SF2000_BOOT_VISUAL=console sdcard-linux
+
+# Built-in logo, held for 750 ms
+make ROOTFS=buildroot SF2000_BOOT_VISUAL=logo sdcard-linux
+
+# RGB565 solid color, held for 1200 ms
+make ROOTFS=buildroot SF2000_BOOT_VISUAL=color \
+	SF2000_BOOT_COLOR=0x001f SF2000_BOOT_HOLD_MS=1200 sdcard-linux
+```
+
+`SF2000_BOOT_HOLD_MS` is limited to five seconds. The logo is generated directly
+into the framebuffer and adds no image decoder or filesystem dependency.
+Press START+SELECT to flush `loglinux.txt`, synchronize and unmount the card,
+then restart through the kernel; the watchdog is retained only as a fallback.
 
 When explicitly enabled, init disarms the display watchdog, terminates the
 console by its supervised PID, and waits for kernel-owned GE cleanup without
@@ -139,8 +160,8 @@ representative pixels in QEMU's continuously refreshed scanout. This covers a
 real independently maintained Linux bFLT program, signal/child handling, all
 eight o32 syscall argument slots, fbdev ioctls, framebuffer `mmap`, and CPU
 writes becoming visible through the same GMA scanout used by the device. Add
-`SF2000_FB_TEST=1` is intentionally required because the production default
-leaves the accelerated console running.
+`SF2000_FB_TEST=1` explicitly because the production default leaves the
+accelerated console running.
 
 `smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
@@ -199,23 +220,8 @@ panel boot chain.
 - `log.txt`: fixed-size early boot log. Keep this file in the SD root if you
   want kernel stage names written back to the card.
 
-Hardware diagnostics use counted backlight-off pulse groups, mirrored on the
-L25 status LED when that LED is present:
-
-- 1 pulse: Linux loader entered.
-- 2 pulses: loader is jumping to the kernel.
-- 3 pulses: kernel entered MIPS `setup_arch`.
-- 4 pulses: kernel finished MIPS `setup_arch`.
-- 5 pulses: `start_kernel` resumed after `setup_arch`.
-- 6 pulses: `mm_init` completed.
-- 7 pulses: `time_init` completed.
-- 8 pulses: the kernel is about to enable IRQs.
-- 9 pulses: the kernel is about to exec `/init`.
-- 10 pulses: initramfs `/init` reached userspace.
-
-If the pulse groups stop, the next stage is where the boot is hanging.
-The loader emits its one-pulse entry marker before calling any vendor FAT or
-SD helper, so a damaged or slow recovery log cannot hide loader entry. Warm
-recovery writes the newest 256 retained entries to `log.txt`; older entries
-are counted in a `skipped-oldest` line instead of delaying boot with hundreds
-of sector writes.
+Normal boots now use one loader health blink. Kernel and userspace milestones
+continue to be recorded in the retained RAM journal and UART without delaying
+boot or exposing stale panel memory. Warm recovery writes the newest 256
+retained entries to `log.txt`; older entries are counted in a
+`skipped-oldest` line instead of delaying boot with hundreds of sector writes.

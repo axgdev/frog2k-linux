@@ -1,33 +1,6 @@
 #!/bin/sh
 
-# Keep boot-time work focused; sf2000-logd records detailed topology.
-
-log()
-{
-	printf 'sf2000_storage: %s\n' "$*" > /dev/kmsg
-	printf '%s\n' "$*" > /run/sf2000-storage.status
-}
-
-case "$1" in
-	start)
-		log "mount service start"
-		mkdir -p /mnt/sd
-		attempt=0
-		while [ "$attempt" -lt 30 ]; do
-			for dev in /dev/mmcblk0p1 /dev/mmcblk0p2 /dev/mmcblk0; do
-				[ -b "$dev" ] || continue
-				if mount -t vfat -o rw "$dev" /mnt/sd 2>/dev/null; then
-					printf '%s\n' "$dev" > /run/sf2000-storage-mounted
-					log "mount ok $dev at /mnt/sd"
-					exit 0
-				fi
-			done
-			attempt=$((attempt + 1))
-			sleep 1
-		done
-		log "mount failed after $attempt attempts"
-		exit 1
-		;;
-esac
-
-exit 0
+# BusyBox-init compatibility; the normal NOMMU init executes this bFLT
+# directly to avoid relocating the much larger shell during boot.
+[ "$1" = start ] || exit 0
+exec /usr/sbin/sf2000-mount

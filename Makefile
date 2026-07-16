@@ -61,6 +61,8 @@ BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
 BUILDROOT_LOGD_SRC := buildroot/sf2000-logd.c
 BUILDROOT_LOGD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-logd
+BUILDROOT_MOUNT_SRC := buildroot/sf2000-mount.c
+BUILDROOT_MOUNT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-mount
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN_CFLAGS :=
@@ -141,7 +143,13 @@ LINUX_CMDLINE_STAMP := $(LINUX_OUT)/.stamp-cmdline
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
-LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init
+SF2000_BOOT_VISUAL ?= console
+SF2000_BOOT_COLOR ?= 0x0000
+SF2000_BOOT_HOLD_MS ?= 750
+LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init \
+	SF2000_BOOT_VISUAL=$(SF2000_BOOT_VISUAL) \
+	SF2000_BOOT_COLOR=$(SF2000_BOOT_COLOR) \
+	SF2000_BOOT_HOLD_MS=$(SF2000_BOOT_HOLD_MS)
 LINUX_LOADER_BLOBS_S := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-blobs.S
 LINUX_LOADER_ENTRY_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-entry.o
 LINUX_LOADER_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).o
@@ -198,7 +206,8 @@ run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
-	smoke-linux-buildroot-display smoke-linux-buildroot-fb-test run-linux-buildroot-panel \
+	smoke-linux-buildroot-display smoke-linux-buildroot-boot-logo \
+	smoke-linux-buildroot-fb-test run-linux-buildroot-panel \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
@@ -526,6 +535,12 @@ $(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
+$(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) \
 		ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -580,7 +595,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -957,51 +972,14 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Linux arms WDT0 during setup_arch and pets it near overflow whenever it records progress.\n'; \
 		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
 		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
+		printf 'Display handoff:\n'; \
+		printf '  Normal boot emits one loader health blink, then keeps the backlight dark.\n'; \
+		printf '  The display service enables it only after a complete controlled frame is in panel GRAM.\n'; \
+		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
+			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
-		printf '  Press SELECT in Linux userspace to request a watchdog reboot.\n\n'; \
-		printf 'Visible stages use counted backlight-off pulses plus L25 status LED flashes:\n'; \
-		printf '  Direct QEMU blank-ROM runs compress these delays automatically.\n'; \
-		printf '  1 pulse: Linux loader entered\n'; \
-		printf '  2 pulses: loader is jumping to the kernel\n'; \
-		printf '  log.txt records CP0 EBase before/after the loader normalizes it for Linux.\n'; \
-		printf '  log.txt records the SYSIO mapping register before/after the Linux mapping bit.\n'; \
-		printf '  log.txt also records the handoff words used to decide whether ROM helpers are present.\n'; \
-		printf '  If the LCD marker appears, large center digits are the monotonic visible event number.\n'; \
-		printf '  Top-left digit 1 means counted stage, 2 means tick; lower-right digits are stage pulses.\n'; \
-		printf '  3 pulses: kernel entered MIPS setup_arch\n'; \
-		printf '  after 3 pulses, count single ticks inside setup_arch:\n'; \
-		printf '    1 cpu_probe, 2 mips_cm_probe skipped/done, 3 prom_init\n'; \
-		printf '    4 early console, 5 cpu_report/check_bugs, 6 arch_mem_init\n'; \
-		printf '    7 resource/smp map, 8 cpu_cache_init, 9 paging_init\n'; \
-		printf '    10 memblock_dump_all\n'; \
-		printf '  4 pulses: kernel finished MIPS setup_arch\n'; \
-		printf '  5 pulses: start_kernel resumed after setup_arch\n'; \
-		printf '  after 5 pulses, count single ticks for the post-setup_arch ladder:\n'; \
-		printf '    1 setup_boot_config, 2 setup_command_line, 3 setup_nr_cpu_ids\n'; \
-		printf '    4 setup_per_cpu_areas, 5 smp_prepare_boot_cpu, 6 cpu hotplug init\n'; \
-		printf '    7 build_all_zonelists, 8 page_alloc_init, 9 jump_label_init\n'; \
-		printf '    10 parse_early_param, 11 parse_args, 12 setup_log_buf\n'; \
-		printf '    13 vfs_caches_init_early, 14 sort_main_extable\n'; \
-		printf '  after the 14th post-setup tick, trap_init begins and emits its own ticks:\n'; \
-		printf '    1 check_wait skipped/done, 2 ebase selected, 3 CP0 EBase normalized/skipped\n'; \
-		printf '    4 generic vector preinstalled, then per_cpu_trap_init emits sub-ticks:\n'; \
-		printf '      1 entry, 2 hwrena, 3 exception vector, 4 IRQ select, 5 ASID\n'; \
-		printf '      6 mm context, 7 lazy TLB, 8 before tlb_init, 9 after tlb_init\n'; \
-		printf '      10 TLBMISS setup, 11 Status/BEV normalized\n'; \
-		printf '    inside tlb_init, physical TLB ticks use bare GPIO without printk/GMA.\n'; \
-		printf '    ticks are: entry, config entry, pagemask write/read\n'; \
-		printf '      wired zero, before flush, flush entry, irq save, entrylo clear/defer\n'; \
-		printf '      wired skip/read, SF2000 TLBWI skip, config done\n'; \
-		printf '      refill build before/after\n'; \
-		printf '    next trap ticks: 5 per_cpu returned, 6 generic vector copied, 7 default vectors\n'; \
-		printf '    8 watch vector, 9 parity setup, 10 board bus-error setup\n'; \
-		printf '    11 main exception vectors, 12 icache flush, 13 DBE extable sort, 14 CU2 notifier\n'; \
-		printf '  post-setup tick 15 means trap_init returned and mm_init is about to run.\n'; \
-		printf '  6 pulses: mm_init completed\n'; \
-		printf '  7 pulses: time_init completed\n'; \
-		printf '  8 pulses: kernel is about to enable IRQs; RAM log records CP0 IRQ state\n'; \
-		printf '  9 pulses: kernel is about to exec /init\n'; \
-		printf '  10 pulses: bFLT /init reached userspace\n'; \
+		printf '  Press START+SELECT for a logger flush, sync, unmount, and clean restart.\n'; \
+		printf '  A bounded watchdog restart is used only if the orderly path stalls.\n'; \
 	} > '$@'
 
 $(SDCARD_LOG_TXT): Makefile
@@ -1218,6 +1196,7 @@ smoke-linux-buildroot-persistent-storage:
 	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
 	mcopy -i "$$tmp_sd" ::sf2000-storage-test.bin "$$tmp_test"; \
 	grep -q 'source=storage storage-test=pass bytes=262144 hash=ec55efc5' "$$tmp_log"; \
+	grep -q 'source=kmsg .*sf2000-mount: mount ok' "$$tmp_log"; \
 	grep -q 'source=kmsg ' "$$tmp_log"; \
 	grep -q 'source=logd --- SF2000 Linux pre-mount profile begin ---' "$$tmp_log"; \
 	grep -q 'source=proc-stat ' "$$tmp_log"; \
@@ -1286,6 +1265,12 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000-screen: GE accelerated console clear active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-ge-clock-fast' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000000 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
+		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
+		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
+		test "$$panel_push_line" -lt "$$backlight_line"
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1349,6 +1334,16 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+
+smoke-linux-buildroot-boot-logo:
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='30s' \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_BOOT_VISUAL=logo SF2000_BOOT_COLOR=0x0010 SF2000_BOOT_HOLD_MS=0' \
+		run-linux-buildroot-display
+	grep -q 'value=0x00000002 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
+		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
+		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
+		test "$$panel_push_line" -lt "$$backlight_line"
 
 smoke-linux-buildroot-fb-test:
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \

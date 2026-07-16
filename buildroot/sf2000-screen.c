@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/input.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,7 +14,6 @@
 #include <sys/mman.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -283,6 +281,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_BTN_LEFT 0x04u
 #define CONSOLE_BTN_RIGHT 0x08u
 #define CONSOLE_BTN_SELECT 0x10u
+#define CONSOLE_BTN_START 0x20u
 
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -298,6 +297,9 @@ static volatile int stopping;
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
+static char boot_visual[16] = "console";
+static uint16_t boot_color;
+static unsigned boot_hold_ms = 750u;
 static char console_lines[CONSOLE_SCROLLBACK_LINES][CONSOLE_LINE_LEN];
 static unsigned console_line_count;
 static unsigned console_line_start;
@@ -306,7 +308,6 @@ static unsigned console_view_offset;
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
 static hcge_context *display_ge;
-static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
 static unsigned display_ge_attempts;
 static unsigned gma_desc_slot;
@@ -618,9 +619,9 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 };
 
 /*
- * G1 is the proven MuFrog descriptor.  The last consistently sharp physical
- * runs traversed all eight descriptor states before restoring G1; repeating
- * G1 alone did not reproduce that hardware state.
+ * G1 is the recovered MuFrog native RGB565 descriptor and the only profile
+ * used by production scanout.  G2-G8 deliberately vary one field at a time
+ * for the opt-in SF2000_GE_DIAG differential test.
  */
 static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
 	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
@@ -841,47 +842,6 @@ static void progress_mark_file_head(const char *prefix, const char *path)
 	buf[got] = 0;
 	progress_mark(prefix, 0x23u, (uint32_t)got);
 	progress_mark_text(prefix, buf);
-}
-
-static const char *text_find(const char *haystack, const char *needle)
-{
-	size_t len = strlen(needle);
-
-	if (!len)
-		return haystack;
-	while (*haystack) {
-		if (strncmp(haystack, needle, len) == 0)
-			return haystack;
-		haystack++;
-	}
-	return NULL;
-}
-
-static void progress_mark_file_section(const char *prefix, const char *path,
-	const char *needle)
-{
-	char buf[1024];
-	const char *section;
-	ssize_t got;
-	int fd = open(path, O_RDONLY | O_CLOEXEC);
-
-	if (fd < 0) {
-		progress_mark(prefix, 0x26u, (uint32_t)errno);
-		return;
-	}
-	got = read(fd, buf, sizeof(buf) - 1u);
-	close(fd);
-	if (got < 0) {
-		progress_mark(prefix, 0x27u, (uint32_t)errno);
-		return;
-	}
-	buf[got] = 0;
-	section = text_find(buf, needle);
-	progress_mark(prefix, 0x28u, (uint32_t)got);
-	progress_mark("stor-section-off", 0x28u,
-		section ? (uint32_t)(section - buf) : 0xffffffffu);
-	if (section)
-		progress_mark_text(prefix, section);
 }
 
 static void progress_mark_dir_count(const char *name, const char *path)
@@ -1154,339 +1114,6 @@ static int publish_marker(const char *path, const char *text)
 	close(fd);
 	return 0;
 }
-
-#if 0
-static uint32_t storage_hash_name(const char *text)
-{
-	uint32_t hash = 2166136261u;
-
-	while (*text) {
-		hash ^= (uint8_t)*text++;
-		hash *= 16777619u;
-	}
-	return hash;
-}
-
-static void storage_log_msgf(const char *fmt, ...)
-{
-	char line[256];
-	va_list ap;
-
-	va_start(ap, fmt);
-	vsnprintf(line, sizeof(line), fmt, ap);
-	va_end(ap);
-	log_line(line);
-	append_file_log(line);
-}
-
-static void storage_mount_once(const char *src, const char *target,
-	const char *type, const char *ret_name, const char *err_name)
-{
-	int ret;
-
-	errno = 0;
-	ret = mount(src, target, type, 0, "");
-	progress_mark(ret_name, 0x3au, (uint32_t)ret);
-	progress_mark(err_name, 0x3au, (uint32_t)errno);
-}
-
-static void storage_ensure_mounts(void)
-{
-	mkdir("/proc", 0755);
-	mkdir("/sys", 0755);
-	mkdir("/dev", 0755);
-	mkdir("/dev/pts", 0755);
-	mkdir("/run", 0755);
-	mkdir("/mnt", 0755);
-	mkdir("/mnt/sd", 0755);
-	storage_mount_once("proc", "/proc", "proc",
-		"stor-mount-proc-ret", "stor-mount-proc-err");
-	storage_mount_once("sysfs", "/sys", "sysfs",
-		"stor-mount-sys-ret", "stor-mount-sys-err");
-	storage_mount_once("devtmpfs", "/dev", "devtmpfs",
-		"stor-mount-dev-ret", "stor-mount-dev-err");
-	storage_mount_once("devpts", "/dev/pts", "devpts",
-		"stor-mount-pts-ret", "stor-mount-pts-err");
-}
-
-static void storage_mknod_block(const char *path, unsigned minor,
-	const char *ret_name, const char *err_name)
-{
-	int ret;
-
-	errno = 0;
-	ret = mknod(path, S_IFBLK | 0660, makedev(179, minor));
-	progress_mark(ret_name, 0x3du, (uint32_t)ret);
-	progress_mark(err_name, 0x3du, (uint32_t)errno);
-}
-
-static void storage_ensure_block_nodes(void)
-{
-	storage_mknod_block("/dev/mmcblk0", 0,
-		"stor-mknod-mmc0-ret", "stor-mknod-mmc0-err");
-	storage_mknod_block("/dev/mmcblk0p1", 1,
-		"stor-mknod-mmc0p1-ret", "stor-mknod-mmc0p1-err");
-	storage_mknod_block("/dev/mmcblk0p2", 2,
-		"stor-mknod-mmc0p2-ret", "stor-mknod-mmc0p2-err");
-}
-
-static int storage_read_devt(const char *path, unsigned *major_out,
-	unsigned *minor_out)
-{
-	char buf[32];
-	unsigned major = 0;
-	unsigned minor = 0;
-	ssize_t got;
-	int fd;
-	unsigned i = 0;
-
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		progress_mark("stor-devt-open-fail", 0x3du, (uint32_t)errno);
-		return -1;
-	}
-	got = read(fd, buf, sizeof(buf) - 1u);
-	close(fd);
-	if (got <= 0) {
-		progress_mark("stor-devt-read-fail", 0x3du,
-			got < 0 ? (uint32_t)errno : 0);
-		return -1;
-	}
-	buf[got] = 0;
-	while (buf[i] >= '0' && buf[i] <= '9') {
-		major = major * 10u + (unsigned)(buf[i] - '0');
-		i++;
-	}
-	if (buf[i] != ':') {
-		progress_mark("stor-devt-bad", 0x3du, storage_hash_name(buf));
-		return -1;
-	}
-	i++;
-	while (buf[i] >= '0' && buf[i] <= '9') {
-		minor = minor * 10u + (unsigned)(buf[i] - '0');
-		i++;
-	}
-	*major_out = major;
-	*minor_out = minor;
-	progress_mark("stor-devt-major", 0x3du, major);
-	progress_mark("stor-devt-minor", 0x3du, minor);
-	return 0;
-}
-
-static void storage_mknod_devt(const char *sysdev, const char *node)
-{
-	unsigned major;
-	unsigned minor;
-	int ret;
-
-	progress_mark("stor-devt-path", 0x3du, storage_hash_name(sysdev));
-	if (storage_read_devt(sysdev, &major, &minor) != 0)
-		return;
-	errno = 0;
-	unlink(node);
-	ret = mknod(node, S_IFBLK | 0660, makedev(major, minor));
-	progress_mark("stor-devt-mknod-ret", 0x3du, (uint32_t)ret);
-	progress_mark("stor-devt-mknod-err", 0x3du, (uint32_t)errno);
-}
-
-static void storage_stat_node(const char *path)
-{
-	struct stat st;
-
-	progress_mark("stor-stat-path", 0x3du, storage_hash_name(path));
-	errno = 0;
-	if (stat(path, &st) != 0) {
-		progress_mark("stor-stat-fail", 0x3du, (uint32_t)errno);
-		return;
-	}
-	progress_mark("stor-stat-mode", 0x3du, (uint32_t)st.st_mode);
-	progress_mark("stor-stat-major", 0x3du, (uint32_t)major(st.st_rdev));
-	progress_mark("stor-stat-minor", 0x3du, (uint32_t)minor(st.st_rdev));
-}
-
-static void storage_log_block_head(const char *dev)
-{
-	unsigned char buf[512];
-	ssize_t got;
-	int fd;
-
-	progress_mark("stor-blk-open-begin", 0x3du, storage_hash_name(dev));
-	fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-	if (fd < 0) {
-		storage_log_msgf("sf2000_storage_inline: block open failed %s errno=%d\n",
-			dev, errno);
-		progress_mark("stor-blk-open-fail", 0x3du, (uint32_t)errno);
-		return;
-	}
-	progress_mark("stor-blk-open-ok", 0x3du, storage_hash_name(dev));
-	got = read(fd, buf, sizeof(buf));
-	progress_mark("stor-blk-read-ret", 0x3du, (uint32_t)got);
-	if (got >= 4)
-		progress_mark("stor-blk-head0", 0x3du,
-			(uint32_t)buf[0] |
-			((uint32_t)buf[1] << 8) |
-			((uint32_t)buf[2] << 16) |
-			((uint32_t)buf[3] << 24));
-	if (got >= 512)
-		progress_mark("stor-blk-sig", 0x3du,
-			(uint32_t)buf[510] | ((uint32_t)buf[511] << 8));
-	close(fd);
-}
-
-static void storage_set_readahead_zero(const char *dev)
-{
-	unsigned long value = 0;
-	int fd;
-	int ret;
-
-	progress_mark("stor-ra-path", 0x3du, storage_hash_name(dev));
-	fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-	if (fd < 0) {
-		progress_mark("stor-ra-open-fail", 0x3du, (uint32_t)errno);
-		return;
-	}
-	errno = 0;
-	ret = ioctl(fd, BLKRASET, value);
-	progress_mark("stor-ra-ret", 0x3du, (uint32_t)ret);
-	progress_mark("stor-ra-err", 0x3du, (uint32_t)errno);
-	close(fd);
-}
-
-static int storage_try_mount_write_type(const char *dev, const char *fstype)
-{
-	ssize_t wrote = -1;
-	int saved_errno = 0;
-	int fd;
-
-	progress_mark("stor-try", 0x3du, storage_hash_name(dev));
-	storage_log_msgf("sf2000_storage_inline: mount try %s type=%s\n",
-		dev, fstype);
-	progress_mark("stor-mount-type", 0x3du, storage_hash_name(fstype));
-	errno = 0;
-	if (mount(dev, "/mnt/sd", fstype, MS_NOATIME, "") != 0) {
-		storage_log_msgf("sf2000_storage_inline: mount failed %s type=%s errno=%d\n",
-			dev, fstype, errno);
-		progress_mark("stor-mount-fail", 0x3du, (uint32_t)errno);
-		return -1;
-	}
-	storage_log_msgf("sf2000_storage_inline: mount ok %s type=%s\n",
-		dev, fstype);
-	progress_mark("stor-mount-ok", 0x3du, storage_hash_name(dev));
-	fd = open("/mnt/sd/sf2000-linux-rw-0239.txt",
-		O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
-	if (fd < 0) {
-		storage_log_msgf("sf2000_storage_inline: write open failed errno=%d\n",
-			errno);
-		progress_mark("stor-open-fail", 0x3du, (uint32_t)errno);
-	} else {
-		const char msg[] = "sf2000 linux sd write test 0239 inline\n";
-
-		errno = 0;
-		wrote = write(fd, msg, sizeof(msg) - 1u);
-		saved_errno = errno;
-		progress_mark("stor-before-fsync", 0x3du, (uint32_t)wrote);
-		if (wrote == (ssize_t)(sizeof(msg) - 1u)) {
-			errno = 0;
-			progress_mark("stor-fsync-ret", 0x3du,
-				(uint32_t)fsync(fd));
-			progress_mark("stor-fsync-err", 0x3du, (uint32_t)errno);
-		}
-		close(fd);
-		storage_log_msgf("sf2000_storage_inline: write ret=%d errno=%d\n",
-			(int)wrote, saved_errno);
-		progress_mark("stor-write-ret", 0x3du, (uint32_t)wrote);
-		progress_mark("stor-write-errno", 0x3du, (uint32_t)saved_errno);
-	}
-	progress_mark("stor-before-sync", 0x3du, (uint32_t)wrote);
-	sync();
-	progress_mark("stor-after-sync", 0x3du, (uint32_t)wrote);
-	if (umount("/mnt/sd") != 0) {
-		storage_log_msgf("sf2000_storage_inline: umount failed errno=%d\n",
-			errno);
-		progress_mark("stor-umount-fail", 0x3du, (uint32_t)errno);
-	} else {
-		storage_log_msgf("sf2000_storage_inline: umount ok\n");
-		progress_mark("stor-umount-ok", 0x3du, 0);
-	}
-	return wrote > 0 ? 0 : -1;
-}
-
-static int storage_try_mount_write(const char *dev)
-{
-	if (storage_try_mount_write_type(dev, "vfat") == 0)
-		return 0;
-	if (storage_try_mount_write_type(dev, "msdos") == 0)
-		return 0;
-	return -1;
-}
-
-static void run_inline_storage_probe_once(const char *source)
-{
-	static int storage_started;
-	int mounted = -1;
-
-	if (storage_started)
-		return;
-	storage_started = 1;
-	progress_mark("stor-start", 0x3au, SCREEN_TAG);
-	progress_mark_text("diag-storage-src", source);
-	publish_marker("/run/sf2000-storage-started", source);
-	storage_log_msgf("sf2000_storage_inline: start %s", source);
-	storage_ensure_mounts();
-	storage_ensure_block_nodes();
-	storage_mknod_devt("/sys/block/mmcblk0/dev", "/dev/mmcblk0sys");
-	storage_mknod_devt("/sys/class/block/mmcblk0/dev", "/dev/mmcblk0class");
-	storage_mknod_devt("/sys/class/block/mmcblk0p1/dev", "/dev/mmcblk0p1sys");
-	storage_mknod_devt("/sys/class/block/mmcblk0p2/dev", "/dev/mmcblk0p2sys");
-	progress_mark_dir_count("stor-sys-block", "/sys/block");
-	progress_mark_dir_count("stor-class-block", "/sys/class/block");
-	progress_mark_dir_count("stor-dev-block", "/sys/dev/block");
-	progress_mark_dir_count("stor-mmc-host", "/sys/class/mmc_host");
-	progress_mark_dir_count("stor-platform", "/sys/bus/platform/devices");
-	progress_mark_dir_count("stor-dev-root", "/dev");
-	progress_mark_file_head("stor-sys-mmc0-dev", "/sys/block/mmcblk0/dev");
-	progress_mark_file_head("stor-sys-mmc0-size", "/sys/block/mmcblk0/size");
-	progress_mark_file_head("stor-cls-mmc0-dev", "/sys/class/block/mmcblk0/dev");
-	progress_mark_file_head("stor-cls-p1-dev", "/sys/class/block/mmcblk0p1/dev");
-	progress_mark_file_head("stor-cls-p2-dev", "/sys/class/block/mmcblk0p2/dev");
-	progress_mark_file_head("stor-proc-part", "/proc/partitions");
-	progress_mark_file_head("stor-proc-dev", "/proc/devices");
-	progress_mark_file_section("stor-proc-blk", "/proc/devices",
-		"Block devices:");
-	progress_mark_file_head("stor-proc-int", "/proc/interrupts");
-	storage_stat_node("/dev/mmcblk0");
-	storage_stat_node("/dev/mmcblk0p1");
-	storage_stat_node("/dev/mmcblk0p2");
-	storage_stat_node("/dev/mmcblk0sys");
-	storage_stat_node("/dev/mmcblk0class");
-	storage_stat_node("/dev/mmcblk0p1sys");
-	storage_stat_node("/dev/mmcblk0p2sys");
-	storage_set_readahead_zero("/dev/mmcblk0");
-	storage_set_readahead_zero("/dev/mmcblk0p1");
-	storage_set_readahead_zero("/dev/mmcblk0p2");
-	storage_set_readahead_zero("/dev/mmcblk0sys");
-	storage_set_readahead_zero("/dev/mmcblk0class");
-	if (storage_try_mount_write("/dev/mmcblk0") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0p1") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0p2") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0sys") == 0 ||
-	    storage_try_mount_write("/dev/mmcblk0class") == 0)
-		mounted = 0;
-	progress_mark("stor-fast-result", 0x3au, (uint32_t)mounted);
-	if (mounted == 0) {
-		storage_log_msgf("sf2000_storage_inline: fast storage path ok\n");
-		progress_mark("stor-done", 0x3au, SCREEN_TAG);
-		return;
-	}
-	storage_log_block_head("/dev/mmcblk0");
-	storage_log_block_head("/dev/mmcblk0p1");
-	storage_log_block_head("/dev/mmcblk0p2");
-	storage_log_block_head("/dev/mmcblk0sys");
-	storage_log_block_head("/dev/mmcblk0class");
-	storage_log_msgf("sf2000_storage_inline: done\n");
-	progress_mark("stor-done", 0x3au, SCREEN_TAG);
-}
-#endif
 
 static void publish_screen_ready_and_storage(const char *source)
 {
@@ -1907,7 +1534,11 @@ static void startup_backlight_diagnostic(void)
 	log_line("sf2000-screen: taking backlight ownership\n");
 	append_file_log("sf2000-screen: taking backlight ownership\n");
 	progress_mark("screen-bl-owned", 0x3fu, SCREEN_TAG);
-	backlight_set(1);
+	/*
+	 * The loader has already emitted the single health blink.  Keep inherited
+	 * panel GRAM hidden until the complete, selected boot frame is committed.
+	 */
+	backlight_set(0);
 	status_led_set(0);
 }
 
@@ -2460,14 +2091,6 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 	watchdog_pet();
 }
 
-static void panel_set_madctl(uint8_t madctl)
-{
-	if (!panel_enabled)
-		return;
-	panel_cmd(ST7789_MADCTL);
-	panel_data(madctl);
-}
-
 static int panel_init_variant(const struct panel_variant *variant)
 {
 	uint32_t panel_id;
@@ -2562,23 +2185,6 @@ static void panel_push_pixels(const uint16_t *fb, int switch_to_rgb)
 static void panel_push_frame(int switch_to_rgb)
 {
 	panel_push_pixels(framebuffer(), switch_to_rgb);
-}
-
-static void panel_push_probe_pixels(void)
-{
-	unsigned i;
-
-	if (!panel_enabled)
-		return;
-	watchdog_pet();
-	panel_control_pinmux();
-	panel_config_outputs();
-	panel_bus_idle();
-	panel_restart_frame();
-	for (i = 0; i < 16; i++)
-		panel_data(rgb565(31, 63, 31));
-	panel_bus_idle();
-	watchdog_pet();
 }
 
 static void panel_fill_solid_direct(uint16_t color)
@@ -2943,13 +2549,22 @@ static int console_handle_buttons(uint32_t buttons)
 	int changed = 0;
 	int page = (int)CONSOLE_ROWS - 3;
 
-	if (buttons & CONSOLE_BTN_SELECT) {
-		console_add_line("SELECT pressed: restarting");
-		log_line("sf2000-screen: SELECT pressed, restarting\n");
+	if ((buttons & (CONSOLE_BTN_SELECT | CONSOLE_BTN_START)) ==
+	    (CONSOLE_BTN_SELECT | CONSOLE_BTN_START)) {
+		unsigned wait;
+
+		console_add_line("START+SELECT: clean restart");
+		log_line("sf2000-screen: START+SELECT pressed, requesting clean restart\n");
 		runtime_watchdog_arm();
 		progress_mark_reset_snapshot_fast();
-		console_add_line("direct watchdog reset");
-		log_line("sf2000-screen: direct watchdog reset\n");
+		publish_marker("/run/sf2000-reboot-request", "restart\n");
+		progress_mark("screen-reboot-request", 0x3fu, SCREEN_TAG);
+		for (wait = 0; wait < 60u; wait++) {
+			watchdog_pet();
+			sleep_ms(100);
+		}
+		sync();
+		log_line("sf2000-screen: clean restart timed out, using watchdog\n");
 		watchdog_restart_now();
 		reboot(LINUX_REBOOT_CMD_RESTART);
 	}
@@ -2976,6 +2591,8 @@ static uint32_t console_button_for_key(uint16_t code)
 		return CONSOLE_BTN_RIGHT;
 	if (code == BTN_SELECT || code == KEY_BACKSPACE)
 		return CONSOLE_BTN_SELECT;
+	if (code == BTN_START || code == KEY_ENTER)
+		return CONSOLE_BTN_START;
 	return 0;
 }
 
@@ -3186,16 +2803,26 @@ static void flush_present_memory(void)
 		gma_frame_flush_bytes, BCACHE);
 }
 
-static void ge_display_open(void)
+static void ge_display_open(hcge_context *storage)
 {
 	char line[96];
+	int clock_ret;
 	int ret;
 
-	ret = hcge_open_context(&display_ge_storage);
+	progress_mark("screen-ge-context-address", 0x3fu,
+		(uint32_t)(uintptr_t)storage);
+	ret = hcge_open_context(storage);
 	if (ret == 0) {
-		display_ge = &display_ge_storage;
+		display_ge = storage;
+		/*
+		 * HC15 selector 0 is the measured fast 198 MHz GE profile used by
+		 * MuFrog for fills and presentation.  The CPU remains untouched.
+		 */
+		clock_ret = hcge_set_clock(display_ge, 0u);
 		log_line("sf2000-screen: GE RGB565 compositor ready\n");
 		progress_mark("screen-ge-open-ok", 0x3fu, SCREEN_TAG);
+		progress_mark(clock_ret == 0 ? "screen-ge-clock-fast" :
+			"screen-ge-clock-fail", 0x3fu, (uint32_t)clock_ret);
 	} else {
 		snprintf(line, sizeof(line),
 			"sf2000-screen: GE unavailable ret=%d errno=%d, using direct framebuffer\n",
@@ -3726,6 +3353,118 @@ static int cmdline_contains(const char *needle)
 	return strstr(buf, needle) != NULL;
 }
 
+static int cmdline_value(const char *name, char *value, size_t value_size)
+{
+	char cmdline[512];
+	size_t name_len = strlen(name);
+	char *token;
+	ssize_t n;
+	int fd;
+
+	if (!name_len || value_size < 2u)
+		return -1;
+	fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	n = read(fd, cmdline, sizeof(cmdline) - 1u);
+	close(fd);
+	if (n <= 0)
+		return -1;
+	cmdline[n] = 0;
+	for (token = strtok(cmdline, " \t\n"); token;
+	     token = strtok(NULL, " \t\n")) {
+		size_t length;
+
+		if (strncmp(token, name, name_len) || token[name_len] != '=')
+			continue;
+		token += name_len + 1u;
+		length = strlen(token);
+		if (length >= value_size)
+			length = value_size - 1u;
+		memcpy(value, token, length);
+		value[length] = 0;
+		return 0;
+	}
+	return -1;
+}
+
+static void configure_boot_visual(void)
+{
+	char value[32];
+	const char *environment = getenv("SF2000_BOOT_VISUAL");
+	char *end;
+	unsigned long parsed;
+
+	if (environment && *environment) {
+		strncpy(boot_visual, environment, sizeof(boot_visual) - 1u);
+		boot_visual[sizeof(boot_visual) - 1u] = 0;
+	} else if (cmdline_value("SF2000_BOOT_VISUAL", value,
+			sizeof(value)) == 0) {
+		strncpy(boot_visual, value, sizeof(boot_visual) - 1u);
+		boot_visual[sizeof(boot_visual) - 1u] = 0;
+	}
+	if (strcmp(boot_visual, "console") && strcmp(boot_visual, "color") &&
+	    strcmp(boot_visual, "logo"))
+		strcpy(boot_visual, "console");
+
+	environment = getenv("SF2000_BOOT_COLOR");
+	if (environment && *environment)
+		strncpy(value, environment, sizeof(value) - 1u);
+	else if (cmdline_value("SF2000_BOOT_COLOR", value, sizeof(value)) != 0)
+		strcpy(value, "0");
+	value[sizeof(value) - 1u] = 0;
+	errno = 0;
+	parsed = strtoul(value, &end, 0);
+	if (!errno && end != value && !*end && parsed <= 0xffffu)
+		boot_color = (uint16_t)parsed;
+
+	environment = getenv("SF2000_BOOT_HOLD_MS");
+	if (environment && *environment)
+		strncpy(value, environment, sizeof(value) - 1u);
+	else if (cmdline_value("SF2000_BOOT_HOLD_MS", value,
+			sizeof(value)) != 0)
+		strcpy(value, "750");
+	value[sizeof(value) - 1u] = 0;
+	errno = 0;
+	parsed = strtoul(value, &end, 0);
+	if (!errno && end != value && !*end && parsed <= 5000u)
+		boot_hold_ms = (unsigned)parsed;
+}
+
+static void draw_boot_logo(void)
+{
+	uint16_t bg = boot_color;
+	uint16_t panel = rgb565(0, 8, 13);
+	uint16_t accent = rgb565(2, 40, 31);
+	uint16_t text = rgb565(27, 63, 28);
+
+	if (ge_fill_render(bg) < 0)
+		fill_rect(0, 0, WIDTH, HEIGHT, bg);
+	fill_rect(46, 64, WIDTH - 92u, HEIGHT - 128u, panel);
+	fill_rect(46, 64, WIDTH - 92u, 4, accent);
+	fill_rect(46, HEIGHT - 68u, WIDTH - 92u, 4, accent);
+	draw_text(76, 91, "SF2000", text, panel, 3);
+	draw_text(106, 126, "LINUX", text, panel, 2);
+}
+
+static int draw_boot_visual(unsigned frame)
+{
+	if (!strcmp(boot_visual, "logo")) {
+		draw_boot_logo();
+		progress_mark("screen-boot-visual", 0x3fu, 2u);
+		return 1;
+	}
+	if (!strcmp(boot_visual, "color")) {
+		if (ge_fill_render(boot_color) < 0)
+			fill_rect(0, 0, WIDTH, HEIGHT, boot_color);
+		progress_mark("screen-boot-visual", 0x3fu, 1u);
+		return 1;
+	}
+	draw_console_screen(frame);
+	progress_mark("screen-boot-visual", 0x3fu, 0u);
+	return 0;
+}
+
 static void log_gma_ready(void)
 {
 	char line[160];
@@ -3758,18 +3497,6 @@ static void log_gma_regs(const char *name, unsigned variant, uint32_t mode,
 	append_file_log(line);
 }
 
-static void log_direct_diag(const struct panel_variant *variant,
-	uint8_t madctl, unsigned frame)
-{
-	char line[160];
-
-	snprintf(line, sizeof(line),
-		"sf2000-screen: direct diag variant=%s madctl=0x%02x frame=%u\n",
-		variant->name, madctl, frame);
-	log_line(line);
-	append_file_log(line);
-}
-
 static int argv0_is(const char *argv0, const char *name)
 {
 	const char *base;
@@ -3779,75 +3506,6 @@ static int argv0_is(const char *argv0, const char *name)
 	base = strrchr(argv0, '/');
 	base = base ? base + 1 : argv0;
 	return strcmp(base, name) == 0;
-}
-
-static void show_direct_frame(const char *phase,
-	const struct panel_variant *variant, uint8_t madctl, unsigned *frame,
-	unsigned hold_ms)
-{
-	if (stopping)
-		return;
-	panel_set_madctl(madctl);
-	(*frame)++;
-	draw_diag_screen(phase, variant->name, madctl, *frame);
-	panel_push_frame(0);
-	log_direct_diag(variant, madctl, *frame);
-	sleep_ms(hold_ms);
-}
-
-static void run_direct_diag(unsigned *frame)
-{
-	unsigned i;
-
-	for (i = 0; i < ARRAY_SIZE(panel_variants) && !stopping; i++) {
-		const struct panel_variant *variant = &panel_variants[i];
-		unsigned madctl_count = i == 0 ? ARRAY_SIZE(variant->madctl) : 1;
-		unsigned m;
-
-		diagnostic_pulse((i % 3u) + 1u, 120, 120);
-		panel_init_variant(variant);
-		for (m = 0; m < madctl_count && !stopping; m++)
-			show_direct_frame("DIRECT PANEL BUS", variant,
-				variant->madctl[m], frame, 350);
-	}
-}
-
-static void run_rgb_diag(unsigned *frame)
-{
-	const struct panel_variant *variant = &panel_variants[0];
-	unsigned i;
-
-	if (stopping)
-		return;
-
-	diagnostic_pulse(4, 120, 120);
-	panel_init_variant(variant);
-	panel_set_madctl(variant->madctl[0]);
-	(*frame)++;
-	draw_diag_screen("GMA RGB SCANOUT", variant->name,
-		variant->madctl[0], *frame);
-	panel_push_frame(0);
-	sleep_ms(350);
-
-	for (i = 0; i < 8 && !stopping; i++) {
-		(*frame)++;
-		draw_diag_screen("GMA RGB SCANOUT", variant->name,
-			variant->madctl[0], *frame);
-		if (i == 0) {
-			mark_hc15_display_state(0);
-			panel_rgb_engine_prepare();
-			present_frame();
-			if (panel_wait_gma_raster(gma_desc_phys) < 0)
-				break;
-			present_frame();
-			if (panel_wait_gma_raster(gma_desc_phys) < 0)
-				break;
-			panel_commit_rgb_handoff();
-			mark_hc15_display_state(1);
-		}
-		present_frame();
-		sleep_ms(350);
-	}
 }
 
 static void panel_apply_sync_profile(
@@ -4048,25 +3706,33 @@ static void run_direct_console(unsigned *frame)
 	console_input_init_fds(input_fds);
 	if (!console_input_refresh_fds(input_fds))
 		console_add_line("input: waiting for evdev devices");
-	draw_console_screen(++*frame);
+	++*frame;
+	ge_diagnostics =
+		env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
+		cmdline_contains("SF2000_GE_DIAG=1");
+	if (ge_diagnostics)
+		draw_console_screen(*frame);
+	else
+		(void)draw_boot_visual(*frame);
 	/*
 	 * Complete a real GRAM transaction before changing the ST7789 ownership
 	 * from its 8080/MCU port to RGB.  This cannot be reduced to register
-	 * readback: log65 skipped both this and GMA conditioning and scrambled;
-	 * log66 restored all eight GMA states but still scrambled.  Every clear
-	 * physical run (52, 55, 56 and 64) includes this exact MCU/GE sequence.
+	 * readback: the first visible frame must be valid before the backlight is
+	 * enabled, and the RGB handoff later depends on a completed address-window
+	 * transaction rather than inherited panel state.
 	 */
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	backlight_set(1);
+	progress_mark("screen-boot-backlight-on", 0x3fu, SCREEN_TAG);
+	if (!ge_diagnostics && strcmp(boot_visual, "console") && boot_hold_ms)
+		sleep_ms(boot_hold_ms);
 	/*
 	 * Keep the broad GE/MCU cards as an explicit hardware diagnostic.  Normal
 	 * boot already exercises the same fill and blit engines and no longer
 	 * depends on displaying test patterns before the console.
 	 */
-	ge_diagnostics =
-		env_is((const char *const *)environ, "SF2000_GE_DIAG", "1") ||
-		cmdline_contains("SF2000_GE_DIAG=1");
 	if (ge_diagnostics)
 		run_ge_mcu_probe(*frame);
 	/*
@@ -4115,11 +3781,7 @@ static void run_direct_console(unsigned *frame)
 	panel_commit_rgb_handoff();
 	rgb_active = 1;
 	mark_hc15_display_state(1);
-	/*
-	 * Diagnostic descriptor changes must finish before the continuous kernel
-	 * synchronizer starts.  This was reversed in the failed log75 build, so
-	 * its interrupt could change shared bus ownership during a DMBA update.
-	 */
+	/* Finish optional descriptor variations before the bounded TE handoff. */
 	if (ge_diagnostics) {
 		if (run_gma_descriptor_probe() < 0) {
 			progress_mark("screen-rgb-handoff-abort", 0x3fu,
@@ -4313,6 +3975,7 @@ int main(int argc, char **argv, char **envp)
 #endif
 	int fd;
 	unsigned frame = 0;
+	hcge_context display_ge_storage;
 	const struct panel_variant *first_variant;
 
 	(void)argc;
@@ -4330,6 +3993,7 @@ int main(int argc, char **argv, char **envp)
 		led_enabled = 0;
 	if (env_is((const char *const *)envp, "SF2000_FAST_PANEL", "1"))
 		slow_panel_bus = 0;
+	configure_boot_visual();
 	progress_mark("screen-after-env-checks", 0x3fu, SCREEN_TAG);
 
 	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast")) {
@@ -4366,7 +4030,14 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 	map_framebuffer_device();
-	ge_display_open();
+	/*
+	 * Keep the GE context in main's persistent stack frame.  FLAT NOMMU
+	 * executables must not depend on an absolute address-of-BSS relocation:
+	 * the MIPS elf2flt path can otherwise leave that pointer in the low,
+	 * unmapped link-time address range.  The process stack already carries
+	 * the correct KSEG0 execution alias.
+	 */
+	ge_display_open(&display_ge_storage);
 	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
 	 * Linux before the first control-bus handoff. */
 	panel_te_irq_disable();
@@ -4403,26 +4074,6 @@ int main(int argc, char **argv, char **envp)
 		run_rgb_only_diag(&frame);
 	else
 		run_direct_console(&frame);
-
-	log_line("sf2000-screen: before panel init\n");
-	panel_init_variant(first_variant);
-	log_line("sf2000-screen: after panel init\n");
-	panel_push_probe_pixels();
-	draw_diag_screen("GMA TRACE READY", first_variant->name,
-		first_variant->madctl[0], frame);
-	present_frame();
-	publish_screen_ready_and_storage("post-direct-diag\n");
-	log_gma_ready();
-
-	draw_diag_screen("FIRST DIRECT BUS", first_variant->name,
-		first_variant->madctl[0], frame);
-	panel_push_frame(0);
-	sleep_ms(500);
-
-	while (!stopping) {
-		run_direct_diag(&frame);
-		run_rgb_diag(&frame);
-	}
 
 	backlight_set(1);
 	status_led_set(0);

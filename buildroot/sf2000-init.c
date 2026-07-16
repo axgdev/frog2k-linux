@@ -14,6 +14,9 @@ typedef unsigned int size_t;
 #define SYS_wait4 4114
 #define SYS_mmap 4090
 #define SYS_kill 4037
+#define SYS_sync 4036
+#define SYS_umount2 4052
+#define SYS_reboot 4088
 #define SYS_nanosleep 4166
 #define SYS_mmap2 4210
 
@@ -26,6 +29,9 @@ typedef unsigned int size_t;
 #define MAP_SHARED 1
 #define SIGCHLD 18
 #define SIGTERM 15
+#define LINUX_REBOOT_MAGIC1 0xfee1deadUL
+#define LINUX_REBOOT_MAGIC2 672274793UL
+#define LINUX_REBOOT_CMD_RESTART 0x01234567UL
 #define CLONE_VM 0x00000100UL
 #define SERVICE_STACK_BYTES 4096u
 #define SERVICE_STACK_WORDS (SERVICE_STACK_BYTES / sizeof(unsigned long))
@@ -88,7 +94,7 @@ static char *const audio_argv[] = { "/usr/sbin/sf2000-audio", 0 };
 static char *const logd_argv[] = { "/usr/sbin/sf2000-logd", 0 };
 static char *const panel_probe_argv[] = { "/usr/sbin/sf2000-panel-probe", 0 };
 static char *const storage_argv[] = {
-	"/etc/init.d/S05sf2000-storage", "start", 0
+	"/usr/sbin/sf2000-mount", 0
 };
 static char *const fb_test_argv[] = { "/usr/bin/fb-test", "-p", "0", 0 };
 static char *const init_envp[] = {
@@ -172,6 +178,23 @@ static long syscall1(long nr, long a0)
 		: "+r"(r2), "=r"(r7)
 		: "r"(r4)
 		: "$3", "$5", "$6", "$8", "$9", "$10", "$11",
+		  "$12", "$13", "$14", "$15", "$24", "$25", "hi", "lo",
+		  "memory");
+	if (r7)
+		return -r2;
+	return r2;
+}
+
+static long syscall0(long nr)
+{
+	register long r2 __asm__("$2") = nr;
+	register long r7 __asm__("$7");
+
+	__asm__ volatile (
+		"syscall"
+		: "+r"(r2), "=r"(r7)
+		:
+		: "$3", "$4", "$5", "$6", "$8", "$9", "$10", "$11",
 		  "$12", "$13", "$14", "$15", "$24", "$25", "hi", "lo",
 		  "memory");
 	if (r7)
@@ -646,6 +669,43 @@ static int stop_service(long pid)
 	return ret == pid ? 0 : -1;
 }
 
+static int stop_logger(long pid)
+{
+	int status = 0;
+	long ret;
+
+	if (pid <= 0)
+		return 0;
+	/*
+	 * The input service has already published the reboot marker.  The
+	 * logger polls that same marker, drains its buffer, fsyncs the log and
+	 * exits.  A shared marker keeps shutdown ordered with ordinary log writes
+	 * and avoids an asynchronous signal handler in the storage process.
+	 */
+	progress_mark("init-logd-stop-request", 0x3eu, (unsigned int)pid);
+	ret = syscall4(SYS_wait4, pid, (long)&status, 0, 0);
+	progress_mark("init-logd-stop-wait", 0x3eu, (unsigned int)ret);
+	return ret == pid ? 0 : -1;
+}
+
+static void graceful_restart(long logd_pid)
+{
+	long ret;
+
+	log_message("sf2000_buildroot: clean restart requested\n");
+	progress_mark("init-reboot-request", 0x3eu, INIT_TAG);
+	(void)stop_logger(logd_pid);
+	(void)syscall0(SYS_sync);
+	ret = syscall2(SYS_umount2, (long)"/mnt/sd", 0);
+	progress_mark("init-reboot-umount", 0x3eu, (unsigned int)ret);
+	(void)syscall0(SYS_sync);
+	log_message("sf2000_buildroot: storage synchronized, restarting\n");
+	progress_mark("init-reboot-synced", 0x3eu, INIT_TAG);
+	(void)syscall4(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+		LINUX_REBOOT_CMD_RESTART, 0);
+	log_message("sf2000_buildroot: reboot syscall returned\n");
+}
+
 int main(void)
 {
 	unsigned int storage_started = 0;
@@ -656,6 +716,7 @@ int main(void)
 	unsigned int fb_test_enabled = 0;
 	long screen_pid = -1;
 	long fb_test_pid = -1;
+	long logd_pid = -1;
 	log_message("sf2000_buildroot: init main entry\n");
 	progress_mark("init-main", 0x3eu, INIT_TAG);
 	setup_stdio();
@@ -707,7 +768,8 @@ int main(void)
 		storage_started = 1;
 	}
 	/* Buffer the complete boot profile in RAM while display and MMC settle. */
-	spawn_service("sf2000_buildroot: starting persistent logger\n", logd_argv,
+	logd_pid = spawn_service(
+		"sf2000_buildroot: starting persistent logger\n", logd_argv,
 		logd_stack);
 	diagnostic_watchdog_pet();
 	if (!panel_probe) {
@@ -740,6 +802,8 @@ int main(void)
 		int child_status;
 
 		while ((child = reap_child(&child_status)) > 0) {
+			if (child == logd_pid)
+				logd_pid = -1;
 			if (child == fb_test_pid) {
 				progress_mark("init-fb-test-exit", 0x3eu,
 					(unsigned int)child_status);
@@ -747,6 +811,8 @@ int main(void)
 				fb_test_pid = -1;
 			}
 		}
+		if (path_exists("/run/sf2000-reboot-request"))
+			graceful_restart(logd_pid);
 		if (!panel_probe && fb_test_enabled && !fb_test_started &&
 		    screen_pid > 0 && path_exists("/run/sf2000-screen-ready")) {
 			log_message("sf2000_buildroot: stopping screen for framebuffer test\n");
@@ -768,12 +834,7 @@ int main(void)
 		}
 		if (!storage_started) {
 			spawn_storage = 0;
-			if (path_exists("/run/sf2000-storage-started")) {
-				log_message("sf2000_buildroot: storage already started by screen\n");
-				progress_mark("init-storage-seen", 0x3eu,
-					screen_wait_ticks);
-				storage_started = 1;
-			} else if (path_exists("/run/sf2000-screen-ready")) {
+			if (path_exists("/run/sf2000-screen-ready")) {
 				log_message("sf2000_buildroot: screen ready\n");
 				progress_mark("init-screen-ready", 0x3eu,
 					screen_wait_ticks);
