@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,370 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -229,7 +229,7 @@
 +		u32 first;
 +		u32 last;
 +		u32 queue_end = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
-+		bool wrapped = false;
++		bool busy;
 +		long ret = 0;
 +
 +		if (copy_from_user(&submit, (void __user *)arg, sizeof(submit)))
@@ -244,16 +244,16 @@
 +		 * exactly like vendor hcge_feed_nodes()/hcge_start(); rewinding it on
 +		 * every submission leaves real HC15xx hardware with no new work.
 +		 */
-+		if (readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY) {
-+			ret = -EBUSY;
-+			goto submit_out;
-+		}
++		busy = readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY;
 +		if (!ge->queue_next || ge->queue_next < (u32)ge->queue_dma + offset ||
 +		    ge->queue_next > queue_end)
 +			ge->queue_next = (u32)ge->queue_dma + offset;
 +		if (submit.length > queue_end - ge->queue_next) {
++			if (busy) {
++				ret = -EBUSY;
++				goto submit_out;
++			}
 +			ge->queue_next = (u32)ge->queue_dma + offset;
-+			wrapped = true;
 +		}
 +		first = ge->queue_next;
 +		offset = first - (u32)ge->queue_dma;
@@ -270,12 +270,20 @@
 +		ctx->is_reset = 0;
 +		ctx->phy_addr_start = ge->queue_next;
 +		wmb();
-+		if (!ge->queue_started || wrapped)
++		/*
++		 * HQ_LAST is a live producer boundary.  Extending it while BUSY lets
++		 * hardware consume the next node without a CPU completion round trip.
++		 * If the consumer became idle while copying, restart at this node.
++		 */
++		busy = readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY;
++		if (!busy)
 +			writel(first, ge->regs + SF2000_GE_HQ_FIRST);
 +		writel(last, ge->regs + SF2000_GE_HQ_LAST);
-+		value = readl(ge->regs + SF2000_GE_START);
-+		writel((value & ~3u) | SF2000_GE_START_HQ,
-+		       ge->regs + SF2000_GE_START);
++		if (!busy) {
++			value = readl(ge->regs + SF2000_GE_START);
++			writel((value & ~3u) | SF2000_GE_START_HQ,
++			       ge->regs + SF2000_GE_START);
++		}
 +		ge->queue_started = true;
 +submit_out:
 +		mutex_unlock(&ge->submit_lock);

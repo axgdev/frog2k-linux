@@ -435,14 +435,21 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
 		      unsigned int words)
 {
 	struct hcge_linux_submit submit;
+	int error;
 
 	if (hcge_context_fd(ctx) < 0 || !node || !words ||
 	    words > ctx->cmdq_buf_size / sizeof(*node))
 		return -EINVAL;
-	if (hcge_engine_sync(ctx) < 0)
-		return -EIO;
 	submit.data = (uint32_t)(uintptr_t)node;
 	submit.length = (uint32_t)(words * sizeof(*node));
+	if (ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) == 0)
+		return 0;
+	error = errno;
+	if (error != EBUSY)
+		return -error;
+	/* A busy queue only rejects when its unused tail cannot hold this node. */
+	if (hcge_engine_sync(ctx) < 0)
+		return -EIO;
 	return ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) < 0 ? -errno : 0;
 }
 

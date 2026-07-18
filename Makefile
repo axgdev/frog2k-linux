@@ -639,10 +639,11 @@ $(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	rm -f '$@.gdb'
 
 $(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
-		$(BUILDROOT_SCREEN_ENTRY) ge/hcge_linux.c ge/ge_api.h Makefile
+		$(BUILDROOT_SCREEN_ENTRY) ge/hcge_linux.c ge/hcge_node.c \
+		ge/hcge_node.h ge/ge_api.h Makefile
 	mkdir -p '$(dir $@)'
 	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' '$(BUILDROOT_SCREEN_ENTRY)' \
-		ge/hcge_linux.c ge/ge_api.h; \
+		ge/hcge_linux.c ge/hcge_node.c ge/hcge_node.h ge/ge_api.h; \
 		printf '%s\n' '$(BUILDROOT_HELPER_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
 			'$(BUILDROOT_SCREEN_LDFLAGS)' '$(BUILDROOT_SCREEN_STACK_SIZE)'; \
 	} > '$@.tmp'
