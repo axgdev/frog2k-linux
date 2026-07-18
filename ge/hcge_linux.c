@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#ifdef __mips__
+#include <sys/cachectl.h>
+#endif
 #include <unistd.h>
 
 #ifndef O_CLOEXEC
@@ -498,6 +501,26 @@ int hcge_batch_end(hcge_batch *batch, int wait)
 		ret = hcge_engine_sync(ctx);
 	batch->context = NULL;
 	return ret;
+}
+
+uint32_t hcge_linux_cached_phys(const void *address)
+{
+	uintptr_t value = (uintptr_t)address;
+
+	if (value < 0x80000000u || value >= 0xa0000000u)
+		return 0;
+	return (uint32_t)value & 0x1fffffffu;
+}
+
+int hcge_linux_cache_clean(void *address, unsigned int bytes)
+{
+	if (!address || !bytes)
+		return -EINVAL;
+#ifdef __mips__
+	return cacheflush(address, (int)bytes, BCACHE) < 0 ? -errno : 0;
+#else
+	return -ENOSYS;
+#endif
 }
 
 uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address)

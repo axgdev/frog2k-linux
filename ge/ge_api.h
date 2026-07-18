@@ -580,6 +580,8 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, unsigned int word
 int hcge_batch_begin(hcge_context *ctx, hcge_batch *batch, uint32_t *buffer,
 		     unsigned int capacity_words);
 int hcge_batch_end(hcge_batch *batch, int wait);
+uint32_t hcge_linux_cached_phys(const void *address);
+int hcge_linux_cache_clean(void *address, unsigned int bytes);
 
 const char *hcge_pixelformat_name(HCGESurfacePixelFormat format);
 const char *hcge_blend_to_string(HCGESurfaceBlendFunction function);

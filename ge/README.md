@@ -84,6 +84,13 @@ and the final `wait` argument is the frame completion barrier. This removes one
 NOMMU syscall and one queue transition per sprite without allocating memory or
 introducing process-global batching state.
 
+CPU-rendered emulator frames should live in aligned cached KSEG0 memory, not in
+the uncached scanout arena. `hcge_linux_cached_phys()` returns the HC15xx bus
+address for such a buffer and `hcge_linux_cache_clean()` transfers ownership to
+GE before a blit or stretch. Physical measurements are 169.66 MiB/s for cached
+CPU copies versus 36.65 MiB/s uncached, while GE reads the cleaned cached source
+at 1085.25 MiB/s. Keep scanout uncached and use GE as the presentation boundary.
+
 No vendor object is linked into Linux. The eventual library will keep the
 public `hcge_*` API so MuFrog can switch from `libge.a` to source without
 changing its display backend.

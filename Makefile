@@ -1390,6 +1390,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-cached-render-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-scanout-init-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

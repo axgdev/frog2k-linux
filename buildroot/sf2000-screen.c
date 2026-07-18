@@ -303,6 +303,11 @@ static char console_lines[CONSOLE_SCROLLBACK_LINES][CONSOLE_LINE_LEN];
 static unsigned console_line_count;
 static unsigned console_line_start;
 static unsigned console_view_offset;
+static uint16_t cached_render_frame[WIDTH * HEIGHT]
+	__attribute__((aligned(64)));
+static uint16_t cached_render_scratch[WIDTH * HEIGHT]
+	__attribute__((aligned(64)));
+static int cached_render_enabled;
 
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
@@ -2644,6 +2649,8 @@ static const uint8_t *glyph_for(char ch)
 
 static uint16_t *framebuffer(void)
 {
+	if (display_ge && cached_render_enabled)
+		return cached_render_frame;
 	return (uint16_t *)(gma_ram +
 		(display_ge ? GMA_RENDER_OFF : GMA_FRAME_OFF));
 }
@@ -3231,7 +3238,8 @@ static void ge_display_open(void)
 	}
 }
 
-static int ge_fill_rgb565(uint32_t destination, uint16_t color)
+static int ge_fill_rgb565(uint32_t destination, void *cpu_address,
+	uint16_t color)
 {
 	hcge_state *state;
 	HCGERectangle rectangle = { 0, 0, WIDTH, HEIGHT };
@@ -3245,8 +3253,7 @@ static int ge_fill_rgb565(uint32_t destination, uint16_t color)
 	 * GMA bitmap before the first descriptor is installed; do the same for
 	 * both the render and scanout surfaces.
 	 */
-	(void)cacheflush((void *)(gma_ram + destination - GMA_RAM_PHYS),
-		FRAME_BYTES, BCACHE);
+	(void)cacheflush(cpu_address, FRAME_BYTES, BCACHE);
 	state = &display_ge->state;
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
@@ -3268,16 +3275,20 @@ static int ge_fill_rgb565(uint32_t destination, uint16_t color)
 	if (sync_ret < 0)
 		return -1;
 	/* Invalidate cache lines written by the GE DMA master. */
-	(void)cacheflush((void *)(gma_ram + destination - GMA_RAM_PHYS),
-		FRAME_BYTES, BCACHE);
+	(void)cacheflush(cpu_address, FRAME_BYTES, BCACHE);
 	return 0;
 }
 
 static int ge_fill_render(uint16_t color)
 {
 	static int logged;
+	void *cpu_address = cached_render_enabled ?
+		(void *)cached_render_frame :
+		(void *)(gma_ram + GMA_RENDER_OFF);
+	uint32_t physical = cached_render_enabled ?
+		hcge_linux_cached_phys(cached_render_frame) : GMA_RENDER_PHYS;
 
-	if (ge_fill_rgb565(GMA_RENDER_PHYS, color) < 0)
+	if (!physical || ge_fill_rgb565(physical, cpu_address, color) < 0)
 		return -1;
 	if (!logged) {
 		log_line("sf2000-screen: GE accelerated console clear active\n");
@@ -3290,7 +3301,8 @@ static int ge_fill_render(uint16_t color)
 static int ge_prepare_scanout(void)
 {
 	progress_mark("screen-ge-scanout-init-begin", 0x3fu, GMA_FRAME_PHYS);
-	if (ge_fill_rgb565(GMA_FRAME_PHYS, 0) < 0) {
+	if (ge_fill_rgb565(GMA_FRAME_PHYS,
+		(void *)(gma_ram + GMA_FRAME_OFF), 0) < 0) {
 		progress_mark("screen-ge-scanout-init-fail", 0x3fu,
 			GMA_FRAME_PHYS);
 		return -1;
@@ -3304,6 +3316,11 @@ static int ge_prepare_scanout(void)
 static void ge_copy_render_to_scanout(void)
 {
 	hcge_state *state;
+	uint16_t *render_cpu = cached_render_enabled ? cached_render_frame :
+		(uint16_t *)(gma_ram + GMA_RENDER_OFF);
+	uint16_t *scanout_cpu = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	uint32_t render_phys = cached_render_enabled ?
+		hcge_linux_cached_phys(cached_render_frame) : GMA_RENDER_PHYS;
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
 	bool submitted;
 	int sync_ret = -1;
@@ -3313,13 +3330,12 @@ static void ge_copy_render_to_scanout(void)
 	int trace_attempt = attempt <= 4u;
 
 	if (!display_ge) {
-		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
-		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
-
-		memcpy(dst, src, FRAME_BYTES);
+		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
 		return;
 	}
-	(void)cacheflush((void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES, BCACHE);
+	if (!render_phys)
+		goto cpu_fallback;
+	(void)cacheflush(render_cpu, FRAME_BYTES, BCACHE);
 	state = &display_ge->state;
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
@@ -3333,7 +3349,7 @@ static void ge_copy_render_to_scanout(void)
 	state->source.config.size.h = HEIGHT;
 	state->dst.phys = GMA_FRAME_PHYS;
 	state->dst.pitch = SCAN_PITCH;
-	state->src.phys = GMA_RENDER_PHYS;
+	state->src.phys = render_phys;
 	state->src.pitch = PITCH;
 	state->accel = HCGE_DFXL_BLIT;
 	hcge_set_state(display_ge, state, state->accel);
@@ -3352,7 +3368,7 @@ static void ge_copy_render_to_scanout(void)
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
 		if (sync_ret == 0 && trace_attempt) {
 			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
-			uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+			uint16_t *src = render_cpu;
 			static const uint16_t samples[][2] = {
 				{ 0, 0 }, { WIDTH / 2u, 0 }, { WIDTH - 1u, 0 },
 				{ 0, HEIGHT / 2u }, { WIDTH / 2u, HEIGHT / 2u },
@@ -3390,10 +3406,8 @@ static void ge_copy_render_to_scanout(void)
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
-		uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
-		uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
-
-		memcpy(dst, src, FRAME_BYTES);
+	cpu_fallback:
+		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
 		log_line(verified ?
 			"sf2000-screen: GE present failed, copied on CPU\n" :
 			"sf2000-screen: GE copy mismatch, copied on CPU and retained GE\n");
@@ -3410,21 +3424,7 @@ static void ge_copy_render_to_scanout(void)
 #define GE_BENCH_ITERATIONS 128u
 #define GE_BENCH_BATCH_WORDS 8192u
 static uint32_t ge_benchmark_batch_words[GE_BENCH_BATCH_WORDS];
-static uint16_t ge_benchmark_cached_a[WIDTH * HEIGHT]
-	__attribute__((aligned(64)));
-static uint16_t ge_benchmark_cached_b[WIDTH * HEIGHT]
-	__attribute__((aligned(64)));
 static volatile uint16_t ge_benchmark_sink;
-
-static uint32_t cached_pointer_phys(const void *pointer)
-{
-	uintptr_t address = (uintptr_t)pointer;
-
-	/* SF2000 NOMMU processes use the direct cached KSEG0 mapping. */
-	if (address < 0x80000000u || address >= 0xa0000000u)
-		return 0;
-	return (uint32_t)address & 0x1fffffffu;
-}
 
 static void benchmark_report(const char *test, uint64_t elapsed_us,
 		unsigned iterations, uint32_t bytes_per_iteration)
@@ -3508,14 +3508,14 @@ static void run_graphics_benchmark(unsigned *frame)
 
 	benchmark_show(frame, "BENCH 2/6: CACHED COPY");
 	for (i = 0; i < WIDTH * HEIGHT; ++i)
-		ge_benchmark_cached_a[i] = (uint16_t)(i * 40503u);
+		cached_render_frame[i] = (uint16_t)(i * 40503u);
 	begin = monotonic_us();
 	for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-		memcpy(ge_benchmark_cached_b, ge_benchmark_cached_a, FRAME_BYTES);
+		memcpy(cached_render_scratch, cached_render_frame, FRAME_BYTES);
 		if (!(i & 31u))
 			watchdog_pet();
 	}
-	ge_benchmark_sink = ge_benchmark_cached_b[GE_BENCH_ITERATIONS &
+	ge_benchmark_sink = cached_render_scratch[GE_BENCH_ITERATIONS &
 		(WIDTH * HEIGHT - 1u)];
 	elapsed = monotonic_us() - begin;
 	benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
@@ -3560,13 +3560,13 @@ static void run_graphics_benchmark(unsigned *frame)
 	benchmark_show(frame, "BENCH 5/6: CACHED GE BLIT");
 	completed = 0;
 	begin = monotonic_us();
-	if (cached_pointer_phys(ge_benchmark_cached_a) &&
-	    cacheflush(ge_benchmark_cached_a, FRAME_BYTES, BCACHE) == 0 &&
+	if (hcge_linux_cached_phys(cached_render_frame) &&
+	    hcge_linux_cache_clean(cached_render_frame, FRAME_BYTES) == 0 &&
 	    benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
 	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
 		GE_BENCH_BATCH_WORDS) == 0) {
 		display_ge->state.src.phys =
-			cached_pointer_phys(ge_benchmark_cached_a);
+			hcge_linux_cached_phys(cached_render_frame);
 		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
 			if (!hcge_blit(display_ge, &full, 0, 0))
 				break;
@@ -4369,6 +4369,15 @@ static void run_direct_console(unsigned *frame)
 	log_gma_ready();
 
 handoff_complete:
+	if (display_ge && rgb_active &&
+	    hcge_linux_cached_phys(cached_render_frame)) {
+		memcpy(cached_render_frame,
+		       (const void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
+		cached_render_enabled = 1;
+		log_line("sf2000-screen: cached CPU render surface active\n");
+		progress_mark("screen-cached-render-ready", 0x3fu,
+			hcge_linux_cached_phys(cached_render_frame));
+	}
 	fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		console_add_line("open /dev/kmsg failed");
