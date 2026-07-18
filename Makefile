@@ -231,7 +231,10 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
 	test-ge-source-capture test-ge-formats test-ge-effects \
-	test-ge-mask test-ge-custom-keys clean
+	test-ge-mask test-ge-custom-keys test-ge-utils clean
+
+GE_UTILS_TEST := $(BUILD_DIR)/hcge-utils-test
+GE_VENDOR_UTILS_TEST := $(BUILD_DIR)/hcge-vendor-utils-test
 
 all: status
 
@@ -277,6 +280,20 @@ $(GE_NODE_TEST): ge/hcge_node.c ge/hcge_node.h ge/hcge_node_test.c
 
 test-ge-node: $(GE_NODE_TEST)
 	'$(GE_NODE_TEST)'
+
+$(GE_UTILS_TEST): ge/hcge_utils.c ge/hcge_utils_test.c ge/ge_api.h
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Ige \
+		-o '$@' ge/hcge_utils.c ge/hcge_utils_test.c
+
+$(GE_VENDOR_UTILS_TEST): ge/hcge_utils_test.c ge/ge_api.h \
+		$(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+		ge/hcge_utils_test.c '$(GE_VENDOR_ARCHIVE)'
+
+test-ge-utils: $(GE_UTILS_TEST) $(GE_VENDOR_UTILS_TEST)
+	qemu-mipsel '$(GE_VENDOR_UTILS_TEST)' > '$(BUILD_DIR)/hcge-utils.vendor'
+	'$(GE_UTILS_TEST)' | cmp - '$(BUILD_DIR)/hcge-utils.vendor'
 
 $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge

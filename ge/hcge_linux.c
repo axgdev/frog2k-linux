@@ -475,6 +475,16 @@ void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 	}
 }
 
+void hcge_check_blit_state(hcge_context *ctx, hcge_state *state,
+			   HCGEAccelerationMask accel)
+{
+	(void)ctx;
+	if (!state)
+		return;
+	/* The vendor entry point is the blitting half of CheckState. */
+	hcge_check_state(state, accel & HCGE_DFXL_ALL_BLIT);
+}
+
 void hcge_set_state(hcge_context *ctx, hcge_state *state,
 	HCGEAccelerationMask accel)
 {

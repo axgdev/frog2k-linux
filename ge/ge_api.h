@@ -552,6 +552,8 @@ void hcge_reset(struct hcge_context *ctx);
 
 //this api for directfb, only directfb used
 void hcge_check_state(hcge_state  *state, HCGEAccelerationMask  accel);
+void hcge_check_blit_state(hcge_context *ctx, hcge_state *state,
+			   HCGEAccelerationMask accel);
 
 int hcge_engine_sync(hcge_context *ctx);
 int hcge_set_clock(hcge_context *ctx, unsigned int selector);
@@ -566,4 +568,10 @@ void hcge_set_state(hcge_context *ctx, hcge_state *state, HCGEAccelerationMask  
 
 void hcge_fill_rect_ext(hcge_context *ctx, HCGE_CoreSurfaceBuffer *dst, HCGE_CoreSurface *surface, HCGERectangle *rect, HCGEColor *color);
 int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, unsigned int words);
+
+const char *hcge_pixelformat_name(HCGESurfacePixelFormat format);
+const char *hcge_blend_to_string(HCGESurfaceBlendFunction function);
+const char *hcge_drawingflags_to_string(HCGESurfaceDrawingFlags flags);
+const char *hcge_blittingflags_to_string(HCGESurfaceBlittingFlags flags);
+const char *hcge_state_modify_flags(HCGEStateModificationFlags flags);
 #endif
