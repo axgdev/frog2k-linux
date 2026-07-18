@@ -283,6 +283,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_BTN_LEFT 0x04u
 #define CONSOLE_BTN_RIGHT 0x08u
 #define CONSOLE_BTN_SELECT 0x10u
+#define CONSOLE_BTN_BENCH 0x20u
 
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -325,6 +326,8 @@ static void panel_restart_frame(void);
 static void panel_te_service_sample(void);
 static void ge_copy_render_to_scanout(void);
 static void panel_te_irq_disable(void);
+static void present_frame(void);
+static int benchmark_requested;
 
 struct glyph {
 	char ch;
@@ -2970,6 +2973,10 @@ static int console_handle_buttons(uint32_t buttons)
 		watchdog_restart_now();
 		reboot(LINUX_REBOOT_CMD_RESTART);
 	}
+	if (buttons & CONSOLE_BTN_BENCH) {
+		benchmark_requested = 1;
+		changed = 1;
+	}
 	if (buttons & CONSOLE_BTN_UP)
 		changed |= console_scroll_delta(1);
 	if (buttons & CONSOLE_BTN_DOWN)
@@ -2993,6 +3000,8 @@ static uint32_t console_button_for_key(uint16_t code)
 		return CONSOLE_BTN_RIGHT;
 	if (code == BTN_SELECT || code == KEY_BACKSPACE)
 		return CONSOLE_BTN_SELECT;
+	if (code == BTN_NORTH || code == KEY_X)
+		return CONSOLE_BTN_BENCH;
 	return 0;
 }
 
@@ -3396,6 +3405,139 @@ static void ge_copy_render_to_scanout(void)
 			progress_mark("screen-ge-frame-ok", 0x3fu, SCREEN_TAG);
 		}
 	}
+}
+
+#define GE_BENCH_ITERATIONS 128u
+
+static void benchmark_report(const char *test, uint64_t elapsed_us,
+		unsigned iterations, uint32_t bytes_per_iteration)
+{
+	char line[112];
+	uint64_t fps_x100;
+	uint64_t mib_x100;
+
+	if (!elapsed_us)
+		elapsed_us = 1;
+	fps_x100 = (uint64_t)iterations * 100000000u / elapsed_us;
+	mib_x100 = (uint64_t)iterations * bytes_per_iteration * 100000000u /
+		(elapsed_us * 1048576u);
+	snprintf(line, sizeof(line),
+		"BENCH %-10s %u.%02u fps %u.%02u MiB/s",
+		test, (unsigned)(fps_x100 / 100u), (unsigned)(fps_x100 % 100u),
+		(unsigned)(mib_x100 / 100u), (unsigned)(mib_x100 % 100u));
+	console_add_line(line);
+	snprintf(line, sizeof(line),
+		"sf2000-bench: test=%s iterations=%u bytes=%u elapsed_us=%u fps_x100=%u mib_s_x100=%u\n",
+		test, iterations, bytes_per_iteration, (unsigned)elapsed_us,
+		(unsigned)fps_x100, (unsigned)mib_x100);
+	log_line(line);
+}
+
+static void benchmark_show(unsigned *frame, const char *message)
+{
+	console_add_line(message);
+	draw_console_screen(++*frame);
+	present_frame();
+	watchdog_pet();
+}
+
+static int benchmark_set_blit_state(HCGEAccelerationMask accel)
+{
+	hcge_state *state;
+
+	if (!display_ge)
+		return -1;
+	state = &display_ge->state;
+	memset(state, 0, sizeof(*state));
+	state->render_options = HCGE_DSRO_NONE;
+	state->drawingflags = HCGE_DSDRAW_NOFX;
+	state->blittingflags = HCGE_DSBLIT_NOFX;
+	state->destination.config.format = HCGE_DSPF_RGB16;
+	state->destination.config.size.w = WIDTH;
+	state->destination.config.size.h = HEIGHT;
+	state->source.config.format = HCGE_DSPF_RGB16;
+	state->source.config.size.w = WIDTH;
+	state->source.config.size.h = HEIGHT;
+	state->dst.phys = GMA_FRAME_PHYS;
+	state->dst.pitch = PITCH;
+	state->src.phys = GMA_RENDER_PHYS;
+	state->src.pitch = PITCH;
+	state->color = (HCGEColor){ 0xff, 0x20, 0x80, 0xe0 };
+	state->accel = accel;
+	hcge_set_state(display_ge, state, accel);
+	return 0;
+}
+
+static void run_graphics_benchmark(unsigned *frame)
+{
+	HCGERectangle full = { 0, 0, WIDTH, HEIGHT };
+	HCGERectangle half = { 0, 0, WIDTH / 2, HEIGHT / 2 };
+	uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
+	uint64_t begin, elapsed;
+	unsigned i, completed;
+
+	benchmark_requested = 0;
+	benchmark_show(frame, "BENCH START: CPU COPY");
+	begin = monotonic_us();
+	for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+		memcpy(dst, src, FRAME_BYTES);
+		if (!(i & 31u))
+			watchdog_pet();
+	}
+	elapsed = monotonic_us() - begin;
+	benchmark_report("cpu-copy", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
+
+	benchmark_show(frame, "BENCH 2/4: GE FILL");
+	completed = 0;
+	begin = monotonic_us();
+	if (benchmark_set_blit_state(HCGE_DFXL_FILLRECTANGLE) == 0) {
+		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+			display_ge->state.color.r = (uint8_t)(i * 29u);
+			display_ge->state.color.g = (uint8_t)(i * 53u);
+			hcge_set_state(display_ge, &display_ge->state,
+				HCGE_DFXL_FILLRECTANGLE);
+			if (!hcge_fill_rect(display_ge, &full))
+				break;
+			completed++;
+		}
+		if (completed && hcge_engine_sync(display_ge) < 0)
+			completed = 0;
+	}
+	elapsed = monotonic_us() - begin;
+	benchmark_report("ge-fill", elapsed, completed, FRAME_BYTES);
+
+	benchmark_show(frame, "BENCH 3/4: GE BLIT");
+	(void)cacheflush(src, FRAME_BYTES, BCACHE);
+	completed = 0;
+	begin = monotonic_us();
+	if (benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0) {
+		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+			if (!hcge_blit(display_ge, &full, 0, 0))
+				break;
+			completed++;
+		}
+		if (completed && hcge_engine_sync(display_ge) < 0)
+			completed = 0;
+	}
+	elapsed = monotonic_us() - begin;
+	benchmark_report("ge-blit", elapsed, completed, FRAME_BYTES);
+
+	benchmark_show(frame, "BENCH 4/4: GE SCALE");
+	completed = 0;
+	begin = monotonic_us();
+	if (benchmark_set_blit_state(HCGE_DFXL_STRETCHBLIT) == 0) {
+		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+			if (!hcge_stretch_blit(display_ge, &half, &full))
+				break;
+			completed++;
+		}
+		if (completed && hcge_engine_sync(display_ge) < 0)
+			completed = 0;
+	}
+	elapsed = monotonic_us() - begin;
+	benchmark_report("ge-scale", elapsed, completed, FRAME_BYTES);
+	benchmark_show(frame, "BENCH FINISHED - SAFE TO REBOOT");
 }
 
 static uint32_t ge_diag_frame_hash(void)
@@ -4064,6 +4206,7 @@ static void run_direct_console(unsigned *frame)
 	console_clear();
 	console_add_line("sf2000 linux direct lcd console");
 	console_add_line("reading /dev/kmsg");
+	console_add_line("PRESS X: GRAPHICS BENCHMARK");
 	console_input_init_fds(input_fds);
 	if (!console_input_refresh_fds(input_fds))
 		console_add_line("input: waiting for evdev devices");
@@ -4211,6 +4354,11 @@ handoff_complete:
 		if (++input_retry >= CONSOLE_INPUT_REOPEN_TICKS) {
 			changed |= console_input_refresh_fds(input_fds);
 			input_retry = 0;
+		}
+		if (benchmark_requested) {
+			run_graphics_benchmark(frame);
+			changed = 1;
+			idle = 0;
 		}
 
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
