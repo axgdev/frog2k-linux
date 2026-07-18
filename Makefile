@@ -1365,12 +1365,20 @@ metrics-linux:
 		if (!stat_seen++) { total0 = total; idle0 = idle } \
 		total1 = total; idle1 = idle; \
 	} \
+	/name=screen-panel-init-us/ { for (i = 1; i <= NF; i++) if ($$i ~ /^value=/) { panel_metric = $$i; sub(/^value=/, "", panel_metric) } } \
+	/name=screen-panel-push-us/ { for (i = 1; i <= NF; i++) if ($$i ~ /^value=/) { push_metric = $$i; sub(/^value=/, "", push_metric) } } \
+	/name=screen-rgb-ready-us/ { for (i = 1; i <= NF; i++) if ($$i ~ /^value=/) { rgb_metric = $$i; sub(/^value=/, "", rgb_metric) } } \
+	/name=screen-service-ready-us/ { for (i = 1; i <= NF; i++) if ($$i ~ /^value=/) { ready_metric = $$i; sub(/^value=/, "", ready_metric) } } \
 	END { \
 		printf "linux.screen_exec_to_main_ms=%.3f\n", (screen_main-screen_start)/1000; \
 		printf "linux.panel_init_ms=%.3f\n", (panel_done-panel_begin)/1000; \
 		printf "linux.screen_start_to_ready_ms=%.3f\n", (screen_ready-screen_start)/1000; \
 		printf "linux.storage_256k_write_verify_ms=%.3f\n", (storage_us-mount_us)/1000; \
 		if (total1 > total0) printf "linux.sampled_cpu_busy_pct=%.2f\n", 100*(1-(idle1-idle0)/(total1-total0)); \
+		if (panel_metric != "") printf "linux.instrumented_panel_init_us=%s\n", panel_metric; \
+		if (push_metric != "") printf "linux.instrumented_panel_push_us=%s\n", push_metric; \
+		if (rgb_metric != "") printf "linux.instrumented_rgb_ready_us=%s\n", rgb_metric; \
+		if (ready_metric != "") printf "linux.instrumented_service_ready_us=%s\n", ready_metric; \
 	}' '$(METRICS_LOG)'
 
 benchmark-qemu-linux: qemu linux-buildroot-asd
