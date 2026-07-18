@@ -316,10 +316,11 @@ test-ge-matrix: $(GE_MATRIX_TEST) $(GE_VENDOR_MATRIX_TEST)
 	qemu-mipsel '$(GE_VENDOR_MATRIX_TEST)' > '$(BUILD_DIR)/hcge-matrix.vendor'
 	qemu-mipsel '$(GE_MATRIX_TEST)' | cmp - '$(BUILD_DIR)/hcge-matrix.vendor'
 
-$(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_queue_test.c ge/ge_api.h \
+$(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_queue_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
 	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -ffunction-sections \
-		-Wl,--gc-sections -o '$@' ge/hcge_linux.c ge/hcge_queue_test.c
+		-Wl,--gc-sections -o '$@' ge/hcge_linux.c ge/hcge_node.c \
+		ge/hcge_queue_test.c
 
 $(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
@@ -370,10 +371,10 @@ capture-ge-vendor: $(GE_VENDOR_CAPTURE)
 test-ge-vendor-capture: $(GE_VENDOR_CAPTURE) $(GE_VENDOR_CAPTURE_GOLDEN)
 	qemu-mipsel '$(GE_VENDOR_CAPTURE)' | cmp - '$(GE_VENDOR_CAPTURE_GOLDEN)'
 
-$(GE_SOURCE_CAPTURE): ge/hcge_vendor_capture.c ge/hcge_linux.c ge/ge_api.h \
+$(GE_SOURCE_CAPTURE): ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
 	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -DHCGE_SOURCE_CAPTURE \
-		-o '$@' ge/hcge_vendor_capture.c ge/hcge_linux.c \
+		-o '$@' ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c \
 		-Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap -Wl,--wrap=usleep
 
@@ -631,7 +632,8 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(BUILDROOT_TOOLCHAIN_STAM
 	mkdir -p '$(dir $@)'
 	SOURCE_DATE_EPOCH=0 '$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
 		-Ige $(BUILDROOT_SCREEN_LDFLAGS) -o '$@' \
-		'$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)' ge/hcge_linux.c
+		'$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)' \
+		ge/hcge_linux.c ge/hcge_node.c
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 

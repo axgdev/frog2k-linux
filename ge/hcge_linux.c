@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "ge_api.h"
+#include "hcge_node.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -430,7 +431,8 @@ int hcge_set_clock(hcge_context *ctx, unsigned int selector)
 		-errno : 0;
 }
 
-int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, size_t words)
+int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
+		      unsigned int words)
 {
 	struct hcge_linux_submit submit;
 
@@ -456,6 +458,35 @@ uint32_t hcge_cmdq_paddr(hcge_context *ctx, uint32_t virtual_address)
 	if (!ctx)
 		return 0;
 	return ctx->cmdq_buf_phyaddr + virtual_address - ctx->cmdq_buf_vaddr;
+}
+
+void hcge_construct_nodes(hcge_context *ctx, uint32_t **buffer)
+{
+	size_t words = 0;
+
+	if (!ctx || !ctx->nd_ctx || !buffer || !*buffer)
+		return;
+	if (!hcge_node_build((const struct hcge_node_context *)ctx->nd_ctx,
+			     *buffer, HCGE_NODE_MAX_WORDS, &words))
+		*buffer += words;
+}
+
+void hcge_feed_nodes(hcge_context *ctx, uint32_t *buffer_start,
+		     uint32_t *buffer_end, HCGEAccelerationMask function)
+{
+	unsigned int words;
+
+	(void)function;
+	if (!ctx || !buffer_start || buffer_end <= buffer_start)
+		return;
+	words = (unsigned int)(buffer_end - buffer_start);
+	(void)hcge_linux_submit(ctx, buffer_start, words);
+}
+
+void hcge_start(hcge_context *ctx)
+{
+	/* HCGE_SUBMIT atomically feeds and starts the Linux queue. */
+	(void)ctx;
 }
 
 void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)

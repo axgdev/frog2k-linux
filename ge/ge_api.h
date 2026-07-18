@@ -594,4 +594,8 @@ short extract_coef(const short *coefficients, int phases, int taps,
 		   int phase, int tap);
 void extract_phase(short *output, const short *coefficients, int phases,
 		   int taps, int phase);
+void hcge_construct_nodes(hcge_context *ctx, uint32_t **buffer);
+void hcge_feed_nodes(hcge_context *ctx, uint32_t *buffer_start,
+		     uint32_t *buffer_end, HCGEAccelerationMask function);
+void hcge_start(hcge_context *ctx);
 #endif

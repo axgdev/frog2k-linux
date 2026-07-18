@@ -29,10 +29,6 @@ struct linux_submit {
 	uint32_t length;
 };
 
-#ifndef HCGE_SOURCE_CAPTURE
-extern void hcge_construct_nodes(void *context, uint32_t **output);
-#endif
-
 static uint32_t fake_registers[64];
 static unsigned char fake_queue[QUEUE_SIZE] __attribute__((aligned(16)));
 static uint32_t submitted_node[178];
