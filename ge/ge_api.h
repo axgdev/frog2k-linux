@@ -582,6 +582,9 @@ void hcge_matrix_multiply(const double *left, const double *right,
 void hcge_matrix_translate_left_multiply(float x, float y, double *matrix);
 void hcge_matrix_translate_right_multiply(float x, float y, double *matrix);
 void hcge_get_inverse_matrix(const double *matrix, double *inverse);
+void hcge_process_matrix(hcge_context *ctx, HCGEAccelerationMask accel);
+bool hcge_get_bounding_rect(hcge_context *ctx, HCGERectangle *source,
+			    HCGERectangle *bounding);
 bool hcge_clip_qw(HCGERectangle *rectangle, HCGERectangle *hardware_clip);
 bool hcge_clip_rect(hcge_state *state, HCGERectangle *rectangle);
 bool hcge_clip_blit(hcge_state *state, HCGERectangle *source,
@@ -594,6 +597,12 @@ short extract_coef(const short *coefficients, int phases, int taps,
 		   int phase, int tap);
 void extract_phase(short *output, const short *coefficients, int phases,
 		   int taps, int phase);
+void designfilter(int srcsampling, int dstsampling, int nphase, int ntap,
+		  int centered, double cutoffscale, int nfracbits,
+		  double *preal, short *pquant);
+void designfilterff(int srcsampling, int dstsampling, int nphase, int ntap,
+		    int centered, int cutoffscale, int nfracbits,
+		    int *preal, short *pquant);
 void hcge_construct_nodes(hcge_context *ctx, uint32_t **buffer);
 void hcge_feed_nodes(hcge_context *ctx, uint32_t *buffer_start,
 		     uint32_t *buffer_end, HCGEAccelerationMask function);

@@ -232,7 +232,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
-	test-ge-queue test-ge-filter-extract clean
+	test-ge-queue test-ge-filter-extract test-ge-symbol-coverage clean
 
 GE_UTILS_TEST := $(BUILD_DIR)/hcge-utils-test
 GE_VENDOR_UTILS_TEST := $(BUILD_DIR)/hcge-vendor-utils-test
@@ -334,7 +334,7 @@ test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
 $(GE_FILTER_TEST): ge/hcge_filter.c ge/hcge_filter_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
 	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
-		ge/hcge_filter.c ge/hcge_filter_test.c
+		ge/hcge_filter.c ge/hcge_filter_test.c -lm
 
 $(GE_VENDOR_FILTER_TEST): ge/hcge_filter_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
@@ -344,6 +344,26 @@ $(GE_VENDOR_FILTER_TEST): ge/hcge_filter_test.c ge/ge_api.h \
 test-ge-filter-extract: $(GE_FILTER_TEST) $(GE_VENDOR_FILTER_TEST)
 	qemu-mipsel '$(GE_VENDOR_FILTER_TEST)' > '$(BUILD_DIR)/hcge-filter.vendor'
 	qemu-mipsel '$(GE_FILTER_TEST)' | cmp - '$(BUILD_DIR)/hcge-filter.vendor'
+
+test-ge-symbol-coverage: reverse-ge
+	rm -rf '$(BUILD_DIR)/ge-symbol-audit'
+	mkdir -p '$(BUILD_DIR)/ge-symbol-audit'
+	for src in ge/hcge_linux.c ge/hcge_utils.c ge/hcge_matrix.c \
+		ge/hcge_filter.c ge/hcge_node.c; do \
+		$(HOSTCC) -std=c99 -O2 -Ige -c "$$src" -o \
+			"$(BUILD_DIR)/ge-symbol-audit/$$(basename "$$src" .c).o"; \
+	done
+	{ for symbols in '$(GE_REVERSE_DIR)'/*.symbols; do \
+		awk '$$2 == "T" { print $$3 }' "$$symbols"; done; } | sort -u > \
+		'$(BUILD_DIR)/ge-symbol-audit/vendor'
+	nm -g --defined-only '$(BUILD_DIR)'/ge-symbol-audit/*.o | \
+		awk '$$2 == "T" { print $$3 }' | sort -u > \
+		'$(BUILD_DIR)/ge-symbol-audit/source'
+	comm -23 '$(BUILD_DIR)/ge-symbol-audit/vendor' \
+		'$(BUILD_DIR)/ge-symbol-audit/source' > \
+		'$(BUILD_DIR)/ge-symbol-audit/missing'
+	test ! -s '$(BUILD_DIR)/ge-symbol-audit/missing' || \
+		{ printf 'missing vendor exports:\n'; cat '$(BUILD_DIR)/ge-symbol-audit/missing'; false; }
 
 $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge

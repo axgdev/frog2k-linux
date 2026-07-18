@@ -70,6 +70,101 @@ void hcge_get_inverse_matrix(const double *matrix, double *inverse)
 		determinant;
 }
 
+void hcge_process_matrix(hcge_context *ctx, HCGEAccelerationMask accel)
+{
+	const int32_t *m;
+	unsigned int i;
+
+	if (!ctx)
+		return;
+	ctx->matrix_en = false;
+	ctx->x_translate = 0;
+	ctx->y_translate = 0;
+	if (accel != HCGE_DFXL_BLIT && accel != HCGE_DFXL_STRETCHBLIT)
+		return;
+	m = ctx->state.matrix;
+	if (accel == HCGE_DFXL_STRETCHBLIT &&
+	    ctx->state.render_options != HCGE_DSRO_MATRIX) {
+		ctx->matrix_en = true;
+		ctx->matrix[0] = 1.0;
+		ctx->matrix[1] = 0.0;
+		ctx->matrix[2] = 0.0;
+		ctx->matrix[3] = 0.0;
+		ctx->matrix[4] = 1.0;
+		ctx->matrix[5] = 0.0;
+		return;
+	}
+	if (ctx->state.render_options != HCGE_DSRO_MATRIX)
+		return;
+	if (m[0] == 0x10000 && m[1] == 0 && m[3] == 0 && m[4] == 0x10000) {
+		ctx->x_translate = (uint32_t)((m[2] + 0x8000) >> 16);
+		ctx->y_translate = (uint32_t)((m[5] + 0x8000) >> 16);
+		return;
+	}
+	ctx->matrix_en = true;
+	for (i = 0; i < 6; ++i)
+		ctx->matrix[i] = (double)m[i] / 65536.0;
+}
+
+static int hcge_floor_double(double value)
+{
+	int integer = (int)value;
+	return value < (double)integer ? integer - 1 : integer;
+}
+
+static int hcge_ceil_double(double value)
+{
+	int integer = (int)value;
+	return value > (double)integer ? integer + 1 : integer;
+}
+
+bool hcge_get_bounding_rect(hcge_context *ctx, HCGERectangle *source,
+			    HCGERectangle *bounding)
+{
+	double x[4], y[4];
+	int min_x, min_y, max_x, max_y, i;
+
+	if (!ctx || !source || !bounding || source->w <= 0 || source->h <= 0)
+		return false;
+	x[0] = source->x; y[0] = source->y;
+	x[1] = source->x + source->w - 1; y[1] = source->y;
+	x[2] = source->x; y[2] = source->y + source->h - 1;
+	x[3] = source->x + source->w - 1;
+	y[3] = source->y + source->h - 1;
+	for (i = 0; i < 4; ++i) {
+		double tx = ctx->matrix[0] * x[i] + ctx->matrix[1] * y[i] +
+			ctx->matrix[2];
+		double ty = ctx->matrix[3] * x[i] + ctx->matrix[4] * y[i] +
+			ctx->matrix[5];
+		x[i] = tx;
+		y[i] = ty;
+	}
+	min_x = max_x = hcge_floor_double(x[0]);
+	min_y = max_y = hcge_floor_double(y[0]);
+	for (i = 1; i < 4; ++i) {
+		int low_x = hcge_floor_double(x[i]);
+		int low_y = hcge_floor_double(y[i]);
+		int high_x = hcge_ceil_double(x[i]);
+		int high_y = hcge_ceil_double(y[i]);
+		if (low_x < min_x) min_x = low_x;
+		if (low_y < min_y) min_y = low_y;
+		if (high_x > max_x) max_x = high_x;
+		if (high_y > max_y) max_y = high_y;
+	}
+	if (max_x < 0 || max_y < 0 || min_x >= ctx->state.destination.config.size.w ||
+	    min_y >= ctx->state.destination.config.size.h)
+		return false;
+	if (min_x < 0) min_x = 0;
+	if (min_y < 0) min_y = 0;
+	if (max_x >= ctx->state.destination.config.size.w)
+		max_x = ctx->state.destination.config.size.w - 1;
+	if (max_y >= ctx->state.destination.config.size.h)
+		max_y = ctx->state.destination.config.size.h - 1;
+	*bounding = (HCGERectangle){ min_x, min_y,
+		max_x - min_x + 1, max_y - min_y + 1 };
+	return true;
+}
+
 static bool hcge_intersect(HCGERectangle *rectangle, int left, int top,
 			   int right, int bottom)
 {

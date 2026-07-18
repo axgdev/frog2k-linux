@@ -75,5 +75,33 @@ int main(void)
 		result = hcge_clip_stretch_blit(&state, &a, &b);
 		dump_rect("stretch", result, &a, &b, 0, 0);
 	}
+	{
+		hcge_context ctx = { 0 };
+		HCGERectangle source = { 3, 7, 19, 13 }, bounding = { 0 };
+		int result;
+		ctx.state.destination.config.size.w = 320;
+		ctx.state.destination.config.size.h = 240;
+		ctx.state.render_options = HCGE_DSRO_MATRIX;
+		ctx.state.matrix[0] = 0x10000;
+		ctx.state.matrix[1] = 0;
+		ctx.state.matrix[2] = 0x58000;
+		ctx.state.matrix[3] = 0;
+		ctx.state.matrix[4] = 0x10000;
+		ctx.state.matrix[5] = -0x24000;
+		hcge_process_matrix(&ctx, HCGE_DFXL_BLIT);
+		printf("process-t %u %u %u\n", ctx.matrix_en,
+		       ctx.x_translate, ctx.y_translate);
+		ctx.state.matrix[0] = 0xb505;
+		ctx.state.matrix[1] = -0xb505;
+		ctx.state.matrix[2] = 0x148000;
+		ctx.state.matrix[3] = 0xb505;
+		ctx.state.matrix[4] = 0xb505;
+		ctx.state.matrix[5] = -0x18000;
+		hcge_process_matrix(&ctx, HCGE_DFXL_BLIT);
+		dump("process-a", ctx.matrix);
+		result = hcge_get_bounding_rect(&ctx, &source, &bounding);
+		printf("bounds %d %d,%d,%d,%d\n", result,
+		       bounding.x, bounding.y, bounding.w, bounding.h);
+	}
 	return 0;
 }

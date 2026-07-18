@@ -6,6 +6,8 @@
 int main(void)
 {
 	short coefficients[32], phase[8];
+	double real[33];
+	int fixed[33];
 	int i, p, t;
 
 	for (i = 0; i < 32; ++i)
@@ -18,5 +20,19 @@ int main(void)
 			       extract_coef(coefficients, 8, 4, p, t));
 		putchar('\n');
 	}
+	designfilter(320, 240, 8, 4, 1, 0.9, 8, real, coefficients);
+	printf("double");
+	for (i = 0; i < 32; ++i)
+		printf(" %d", coefficients[i]);
+	putchar('\n');
+	designfilterff(320, 240, 8, 4, 1, 58982, 8, fixed, coefficients);
+	printf("fixed-sums");
+	for (p = 0; p < 8; ++p) {
+		int sum = 0;
+		for (t = 0; t < 4; ++t)
+			sum += coefficients[t * 8 + p];
+		printf(" %d", sum);
+	}
+	putchar('\n');
 	return 0;
 }
