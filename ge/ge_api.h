@@ -574,4 +574,18 @@ const char *hcge_blend_to_string(HCGESurfaceBlendFunction function);
 const char *hcge_drawingflags_to_string(HCGESurfaceDrawingFlags flags);
 const char *hcge_blittingflags_to_string(HCGESurfaceBlittingFlags flags);
 const char *hcge_state_modify_flags(HCGEStateModificationFlags flags);
+
+uint32_t hcge_ge_coeff(double value);
+void hcge_matrix_init_rotate(double *matrix, double degree);
+void hcge_matrix_multiply(const double *left, const double *right,
+			  double *output);
+void hcge_matrix_translate_left_multiply(float x, float y, double *matrix);
+void hcge_matrix_translate_right_multiply(float x, float y, double *matrix);
+void hcge_get_inverse_matrix(const double *matrix, double *inverse);
+bool hcge_clip_qw(HCGERectangle *rectangle, HCGERectangle *hardware_clip);
+bool hcge_clip_rect(hcge_state *state, HCGERectangle *rectangle);
+bool hcge_clip_blit(hcge_state *state, HCGERectangle *source,
+		    int *destination_x, int *destination_y);
+bool hcge_clip_stretch_blit(hcge_state *state, HCGERectangle *source,
+			    HCGERectangle *destination);
 #endif
