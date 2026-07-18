@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,395 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -37,6 +37,7 @@
 +#include <linux/of.h>
 +#include <linux/of_address.h>
 +#include <linux/platform_device.h>
++#include <linux/spinlock.h>
 +#include <linux/uaccess.h>
 +
 +#define SF2000_GE_QUEUE_SIZE	0x3c000u
@@ -100,7 +101,10 @@
 +	struct completion done;
 +	struct miscdevice misc;
 +	struct mutex submit_lock;
++	spinlock_t queue_lock;
 +	u32 queue_next;
++	u32 pending_first;
++	u32 pending_last;
 +	bool queue_started;
 +	int irq;
 +	bool irq_requested;
@@ -133,11 +137,26 @@
 +	struct sf2000_ge *ge = data;
 +	struct hcge_cmdq_node_ctx *ctx = ge->queue;
 +	u32 status = readl(ge->regs + SF2000_GE_STATUS);
++	unsigned long flags;
++	u32 value;
 +
 +	if (!status)
 +		return IRQ_NONE;
 +	writel(status, ge->regs + SF2000_GE_STATUS);
 +	ctx->serial_num++;
++	spin_lock_irqsave(&ge->queue_lock, flags);
++	if (ge->pending_first) {
++		writel(ge->pending_first, ge->regs + SF2000_GE_HQ_FIRST);
++		writel(ge->pending_last, ge->regs + SF2000_GE_HQ_LAST);
++		ge->pending_first = 0;
++		ge->pending_last = 0;
++		value = readl(ge->regs + SF2000_GE_START);
++		writel((value & ~3u) | SF2000_GE_START_HQ,
++		       ge->regs + SF2000_GE_START);
++		spin_unlock_irqrestore(&ge->queue_lock, flags);
++		return IRQ_HANDLED;
++	}
++	spin_unlock_irqrestore(&ge->queue_lock, flags);
 +	if (readl(ge->regs + SF2000_GE_HQ_FIRST) ==
 +	    (ctx->phy_addr_start & ~1u)) {
 +		ctx->is_finish = 1;
@@ -189,6 +208,8 @@
 +		ctx->phy_addr_start = ctx->phy_addr_min;
 +		ctx->is_reset = 1;
 +		ge->queue_next = ctx->phy_addr_min;
++		ge->pending_first = 0;
++		ge->pending_last = 0;
 +		ge->queue_started = false;
 +		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_FIRST);
 +		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_LAST);
@@ -230,6 +251,7 @@
 +		u32 last;
 +		u32 queue_end = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
 +		bool busy;
++		unsigned long flags;
 +		long ret = 0;
 +
 +		if (copy_from_user(&submit, (void __user *)arg, sizeof(submit)))
@@ -249,7 +271,7 @@
 +		    ge->queue_next > queue_end)
 +			ge->queue_next = (u32)ge->queue_dma + offset;
 +		if (submit.length > queue_end - ge->queue_next) {
-+			if (busy) {
++			if (busy || READ_ONCE(ge->pending_first)) {
 +				ret = -EBUSY;
 +				goto submit_out;
 +			}
@@ -270,20 +292,22 @@
 +		ctx->is_reset = 0;
 +		ctx->phy_addr_start = ge->queue_next;
 +		wmb();
-+		/*
-+		 * HQ_LAST is a live producer boundary.  Extending it while BUSY lets
-+		 * hardware consume the next node without a CPU completion round trip.
-+		 * If the consumer became idle while copying, restart at this node.
-+		 */
++		/* HC15xx latches HQ_LAST at start.  Accumulate a second segment while
++		 * busy and launch it from the completion IRQ instead of polling here. */
++		spin_lock_irqsave(&ge->queue_lock, flags);
 +		busy = readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY;
-+		if (!busy)
++		if (busy) {
++			if (!ge->pending_first)
++				ge->pending_first = first;
++			ge->pending_last = last;
++		} else {
 +			writel(first, ge->regs + SF2000_GE_HQ_FIRST);
-+		writel(last, ge->regs + SF2000_GE_HQ_LAST);
-+		if (!busy) {
++			writel(last, ge->regs + SF2000_GE_HQ_LAST);
 +			value = readl(ge->regs + SF2000_GE_START);
 +			writel((value & ~3u) | SF2000_GE_START_HQ,
 +			       ge->regs + SF2000_GE_START);
 +		}
++		spin_unlock_irqrestore(&ge->queue_lock, flags);
 +		ge->queue_started = true;
 +submit_out:
 +		mutex_unlock(&ge->submit_lock);
@@ -339,6 +363,7 @@
 +	ge->queue_next = ctx->phy_addr_min;
 +	init_completion(&ge->done);
 +	mutex_init(&ge->submit_lock);
++	spin_lock_init(&ge->queue_lock);
 +
 +	ge->irq = platform_get_irq(pdev, 0);
 +	if (ge->irq < 0)
