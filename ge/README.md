@@ -33,9 +33,11 @@ clock control, allocates the coherent vendor-sized queue, exposes `/dev/ge`,
 and implements the vendor ioctl numbers for queue discovery and completion.
 IRQ 4 remains masked until a client issues `HCGE_REQUEST_IRQ`; enabling it at
 probe time can starve unrelated deferred probes on this interrupt controller.
-The driver establishes selector 3 (238 MHz) during probe. SFCLK `0x1880007c`
-also holds the SDIO selector in adjacent bits, so the display service does not
-retime GE while the MMC delayed-rescan worker can be active.
+The driver establishes the physically proven selector 0 (198 MHz) during
+probe. Selector 3 reports command completion but produced a blank physical
+scanout in log85. SFCLK `0x1880007c` also holds the SDIO selector in adjacent
+bits, so the display service does not retime GE while the MMC delayed-rescan
+worker can be active.
 
 QEMU recognizes the register block, walks multi-node command queues, and
 executes the grouped fill, blit, conversion, flip, rotation, stretch, key, and

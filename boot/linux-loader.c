@@ -943,6 +943,13 @@ static void backlight_stage_mark(const char *name, unsigned int pulses)
 	delay_count_ticks(BACKLIGHT_OFF_TICKS);
 	backlight_set(1);
 	status_led_set(0);
+	/*
+	 * Finish the one visible health blink, then keep inherited panel RAM dark.
+	 * Userspace enables the backlight only after committing its controlled
+	 * ST7789 frame, so panel reset and RGB ownership change are atomic to the
+	 * viewer.
+	 */
+	backlight_set(0);
 }
 
 static void loader_panic(const char *message)

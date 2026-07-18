@@ -1534,8 +1534,8 @@ static void startup_backlight_diagnostic(void)
 	log_line("sf2000-screen: taking backlight ownership\n");
 	append_file_log("sf2000-screen: taking backlight ownership\n");
 	progress_mark("screen-bl-owned", 0x3fu, SCREEN_TAG);
-	/* The display service now owns R05 and keeps boot progress visible. */
-	backlight_set(1);
+	/* Keep panel reset and the first complete GRAM write hidden and atomic. */
+	backlight_set(0);
 	status_led_set(0);
 }
 
@@ -2811,13 +2811,17 @@ static void ge_display_open(hcge_context *storage)
 	if (ret == 0) {
 		display_ge = storage;
 		/*
-		 * The kernel driver has already enabled GE at selector 3 (238 MHz).
+		 * The kernel driver has already enabled GE at the physically proven
+		 * selector 0 (198 MHz).
 		 * Do not retime the shared SFCLK register here: SDIO uses adjacent
 		 * selector bits and can be active in its delayed rescan worker.
 		 */
 		log_line("sf2000-screen: GE RGB565 compositor ready\n");
 		progress_mark("screen-ge-open-ok", 0x3fu, SCREEN_TAG);
-		progress_mark("screen-ge-clock-kernel", 0x3fu, 3u);
+		progress_mark("screen-ge-clock-kernel", 0x3fu,
+			(mmio_read32(sysio, SYS_SFCLK_OFF) >> 18) & 3u);
+		progress_mark("screen-ge-sfclk", 0x3fu,
+			mmio_read32(sysio, SYS_SFCLK_OFF));
 	} else {
 		snprintf(line, sizeof(line),
 			"sf2000-screen: GE unavailable ret=%d errno=%d, using direct framebuffer\n",

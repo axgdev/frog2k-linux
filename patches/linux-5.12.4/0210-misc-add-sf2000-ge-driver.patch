@@ -58,6 +58,7 @@
 +#define SF2000_SYS_GE_GATE	BIT(4)
 +#define SF2000_SYS_GE_RESET	BIT(4)
 +#define SF2000_SYS_GE_CLK_SHIFT	18
++#define SF2000_SYS_GE_CLK_SELECTOR 0u
 +
 +#define HCGE_IOCBASE		35
 +#define HCGE_REQUEST_IRQ	_IO(HCGE_IOCBASE, 0x01)
@@ -114,7 +115,8 @@
 +	writel(value & ~SF2000_SYS_GE_GATE, ge->sys + SF2000_SYS_GATE1);
 +	value = readl(ge->sys + SF2000_SYS_CLK);
 +	value &= ~(3u << SF2000_SYS_GE_CLK_SHIFT);
-+	value |= 3u << SF2000_SYS_GE_CLK_SHIFT;
++	/* Selector 0 is the physically proven SF2000 GE operating point. */
++	value |= SF2000_SYS_GE_CLK_SELECTOR << SF2000_SYS_GE_CLK_SHIFT;
 +	writel(value, ge->sys + SF2000_SYS_CLK);
 +}
 +

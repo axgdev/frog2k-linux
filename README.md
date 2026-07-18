@@ -131,9 +131,16 @@ pads for that much time produced a lit blank panel. That driver and its
 fixed-descriptor experiment have been removed; production again uses the
 bounded handoff proven by the visible build.
 
-The loader emits one health blink and leaves the backlight on. Kernel progress
-does not add any delays, and the display service replaces inherited panel RAM
-with the configured controlled frame as soon as it takes ownership:
+Physical log85 then isolated the remaining persistent state difference from
+the visible log78 build: GE selector 3 reports completion but leaves physical
+scanout blank, while selector 0 is visible. The kernel now establishes selector
+0 once during GE probe and userspace only verifies the SFCLK readback, avoiding
+a later read/modify/write of the register shared with SDIO.
+
+The loader emits one health blink and then keeps inherited panel RAM dark.
+Kernel progress does not add delays. The display service enables the backlight
+immediately after it has committed the configured controlled frame, making
+panel reset and the first complete write one atomic visible transition:
 
 ```sh
 # Immediate console (default)

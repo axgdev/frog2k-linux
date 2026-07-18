@@ -71,8 +71,8 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves the backlight on so a dirty inherited frame is preferable to a
-   silent, apparently dead boot.
+5. leaves inherited panel RAM dark until userspace has committed a controlled
+   complete frame.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -136,12 +136,13 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. leave the backlight on after the loader's single health blink;
+1. leave the backlight dark after the loader's single health blink;
 2. have the display service take exclusive ownership without adding a delay;
 3. configure and reset the SF2000 ST7789 panel in the original command order;
 4. render the selected console, solid color, or built-in logo;
 5. push one complete 320x240 MCU GRAM transaction;
-6. replace inherited panel GRAM with the controlled frame;
+6. enable the backlight immediately after replacing inherited panel GRAM with
+   the controlled frame;
 7. use GE to clear the exact future GMA scanout surface and copy the prepared
    render surface into it;
 8. start and latch VOU while the panel pins remain MCU-owned;
@@ -220,18 +221,20 @@ production does not traverse them.
   unsupported inference. Log84 provides the missing negative measurement: its
   kernel edge and timeout counters rise together while the panel stays blank,
   so the continuous synchronizer is removed rather than adjusted again.
-- Production leaves GE clock ownership with the kernel driver. It establishes
-  selector 3 (238 MHz) before exposing `/dev/ge`; the display service no longer
-  performs a slower, racy runtime retime. The long-lived HCGE context remains
-  in `main()`'s persistent stack frame: QEMU records an unrelocated low address
-  when the current MIPS bFLT toolchain places that object in static BSS.
+- Log85 adds the physical result missing from the log82 inference: leaving GE
+  at selector 3 completes commands and advances every software/hardware marker,
+  but the panel remains blank. The visible log78 binary selected 0. Production
+  therefore establishes the proven selector 0 (198 MHz) once in the kernel GE
+  probe, before MMC delayed work, instead of performing a racy userspace
+  read/modify/write of the shared SFCLK register. The long-lived HCGE context
+  remains in `main()`'s persistent stack frame: QEMU records an unrelocated low
+  address when the current MIPS bFLT toolchain places that object in static BSS.
 - The screen executable is an unconditional packaging prerequisite. This keeps
   generated-overlay timestamps from reusing a display binary from another git
   revision, which is how the log78 artifact diverged from its recorded source.
-- The loader and nonblocking kernel progress path leave the backlight visible
-  after the single health blink. This intentionally exposes a dirty inherited
-  frame until the display owner replaces it, making pre-console failures
-  distinguishable from a powered-off panel.
+- The loader and nonblocking kernel progress path remain dark after the single
+  health blink. The display owner enables R05 only after a complete MCU frame is
+  in panel RAM, preserving the atomic sequence used by the visible log78 build.
 
 ### Configurable first frame
 
