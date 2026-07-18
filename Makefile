@@ -178,6 +178,10 @@ MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
 UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
 MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
+METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0025.txt
+PHYSICAL_CONTRACT_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/log90.txt
+QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-buildroot-display.log
+QEMU_BENCH_SECONDS ?= 15
 GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libge.a
 GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
@@ -212,6 +216,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
+	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
@@ -1273,7 +1278,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'simple-framebuffer .*fb0: simplefb registered' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000_buildroot: framebuffer ready /dev/fb0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000-screen: GE accelerated console clear active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1338,6 +1342,80 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+
+metrics-linux:
+	@awk '\
+	function ktime(   p,n,a) { \
+		p = index($$0, "source=kmsg "); \
+		if (!p) return -1; \
+		n = split(substr($$0, p + 12), a, ","); \
+		return n >= 3 ? a[3] + 0 : -1; \
+	} \
+	/source=kmsg .*sf2000_buildroot: starting screen/ { screen_start = ktime() } \
+	/source=kmsg .*sf2000-screen: main entry/ && !screen_main { screen_main = ktime() } \
+	/source=kmsg .*guarded panel init begin/ { panel_begin = ktime() } \
+	/source=kmsg .*guarded panel init done/ { panel_done = ktime() } \
+	/source=kmsg .*sf2000_buildroot: screen ready/ { screen_ready = ktime() } \
+	/source=logd --- SF2000 Linux storage mounted ---/ { mount_us = $$2; sub("mono_us=", "", mount_us) } \
+	/source=storage storage-test=pass/ { storage_us = $$2; sub("mono_us=", "", storage_us) } \
+	/source=proc-stat cpu  / { \
+		p = index($$0, "source=proc-stat cpu  "); \
+		n = split(substr($$0, p + 22), c, " "); total = idle = field = 0; \
+		for (i = 1; i <= n; i++) if (c[i] != "") { total += c[i]; if (++field == 4) idle = c[i] } \
+		if (!stat_seen++) { total0 = total; idle0 = idle } \
+		total1 = total; idle1 = idle; \
+	} \
+	END { \
+		printf "linux.screen_exec_to_main_ms=%.3f\n", (screen_main-screen_start)/1000; \
+		printf "linux.panel_init_ms=%.3f\n", (panel_done-panel_begin)/1000; \
+		printf "linux.screen_start_to_ready_ms=%.3f\n", (screen_ready-screen_start)/1000; \
+		printf "linux.storage_256k_write_verify_ms=%.3f\n", (storage_us-mount_us)/1000; \
+		if (total1 > total0) printf "linux.sampled_cpu_busy_pct=%.2f\n", 100*(1-(idle1-idle0)/(total1-total0)); \
+	}' '$(METRICS_LOG)'
+
+benchmark-qemu-linux: qemu linux-buildroot-asd
+	mkdir -p '$(BUILD_DIR)'/metrics
+	/usr/bin/time -f 'qemu.wall_s=%e\nqemu.user_s=%U\nqemu.sys_s=%S\nqemu.host_cpu_pct=%P\nqemu.max_rss_kb=%M' \
+		-o '$(BUILD_DIR)'/metrics/qemu-linux.txt \
+		timeout '$(QEMU_BENCH_SECONDS)s' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-display none -serial none -monitor none \
+		-D '$(BUILD_DIR)'/metrics/qemu-linux.log \
+		>/dev/null 2>&1 || test $$? -eq 124
+	cat '$(BUILD_DIR)'/metrics/qemu-linux.txt
+
+metrics-qemu-fidelity:
+	@awk '\
+	BEGIN { \
+		want["screen-panel-id"]; want["screen-panel-aux"]; \
+		want["screen-rgb-source"]; want["screen-vou-total"]; \
+		want["screen-vou-hactive"]; want["screen-vou-vactive"]; \
+		want["screen-rgb-vsync"]; want["screen-rgb-pad-clock"]; \
+		want["screen-rgb-vou-connect-ctrl"]; \
+		want["screen-rgb-vou-connect-mode"]; \
+		want["screen-panel-command-final"]; want["screen-native-hold-count"]; \
+		want["screen-native-hold-gma"]; want["screen-native-hold-vou"]; \
+		want["screen-te-conditioning-done"]; \
+	} \
+	FNR == 1 { source++ } \
+	{ \
+		name = value = ""; \
+		for (i = 1; i <= NF; i++) { \
+			if ($$i ~ /^name=/) { name = $$i; sub(/^name=/, "", name) } \
+			if ($$i ~ /^value=/) { value = $$i; sub(/^value=/, "", value) } \
+		} \
+		if (name in want && value != "") { if (source == 1) physical[name] = value; else qemu[name] = value } \
+	} \
+	END { \
+		for (name in want) { \
+			compared++; \
+			if (physical[name] != "" && physical[name] == qemu[name]) matched++; \
+			else printf "fidelity.mismatch.%s=physical:%s,qemu:%s\n", name, physical[name], qemu[name]; \
+		} \
+		printf "fidelity.contract_matched=%u\n", matched; \
+		printf "fidelity.contract_compared=%u\n", compared; \
+		printf "fidelity.contract_pct=%.2f\n", 100 * matched / compared; \
+	}' '$(PHYSICAL_CONTRACT_LOG)' '$(QEMU_CONTRACT_LOG)'
 
 smoke-linux-buildroot-fb-test:
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \

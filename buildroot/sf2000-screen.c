@@ -683,12 +683,6 @@ static const unsigned panel_control_pads[] = {
 	PINPAD_T06
 };
 
-static const char *const panel_control_names[] = {
-	"L10", "T01", "L07", "T00", "L01", "L02", "L03", "L04", "L05",
-	"L06", "T09", "T10", "T11", "T12", "T13", "T14", "T02", "T03",
-	"T04", "T05", "T06"
-};
-
 static uint32_t mmio_read32(volatile uint8_t *base, uint32_t off)
 {
 	return *(volatile uint32_t *)(base + off);
@@ -711,15 +705,25 @@ static uint16_t rgb565(unsigned r, unsigned g, unsigned b)
 
 static void log_line(const char *line)
 {
-	int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	static int kmsg_fd = -2;
+	char record[256];
+	size_t len = strlen(line);
 
-	if (fd >= 0) {
-		(void)write(fd, "<6>", 3);
-		(void)write(fd, line, strlen(line));
-		close(fd);
-		return;
+	if (kmsg_fd == -2)
+		kmsg_fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	if (len > sizeof(record) - 4u)
+		len = sizeof(record) - 4u;
+	record[0] = '<';
+	record[1] = '6';
+	record[2] = '>';
+	memcpy(record + 3, line, len);
+	if (kmsg_fd >= 0) {
+		if (write(kmsg_fd, record, len + 3u) >= 0)
+			return;
+		close(kmsg_fd);
+		kmsg_fd = -1;
 	}
-	(void)write(STDERR_FILENO, line, strlen(line));
+	(void)write(STDERR_FILENO, line, len);
 }
 
 static void append_file_log(const char *line)
@@ -1075,6 +1079,23 @@ static uint64_t monotonic_us(void)
 		return 0;
 	return (uint64_t)now.tv_sec * 1000000u +
 		(uint64_t)now.tv_nsec / 1000u;
+}
+
+static void performance_mark(const char *name, uint64_t begin_us)
+{
+	uint64_t now_us = monotonic_us();
+	uint32_t elapsed_us = 0;
+	char line[112];
+
+	if (begin_us && now_us >= begin_us) {
+		uint64_t delta = now_us - begin_us;
+
+		elapsed_us = delta > 0xffffffffu ? 0xffffffffu : (uint32_t)delta;
+	}
+	progress_mark(name, 0x40u, elapsed_us);
+	snprintf(line, sizeof(line), "sf2000-perf: %s=%u us\n", name,
+		elapsed_us);
+	log_line(line);
 }
 
 static int map_region(int fd, volatile uint8_t **out, uint32_t phys,
@@ -2140,32 +2161,28 @@ static void panel_config_outputs(void)
 {
 	static int logged;
 	unsigned i;
+	char line[128];
 
 	panel_lcd_setup_enable();
+	if (!logged) {
+		snprintf(line, sizeof(line),
+			"sf2000-screen: panel gpio dirs before L=0x%08x T=0x%08x\n",
+			mmio_read32(sysio, gpio_base_for_pad(PINPAD_L01) + GPIO_DIR_OFF),
+			mmio_read32(sysio, gpio_base_for_pad(PINPAD_T00) + GPIO_DIR_OFF));
+		log_line(line);
+	}
 	for (i = 0; i < ARRAY_SIZE(panel_control_pads); i++) {
-		char line[96];
-		unsigned pad = panel_control_pads[i];
-		uint32_t base = gpio_base_for_pad(pad);
-
-		if (!logged) {
-			snprintf(line, sizeof(line),
-				"sf2000-screen: panel gpio out %u %s base=0x%03x dir=0x%08x\n",
-				i, panel_control_names[i], base,
-				mmio_read32(sysio, base + GPIO_DIR_OFF));
-			log_line(line);
-		}
 		gpio_config_output(panel_control_pads[i]);
-		if (!logged) {
-			snprintf(line, sizeof(line),
-				"sf2000-screen: panel gpio out done %u %s dir=0x%08x\n",
-				i, panel_control_names[i],
-				mmio_read32(sysio, base + GPIO_DIR_OFF));
-			log_line(line);
-		}
 	}
 	gpio_config_input(PINPAD_L08);
-	if (!logged)
-		log_line("sf2000-screen: panel gpio vsync L08 input done\n");
+	if (!logged) {
+		snprintf(line, sizeof(line),
+			"sf2000-screen: panel gpio dirs ready L=0x%08x T=0x%08x controls=%u\n",
+			mmio_read32(sysio, gpio_base_for_pad(PINPAD_L01) + GPIO_DIR_OFF),
+			mmio_read32(sysio, gpio_base_for_pad(PINPAD_T00) + GPIO_DIR_OFF),
+			(unsigned)ARRAY_SIZE(panel_control_pads));
+		log_line(line);
+	}
 	logged = 1;
 }
 
@@ -4034,6 +4051,7 @@ static void run_direct_console(unsigned *frame)
 	unsigned input_retry = 0;
 	int rgb_active = 0;
 	int ge_diagnostics;
+	uint64_t performance_begin_us = monotonic_us();
 
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
@@ -4041,6 +4059,7 @@ static void run_direct_console(unsigned *frame)
 	panel_lcd_setup_enable();
 	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
 		panel_init_sf2000_original_order();
+	performance_mark("screen-panel-init-us", performance_begin_us);
 
 	console_clear();
 	console_add_line("sf2000 linux direct lcd console");
@@ -4059,6 +4078,7 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
 	panel_push_frame(0);
 	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+	performance_mark("screen-panel-push-us", performance_begin_us);
 	/*
 	 * Keep the broad GE/MCU cards as an explicit hardware diagnostic.  Normal
 	 * boot already exercises the same fill and blit engines and no longer
@@ -4145,6 +4165,7 @@ static void run_direct_console(unsigned *frame)
 	}
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
+	performance_mark("screen-rgb-ready-us", performance_begin_us);
 	log_gma_ready();
 
 handoff_complete:
@@ -4159,6 +4180,7 @@ handoff_complete:
 	}
 
 	publish_screen_ready_and_storage("direct-console\n");
+	performance_mark("screen-service-ready-us", performance_begin_us);
 	progress_mark("screen-loop-enter", 0x3fu, *frame);
 
 	while (!stopping) {
