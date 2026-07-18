@@ -590,4 +590,8 @@ bool hcge_clip_stretch_blit(hcge_state *state, HCGERectangle *source,
 			    HCGERectangle *destination);
 uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address);
 uint32_t hcge_cmdq_paddr(hcge_context *ctx, uint32_t virtual_address);
+short extract_coef(const short *coefficients, int phases, int taps,
+		   int phase, int tap);
+void extract_phase(short *output, const short *coefficients, int phases,
+		   int taps, int phase);
 #endif
