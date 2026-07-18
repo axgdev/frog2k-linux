@@ -33,11 +33,6 @@ clock control, allocates the coherent vendor-sized queue, exposes `/dev/ge`,
 and implements the vendor ioctl numbers for queue discovery and completion.
 IRQ 4 remains masked until a client issues `HCGE_REQUEST_IRQ`; enabling it at
 probe time can starve unrelated deferred probes on this interrupt controller.
-The driver establishes vendor selector 3 (238 MHz) during probe. Physical
-log86 proves that selector 0 is unsafe on this SF2000: the panel process stops
-after its valid ID reads and the watchdog resets it, reproducing the earlier
-log82 boundary. SFCLK `0x1880007c` also holds the SDIO selector in adjacent
-bits, so the display service never retimes GE while MMC can be active.
 
 QEMU recognizes the register block, walks multi-node command queues, and
 executes the grouped fill, blit, conversion, flip, rotation, stretch, key, and

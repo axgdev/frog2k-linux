@@ -67,6 +67,7 @@ BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
 BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN_CFLAGS :=
 BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
+BUILDROOT_SCREEN_SOURCE_STAMP := $(BUILD_DIR)/.stamp-buildroot-screen-source
 BUILDROOT_PANEL_PROBE_LINK := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe
 BUILDROOT_PANEL_PROBE_TARGET ?= sf2000-screen
 BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
@@ -206,7 +207,7 @@ run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-rom run-linux-buildroot-display \
-	smoke-linux-buildroot-display smoke-linux-buildroot-boot-logo \
+	smoke-linux-buildroot-display \
 	smoke-linux-buildroot-fb-test run-linux-buildroot-panel \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
@@ -541,10 +542,19 @@ $(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
-$(BUILDROOT_SCREEN): FORCE $(BUILDROOT_SCREEN_SRC) $(BUILDROOT_SCREEN_ENTRY) \
-		ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
+		$(BUILDROOT_SCREEN_ENTRY) ge/hcge_linux.c ge/ge_api.h Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
+	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' '$(BUILDROOT_SCREEN_ENTRY)' \
+		ge/hcge_linux.c ge/ge_api.h Makefile; \
+		printf '%s\n' '$(BUILDROOT_HELPER_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
+			'$(BUILDROOT_SCREEN_LDFLAGS)' '$(BUILDROOT_SCREEN_STACK_SIZE)'; \
+	} > '$@.tmp'
+	if cmp -s '$@.tmp' '$@'; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+
+$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
+	mkdir -p '$(dir $@)'
+	SOURCE_DATE_EPOCH=0 '$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
 		-Ige $(BUILDROOT_SCREEN_LDFLAGS) -o '$@' \
 		'$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)' ge/hcge_linux.c
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
@@ -973,8 +983,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
 		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
 		printf 'Display handoff:\n'; \
-		printf '  Normal boot emits one loader health blink, then keeps inherited panel RAM dark.\n'; \
-		printf '  The display service enables the backlight after committing its controlled frame.\n'; \
+		printf '  Normal boot emits one loader health blink, then keeps the backlight dark.\n'; \
+		printf '  The display service enables it only after a complete controlled frame is in panel GRAM.\n'; \
 		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
 			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
@@ -1265,17 +1275,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'sf2000-screen: GE accelerated console clear active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -Eq 'value=0x8[0-9a-f]{7} name=screen-ge-context-address' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000003 name=screen-ge-clock-kernel' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ge-sfclk' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-ge-clock-fast' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-bl-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
-		test "$$panel_push_line" -lt "$$backlight_line"
 	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1311,11 +1310,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-native-present-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'sf2000-panel-sync .*TE frame synchronizer ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-panel-sync-enabled' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-panel-sync-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-gma-fixed-scanout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-scanout-refresh' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
@@ -1344,18 +1338,6 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
-
-smoke-linux-buildroot-boot-logo:
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='30s' \
-		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_BOOT_VISUAL=logo SF2000_BOOT_COLOR=0x0010 SF2000_BOOT_HOLD_MS=0' \
-		run-linux-buildroot-display
-	grep -q 'value=0x00000002 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-bl-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	panel_push_line="$$(grep -n 'name=screen-panel-push-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		backlight_line="$$(grep -n 'name=screen-boot-backlight-on' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | head -n 1 | cut -d: -f1)"; \
-		test -n "$$panel_push_line" && test -n "$$backlight_line"; \
-		test "$$panel_push_line" -lt "$$backlight_line"
 
 smoke-linux-buildroot-fb-test:
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \

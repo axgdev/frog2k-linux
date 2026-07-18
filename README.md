@@ -42,6 +42,9 @@ revisited after the kernel ABI and core devices are proven.
 The detailed hardware contract, bring-up history, failed assumptions, current
 support matrix, and application-porting constraints are documented in
 [`docs/SF2000-LINUX-PORT.md`](docs/SF2000-LINUX-PORT.md).
+The log78/log89 stale-display-artifact incident and its reproducibility rules
+are documented in
+[`docs/DISPLAY-INCIDENT-LOG78-LOG89.md`](docs/DISPLAY-INCIDENT-LOG78-LOG89.md).
 
 ## Commands
 
@@ -57,7 +60,6 @@ make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
 make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
 make ROOTFS=buildroot smoke-linux-buildroot-persistent-storage
 make ROOTFS=buildroot smoke-linux-buildroot-display
-make ROOTFS=buildroot smoke-linux-buildroot-boot-logo
 make ROOTFS=buildroot smoke-linux-buildroot-fb-test
 make smoke-linux-buildroot-audio
 make smoke-qemu-unifrog
@@ -119,30 +121,18 @@ run. Production now performs that GE clear and render-to-scanout copy while the
 ST7789 remains MCU-owned, starts VOU, alternates the two immutable 0x280-byte
 descriptor blocks used by the vendor framebuffer driver, verifies both hardware
 latches, transfers the panel to RGB mode, and completes four bounded userspace
-TE/RAMWR boundaries. It then stops touching the shared MCU bus, leaves the
-panel in continuous RGB mode, and continues alternating inactive descriptor
-blocks after completed GE frames.
+TE/RAMWR boundaries. Steady RGB scanout then needs no panel interrupt.
 
-Physical log84 rejects the attempted lifetime kernel TE service. Although the
-aggregate IRQ arrived at about the expected frame cadence, the early edge and
-timeout samples rose almost together; the retained sample eventually recorded
-6,160 full 20 ms waits among 13,958 services. Reclaiming the shared RGB/8080
-pads for that much time produced a lit blank panel. That driver and its
-fixed-descriptor experiment have been removed; production again uses the
-bounded handoff proven by the visible build.
+The level-triggered kernel TE experiment was removed after physical log77
+showed roughly 113 interrupts per second and recreated moving static by
+repeatedly reclaiming the shared LCD bus. The display service sleeps through
+all ordinary delays and redraw polling; it no longer consumes a core in a
+diagnostic busy loop. GE performs full-screen clears and every presentation,
+while idle console ticks redraw only the small changing regions.
 
-Log86 disproved the selector-0 interpretation of log85: selector 0 stops the
-display service immediately after valid panel identification and reproduces
-the earlier log82 watchdog boundary. The actually visible log78 executable,
-recovered from its retained string addresses, used the vendor selector 3
-(238 MHz). The kernel establishes selector 3 once during GE probe and
-userspace only verifies the SFCLK readback, avoiding a later read/modify/write
-of the register shared with SDIO.
-
-The loader emits one health blink and then keeps inherited panel RAM dark.
-Kernel progress does not add delays. The display service enables the backlight
-immediately after it has committed the configured controlled frame, making
-panel reset and the first complete write one atomic visible transition:
+The loader emits one health blink and then leaves the backlight off until the
+display service has pushed a complete controlled frame. The first visible frame
+is configurable:
 
 ```sh
 # Immediate console (default)

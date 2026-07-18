@@ -944,10 +944,9 @@ static void backlight_stage_mark(const char *name, unsigned int pulses)
 	backlight_set(1);
 	status_led_set(0);
 	/*
-	 * Finish the one visible health blink, then keep inherited panel RAM dark.
-	 * Userspace enables the backlight only after committing its controlled
-	 * ST7789 frame, so panel reset and RGB ownership change are atomic to the
-	 * viewer.
+	 * The off pulse is the single physical health blink.  Leave the panel
+	 * dark afterwards so inherited ST7789 GRAM is never exposed while Linux
+	 * is still preparing its first controlled frame.
 	 */
 	backlight_set(0);
 }

@@ -39,16 +39,16 @@ configuration, ordinary files, evdev, ALSA, and fbdev can be ported. Keep
 executables small: on NOMMU each program is allocated and relocated as a whole,
 so a tiny dedicated helper starts much faster than a large multi-call binary.
 
-The log86 investigation exposed a subtle MIPS bFLT relocation rule. Compiler
-control flow can place a LUI in a branch delay slot above the LO16 instruction
-at the backward branch target. elf2flt expresses the semantic pair through
-relocation-table order, but the port rejected a HI16 whenever its text address
-was numerically above the LO16. Only the fall-through LUI was relocated; a
-taken branch reloaded the static GE context as `0x00027758` and faulted in
-`memset()`. The loader now trusts relocation order, updates every prescanned
-HI16 for the same address, and serializes complete MIPS bFLT relocation passes
-because their pending-HI16 state is architecture-global. The context again
-uses static process storage and QEMU records it in the process KSEG0 range.
+One late QEMU failure exposed a particularly subtle bFLT rule. Taking the
+address of a large static BSS object in a non-PIC MIPS FLAT executable can
+leave the link-time low address in generated code even though the process
+itself entered through its KSEG0 alias. The GE context was therefore reported
+as `0x00027768` instead of an address in the process mapping and faulted on its
+first initialization store. Long-lived caller-owned objects that must be
+passed by address are now kept in the persistent `main()` stack frame (or
+allocated by a proven allocator), and retained address markers make this
+failure visible. The valid QEMU address is in the process KSEG0 range. This was
+not a GE register or `memset()` problem.
 
 ## Boot artifacts and loader handoff
 
@@ -71,8 +71,7 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves inherited panel RAM dark until userspace has committed a controlled
-   complete frame.
+5. leaves the backlight dark until userspace owns a complete frame.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -136,31 +135,27 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. leave the backlight dark after the loader's single health blink;
-2. have the display service take exclusive ownership without adding a delay;
-3. configure and reset the SF2000 ST7789 panel in the original command order;
-4. render the selected console, solid color, or built-in logo;
-5. push one complete 320x240 MCU GRAM transaction;
-6. enable the backlight immediately after replacing inherited panel GRAM with
-   the controlled frame;
-7. use GE to clear the exact future GMA scanout surface and copy the prepared
+1. keep the backlight off;
+2. configure and reset the SF2000 ST7789 panel in the original command order;
+3. render the selected console, solid color, or built-in logo;
+4. push one complete 320x240 MCU GRAM transaction;
+5. turn on the backlight, so inherited panel RAM is never visible;
+6. use GE to clear the exact future GMA scanout surface and copy the prepared
    render surface into it;
-8. start and latch VOU while the panel pins remain MCU-owned;
-9. build the inactive native 320x240 RGB565 GMA descriptor, ring its DMBA
+7. start and latch VOU while the panel pins remain MCU-owned;
+8. build the inactive native 320x240 RGB565 GMA descriptor, ring its DMBA
    doorbell, and verify the hardware mirror;
-10. repeat using the alternate 0x280-byte descriptor block, proving that the
+9. repeat using the alternate 0x280-byte descriptor block, proving that the
    live fetcher—not a stale mirror—is responding;
-11. program ST7789 `RAMCTRL`, `RGBCTRL`, `COLMOD`, address window, inversion,
+10. program ST7789 `RAMCTRL`, `RGBCTRL`, `COLMOD`, address window, inversion,
     and display-on state, then switch the shared pads to RGB;
-12. submit one native descriptor after the ownership switch and service four
+11. submit one native descriptor after the ownership switch and service four
     bounded L08 TE/RAMWR boundaries in userspace;
-13. stop servicing L08 after those four bounded ownership edges and leave the
-    shared pads in continuous RGB mode;
-14. alternate the two inactive descriptor blocks after completed GE frames,
-    matching the vendor framebuffer update convention.
+12. stop touching the MCU bus and leave VOU/GMA in continuous RGB mode.
 
-The active descriptor is never rewritten. Each completed console update builds
-the inactive block, flushes it and the RGB565 source, then rings DMBA.
+Subsequent frames match the recovered vendor framebuffer behavior: GE copies
+the completed render surface, then software alternates two immutable
+0x280-byte descriptor blocks. The active block is never rewritten in place.
 
 ### Why the visible G1-G8 sequence appeared necessary
 
@@ -183,53 +178,16 @@ production does not traverse them.
   panel was sampling an invalid RGB stream or that scanout ownership had not
   been established.
 - HC16 active-low clock-gate rules do not apply to the HC15 display gates.
-- A fixed descriptor is not the physically proven vendor framebuffer update
-  contract. The visible log78 path alternates inactive descriptor blocks after
-  completed frames.
-- The recovered HCRToS `vsync_irq()` cannot be transplanted onto Linux's HC15
-  aggregate IRQ as a lifetime service without first proving the electrical
-  child semantics. Log84's early edge and timeout samples rise nearly together,
-  and its retained sample records 6,160 full 20 ms waits among 13,958 services.
-  Holding the shared RGB/8080 pins for that much time blanks the panel. Four
-  bounded userspace ownership edges work; continuous kernel service does not.
+- A fixed descriptor is not the vendor framebuffer update contract. The
+  original driver alternates descriptor blocks after completed frames.
+- Continuous kernel TE service is unnecessary for steady RGB scanout. The
+  level-triggered experiment fired at about 113 Hz and repeatedly reclaimed the
+  shared MCU/RGB bus, reproducing static.
 - Descriptor readback alone is insufficient. The hardware `CTL_HW` and
   `DMBA_HW` mirrors must be observed after VOU is live.
-- The recovered MuFrog panel tables carry an explicit zero command-count
-  terminator. Physical log78 proved the original tight table walker, panel
-  transaction, GE clear, MCU frame, and RGB handoff as one complete path.
-  Its retained string addresses prove that the generated display binary came
-  from `2f6195c`, not from the newer source recorded by the `78cb6a0` commit;
-  the generated overlay had been stale.
-- Logs 79 through 81 progressively moved the watchdog boundary as table
-  validation, per-command retained writes, and post-command markers changed
-  the display executable. Log81 completed the entire panel sequence,
-  `CASET`/`RASET`/`RAMWR`, `DISPON`, formatting, and file logging, then reset
-  before the first GE-render marker. That disproves the earlier conclusion
-  that the command table itself was malformed.
-- Log82 runs the newer generated binary and stops after `screen-panel-aux` in
-  the same boot interval as an MMC delayed rescan. Its userspace clock ioctl
-  changes SYSIO `0x7c` bits 19:18 while that register also contains SDIO bits.
-  Production therefore never retimes GE from userspace.
-- Log83 disproves a boot or GE-command failure: Linux remains alive beyond 53
-  seconds, storage verifies 256 KiB, the console loop presents repeatedly, GE
-  interrupts advance, and every VOU/GMA/pinmux value matches visible log78.
-  Treating the closed HCRToS `vsync_irq()` as the missing operation was still an
-  unsupported inference. Log84 provides the missing negative measurement: its
-  kernel edge and timeout counters rise together while the panel stays blank,
-  so the continuous synchronizer is removed rather than adjusted again.
-- Log85 completed selector-3 GE and display markers but remained physically
-  blank. The initial conclusion that visible log78 selected 0 was false: the
-  retained log78 binary came from `2f6195c` and selected 3. Log86 then tested
-  selector 0 directly and stopped after panel identification, exactly like
-  log82. Production restores selector 3 (238 MHz). Reproducing the static GE
-  context in QEMU exposed the independent forward-HI16 bFLT bug described
-  above; fixing that loader contract removes the source-layout dependence.
-- The screen executable is an unconditional packaging prerequisite. This keeps
-  generated-overlay timestamps from reusing a display binary from another git
-  revision, which is how the log78 artifact diverged from its recorded source.
-- The loader and nonblocking kernel progress path remain dark after the single
-  health blink. The display owner enables R05 only after a complete MCU frame is
-  in panel RAM, preserving the atomic sequence used by the visible log78 build.
+- The brief pre-Linux noise frame was old ST7789 GRAM exposed by the backlight,
+  not a need for another GMA diagnostic. Keeping the backlight dark through the
+  first complete MCU push removes it.
 
 ### Configurable first frame
 
@@ -264,8 +222,7 @@ supported operations functionally. Flags that the surviving vendor header marks
 unsupported are rejected rather than serialized approximately. See
 `ge/README.md` and `make reverse-ge`.
 
-The console uses the vendor 238 MHz GE profile, performs no userspace clock
-transition, uses GE for full-surface
+The console selects the measured 198 MHz GE profile, uses GE for full-surface
 clears and every render-to-scanout copy, and redraws only the title/counter
 region on idle ticks. CPU text rasterization is currently adequate for the
 diagnostic console; a game/menu frontend should keep static UI in surfaces and
@@ -332,8 +289,8 @@ The useful model is contract-accurate rather than cycle-accurate. Tests cover:
 - system interrupt routing and the first CP0 timer event;
 - HC15 SD enumeration, DMA read/write, raw-image persistence, and stock FAT
   writeback;
-- ST7789 commands, bounded TE ownership edges, VOU latch, alternating GMA
-  descriptors, live scanout, and frame capture;
+- ST7789 commands, VOU latch, alternating GMA descriptors, live scanout, and
+  frame capture;
 - functional GE command queues and effects;
 - keypad redraws;
 - SND0 guest DMA to WAV;

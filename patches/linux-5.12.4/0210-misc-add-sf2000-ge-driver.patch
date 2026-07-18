@@ -114,7 +114,6 @@
 +	writel(value & ~SF2000_SYS_GE_GATE, ge->sys + SF2000_SYS_GATE1);
 +	value = readl(ge->sys + SF2000_SYS_CLK);
 +	value &= ~(3u << SF2000_SYS_GE_CLK_SHIFT);
-+	/* The vendor HC15xx clock table uses selector 3 for the 238 MHz GE. */
 +	value |= 3u << SF2000_SYS_GE_CLK_SHIFT;
 +	writel(value, ge->sys + SF2000_SYS_CLK);
 +}
