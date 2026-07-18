@@ -128,11 +128,10 @@ all ordinary delays and redraw polling; it no longer consumes a core in a
 diagnostic busy loop. GE performs full-screen clears and every presentation,
 while idle console ticks redraw only the small changing regions.
 
-The loader emits one health blink and then leaves the backlight visible. This
-deliberately favors an inherited or dirty panel frame over an apparently dead
-device during early bring-up. The display service then takes ownership, blanks
-the backlight while it resets the panel and transfers a complete controlled
-frame, and enables it again only after that frame is committed:
+The loader emits one health blink and then leaves the backlight dark through
+kernel bring-up. The display service enables it when it takes exclusive panel
+ownership, performs the recovered ST7789 transaction, and replaces inherited
+panel RAM with the configured controlled frame:
 
 ```sh
 # Immediate console (default)

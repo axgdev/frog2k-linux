@@ -1534,11 +1534,8 @@ static void startup_backlight_diagnostic(void)
 	log_line("sf2000-screen: taking backlight ownership\n");
 	append_file_log("sf2000-screen: taking backlight ownership\n");
 	progress_mark("screen-bl-owned", 0x3fu, SCREEN_TAG);
-	/*
-	 * The loader has already emitted the single health blink.  Keep inherited
-	 * panel GRAM hidden until the complete, selected boot frame is committed.
-	 */
-	backlight_set(0);
+	/* The display service now owns R05 and keeps boot progress visible. */
+	backlight_set(1);
 	status_led_set(0);
 }
 
@@ -2806,7 +2803,6 @@ static void flush_present_memory(void)
 static void ge_display_open(hcge_context *storage)
 {
 	char line[96];
-	int clock_ret;
 	int ret;
 
 	progress_mark("screen-ge-context-address", 0x3fu,
@@ -2815,14 +2811,13 @@ static void ge_display_open(hcge_context *storage)
 	if (ret == 0) {
 		display_ge = storage;
 		/*
-		 * HC15 selector 0 is the measured fast 198 MHz GE profile used by
-		 * MuFrog for fills and presentation.  The CPU remains untouched.
+		 * The kernel driver has already enabled GE at selector 3 (238 MHz).
+		 * Do not retime the shared SFCLK register here: SDIO uses adjacent
+		 * selector bits and can be active in its delayed rescan worker.
 		 */
-		clock_ret = hcge_set_clock(display_ge, 0u);
 		log_line("sf2000-screen: GE RGB565 compositor ready\n");
 		progress_mark("screen-ge-open-ok", 0x3fu, SCREEN_TAG);
-		progress_mark(clock_ret == 0 ? "screen-ge-clock-fast" :
-			"screen-ge-clock-fail", 0x3fu, (uint32_t)clock_ret);
+		progress_mark("screen-ge-clock-kernel", 0x3fu, 3u);
 	} else {
 		snprintf(line, sizeof(line),
 			"sf2000-screen: GE unavailable ret=%d errno=%d, using direct framebuffer\n",
@@ -4030,13 +4025,7 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 	map_framebuffer_device();
-	/*
-	 * Keep the GE context in main's persistent stack frame.  FLAT NOMMU
-	 * executables must not depend on an absolute address-of-BSS relocation:
-	 * the MIPS elf2flt path can otherwise leave that pointer in the low,
-	 * unmapped link-time address range.  The process stack already carries
-	 * the correct KSEG0 execution alias.
-	 */
+	/* Keep the long-lived HCGE context in main's persistent stack frame. */
 	ge_display_open(&display_ge_storage);
 	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
 	 * Linux before the first control-bus handoff. */

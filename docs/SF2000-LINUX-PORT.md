@@ -71,7 +71,7 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves the backlight visible until the display service takes ownership.
+5. leaves the backlight dark until the display service takes ownership.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -135,13 +135,12 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. keep the inherited frame visible through loader and kernel bring-up;
-2. have the display service take ownership and blank the backlight before it
-   resets or reprograms the panel;
+1. keep the backlight dark after the loader's single health blink;
+2. have the display service take exclusive ownership and enable the backlight;
 3. configure and reset the SF2000 ST7789 panel in the original command order;
 4. render the selected console, solid color, or built-in logo;
 5. push one complete 320x240 MCU GRAM transaction;
-6. enable the backlight only after panel GRAM contains the controlled frame;
+6. replace inherited panel GRAM with the controlled frame;
 7. use GE to clear the exact future GMA scanout surface and copy the prepared
    render surface into it;
 8. start and latch VOU while the panel pins remain MCU-owned;
@@ -190,21 +189,35 @@ production does not traverse them.
 - The recovered MuFrog panel tables carry an explicit zero command-count
   terminator. Physical log78 proved the original tight table walker, panel
   transaction, GE clear, MCU frame, and RGB handoff as one complete path.
+  Its retained string addresses prove that the generated display binary came
+  from `2f6195c`, not from the newer source recorded by the `78cb6a0` commit;
+  the generated overlay had been stale.
 - Logs 79 through 81 progressively moved the watchdog boundary as table
   validation, per-command retained writes, and post-command markers changed
   the display executable. Log81 completed the entire panel sequence,
   `CASET`/`RASET`/`RAMWR`, `DISPON`, formatting, and file logging, then reset
   before the first GE-render marker. That disproves the earlier conclusion
   that the command table itself was malformed.
-- The production screen service therefore uses the exact source path from the
-  physically successful log78 build. Diagnostics remain outside the
-  timing-sensitive panel transaction. The loader and kernel may expose the
-  inherited frame for early liveness, but userspace blanks the backlight while
-  it resets the panel, renders the controlled frame, and completes the first
-  MCU transfer.
-- The brief pre-Linux noise frame is old ST7789 GRAM exposed by the backlight,
-  not a need for another GMA diagnostic. It remains visible during loader and
-  kernel bring-up, then disappears when the display service takes ownership.
+- Log82 runs the newer generated binary and stops after `screen-panel-aux` in
+  the same boot interval as an MMC delayed rescan. The only new shared-clock
+  write is `screen-ge-clock-fast`: its userspace ioctl changes SYSIO `0x7c`
+  bits 19:18 from selector 3 to selector 0. That register also contains the
+  live SDIO selector in bits 21:20. The retained log proves the new clock write
+  is the regression boundary; whether the physical failure is an adjacent-field
+  read/modify/write collision or an unstable selector transition still requires
+  a successful hardware run with that write absent.
+- Production leaves GE clock ownership with the kernel driver. It establishes
+  selector 3 (238 MHz) before exposing `/dev/ge`; the display service no longer
+  performs a slower, racy runtime retime. The long-lived HCGE context remains
+  in `main()`'s persistent stack frame: QEMU records an unrelocated low address
+  when the current MIPS bFLT toolchain places that object in static BSS.
+- The screen executable is an unconditional packaging prerequisite. This keeps
+  generated-overlay timestamps from reusing a display binary from another git
+  revision, which is how the log78 artifact diverged from its recorded source.
+- The loader and kernel stay dark after the single health blink. The display
+  service turns the backlight on only after it owns R05 and the panel bus, so a
+  failure is visible without allowing kernel progress helpers to interfere
+  with display ownership.
 
 ### Configurable first frame
 
