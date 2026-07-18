@@ -39,16 +39,16 @@ configuration, ordinary files, evdev, ALSA, and fbdev can be ported. Keep
 executables small: on NOMMU each program is allocated and relocated as a whole,
 so a tiny dedicated helper starts much faster than a large multi-call binary.
 
-One late QEMU failure exposed a particularly subtle bFLT rule. Taking the
-address of a large static BSS object in a non-PIC MIPS FLAT executable can
-leave the link-time low address in generated code even though the process
-itself entered through its KSEG0 alias. The GE context was therefore reported
-as `0x00027768` instead of an address in the process mapping and faulted on its
-first initialization store. The small GE context is therefore kept in
-`main()`'s persistent stack frame; the minimal NOMMU process deliberately has
-no usable general-purpose heap. Retained address markers make this failure
-visible. The valid QEMU address is in the process KSEG0 range. This was not a
-GE register or `memset()` problem.
+The log86 investigation exposed a subtle MIPS bFLT relocation rule. Compiler
+control flow can place a LUI in a branch delay slot above the LO16 instruction
+at the backward branch target. elf2flt expresses the semantic pair through
+relocation-table order, but the port rejected a HI16 whenever its text address
+was numerically above the LO16. Only the fall-through LUI was relocated; a
+taken branch reloaded the static GE context as `0x00027758` and faulted in
+`memset()`. The loader now trusts relocation order, updates every prescanned
+HI16 for the same address, and serializes complete MIPS bFLT relocation passes
+because their pending-HI16 state is architecture-global. The context again
+uses static process storage and QEMU records it in the process KSEG0 range.
 
 ## Boot artifacts and loader handoff
 
@@ -207,13 +207,9 @@ production does not traverse them.
   before the first GE-render marker. That disproves the earlier conclusion
   that the command table itself was malformed.
 - Log82 runs the newer generated binary and stops after `screen-panel-aux` in
-  the same boot interval as an MMC delayed rescan. The only new shared-clock
-  write is `screen-ge-clock-fast`: its userspace ioctl changes SYSIO `0x7c`
-  bits 19:18 from selector 3 to selector 0. That register also contains the
-  live SDIO selector in bits 21:20. The retained log proves the new clock write
-  is the regression boundary; whether the physical failure is an adjacent-field
-  read/modify/write collision or an unstable selector transition still requires
-  a successful hardware run with that write absent.
+  the same boot interval as an MMC delayed rescan. Its userspace clock ioctl
+  changes SYSIO `0x7c` bits 19:18 while that register also contains SDIO bits.
+  Production therefore never retimes GE from userspace.
 - Log83 disproves a boot or GE-command failure: Linux remains alive beyond 53
   seconds, storage verifies 256 KiB, the console loop presents repeatedly, GE
   interrupts advance, and every VOU/GMA/pinmux value matches visible log78.
@@ -221,14 +217,13 @@ production does not traverse them.
   unsupported inference. Log84 provides the missing negative measurement: its
   kernel edge and timeout counters rise together while the panel stays blank,
   so the continuous synchronizer is removed rather than adjusted again.
-- Log85 adds the physical result missing from the log82 inference: leaving GE
-  at selector 3 completes commands and advances every software/hardware marker,
-  but the panel remains blank. The visible log78 binary selected 0. Production
-  therefore establishes the proven selector 0 (198 MHz) once in the kernel GE
-  probe, before MMC delayed work, instead of performing a racy userspace
-  read/modify/write of the shared SFCLK register. The long-lived HCGE context
-  remains in `main()`'s persistent stack frame: QEMU records an unrelocated low
-  address when the current MIPS bFLT toolchain places that object in static BSS.
+- Log85 completed selector-3 GE and display markers but remained physically
+  blank. The initial conclusion that visible log78 selected 0 was false: the
+  retained log78 binary came from `2f6195c` and selected 3. Log86 then tested
+  selector 0 directly and stopped after panel identification, exactly like
+  log82. Production restores selector 3 (238 MHz). Reproducing the static GE
+  context in QEMU exposed the independent forward-HI16 bFLT bug described
+  above; fixing that loader contract removes the source-layout dependence.
 - The screen executable is an unconditional packaging prerequisite. This keeps
   generated-overlay timestamps from reusing a display binary from another git
   revision, which is how the log78 artifact diverged from its recorded source.
@@ -269,7 +264,8 @@ supported operations functionally. Flags that the surviving vendor header marks
 unsupported are rejected rather than serialized approximately. See
 `ge/README.md` and `make reverse-ge`.
 
-The console selects the measured 198 MHz GE profile, uses GE for full-surface
+The console uses the vendor 238 MHz GE profile, performs no userspace clock
+transition, uses GE for full-surface
 clears and every render-to-scanout copy, and redraws only the title/counter
 region on idle ticks. CPU text rasterization is currently adequate for the
 diagnostic console; a game/menu frontend should keep static UI in surfaces and

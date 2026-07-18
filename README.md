@@ -131,11 +131,13 @@ pads for that much time produced a lit blank panel. That driver and its
 fixed-descriptor experiment have been removed; production again uses the
 bounded handoff proven by the visible build.
 
-Physical log85 then isolated the remaining persistent state difference from
-the visible log78 build: GE selector 3 reports completion but leaves physical
-scanout blank, while selector 0 is visible. The kernel now establishes selector
-0 once during GE probe and userspace only verifies the SFCLK readback, avoiding
-a later read/modify/write of the register shared with SDIO.
+Log86 disproved the selector-0 interpretation of log85: selector 0 stops the
+display service immediately after valid panel identification and reproduces
+the earlier log82 watchdog boundary. The actually visible log78 executable,
+recovered from its retained string addresses, used the vendor selector 3
+(238 MHz). The kernel establishes selector 3 once during GE probe and
+userspace only verifies the SFCLK readback, avoiding a later read/modify/write
+of the register shared with SDIO.
 
 The loader emits one health blink and then keeps inherited panel RAM dark.
 Kernel progress does not add delays. The display service enables the backlight

@@ -1266,7 +1266,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'sf2000-screen: GE accelerated console clear active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -Eq 'value=0x8[0-9a-f]{7} name=screen-ge-context-address' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=screen-ge-clock-kernel' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000003 name=screen-ge-clock-kernel' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-ge-sfclk' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-ge-clock-fast' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000000 name=screen-boot-visual' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

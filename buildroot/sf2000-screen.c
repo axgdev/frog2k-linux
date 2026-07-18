@@ -308,6 +308,12 @@ static unsigned console_view_offset;
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
 static hcge_context *display_ge;
+/*
+ * Keep the command builder in zero-initialized process storage, matching the
+ * physically visible log78 executable.  It is a lifetime object referenced by
+ * display_ge, not a temporary main() stack object.
+ */
+static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
 static unsigned display_ge_attempts;
 static unsigned gma_desc_slot;
@@ -2800,19 +2806,18 @@ static void flush_present_memory(void)
 		gma_frame_flush_bytes, BCACHE);
 }
 
-static void ge_display_open(hcge_context *storage)
+static void ge_display_open(void)
 {
 	char line[96];
 	int ret;
 
 	progress_mark("screen-ge-context-address", 0x3fu,
-		(uint32_t)(uintptr_t)storage);
-	ret = hcge_open_context(storage);
+		(uint32_t)(uintptr_t)&display_ge_storage);
+	ret = hcge_open_context(&display_ge_storage);
 	if (ret == 0) {
-		display_ge = storage;
+		display_ge = &display_ge_storage;
 		/*
-		 * The kernel driver has already enabled GE at the physically proven
-		 * selector 0 (198 MHz).
+		 * The kernel driver has already enabled GE at selector 3 (238 MHz).
 		 * Do not retime the shared SFCLK register here: SDIO uses adjacent
 		 * selector bits and can be active in its delayed rescan worker.
 		 */
@@ -3976,7 +3981,6 @@ int main(int argc, char **argv, char **envp)
 #endif
 	int fd;
 	unsigned frame = 0;
-	hcge_context display_ge_storage;
 	const struct panel_variant *first_variant;
 
 	(void)argc;
@@ -4031,8 +4035,7 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 	map_framebuffer_device();
-	/* Keep the long-lived HCGE context in main's persistent stack frame. */
-	ge_display_open(&display_ge_storage);
+	ge_display_open();
 	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
 	 * Linux before the first control-bus handoff. */
 	panel_te_irq_disable();
