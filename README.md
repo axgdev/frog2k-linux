@@ -119,14 +119,20 @@ run. Production now performs that GE clear and render-to-scanout copy while the
 ST7789 remains MCU-owned, starts VOU, alternates the two immutable 0x280-byte
 descriptor blocks used by the vendor framebuffer driver, verifies both hardware
 latches, transfers the panel to RGB mode, and completes four bounded userspace
-TE/RAMWR boundaries. Steady RGB scanout then needs no panel interrupt.
+TE/RAMWR boundaries. It then transfers lifetime TE service to a kernel
+interrupt handler matching the recovered vendor `vsync_irq()`: shared pads go
+to GPIO, CASET/RASET/RAMWR is issued, and the RGB mux is restored once per TE
+pulse. The final native GMA descriptor stays fixed; GE updates only its pixel
+surface.
 
-The level-triggered kernel TE experiment was removed after physical log77
-showed roughly 113 interrupts per second and recreated moving static by
-repeatedly reclaiming the shared LCD bus. The display service sleeps through
-all ordinary delays and redraw polling; it no longer consumes a core in a
-diagnostic busy loop. GE performs full-screen clears and every presentation,
-while idle console ticks redraw only the small changing regions.
+The first kernel experiment in physical log77 acknowledged the child GPIO
+while TE was still asserted. Because the SoC parent is level-sensitive, that
+re-entered at roughly twice the panel rate and repeatedly reclaimed the shared
+bus. The corrected one-shot handler masks L08, waits for the pulse to return
+low, acknowledges its W1C latch, and only then re-enables the edge. The display
+service sleeps through ordinary delays and redraw polling; it no longer burns a
+core in a userspace TE loop. Retained logs expose both serviced-edge and
+pulse-timeout counters.
 
 The loader emits one health blink and then leaves the backlight dark through
 kernel bring-up. The display service enables it when it takes exclusive panel

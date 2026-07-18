@@ -47,6 +47,10 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
 #define SCREEN_TAG 0x0239u
+#define SF2000_PANEL_SYNC_ENABLE _IO('p', 0)
+#define SF2000_PANEL_SYNC_DISABLE _IO('p', 1)
+#define SF2000_PANEL_SYNC_COUNT _IOR('p', 2, uint32_t)
+#define SF2000_PANEL_SYNC_TIMEOUTS _IOR('p', 3, uint32_t)
 #define GMA_RAM_PHYS 0x00f00000u
 #define GMA_RAM_SIZE 0x00100000u
 #define GMA_DESC_PHYS GMA_RAM_PHYS
@@ -321,6 +325,8 @@ static int panel_te_rising = 1;
 static unsigned panel_te_rearms;
 static int panel_rgb_vsync_enabled = 1;
 static uint32_t panel_rgb_clock_word = 0xb6060606u;
+static int gma_fixed_scanout;
+static int panel_sync_fd = -1;
 static void panel_set_window(void);
 static void panel_restart_frame(void);
 static void panel_te_service_sample(void);
@@ -2800,6 +2806,12 @@ static void flush_present_memory(void)
 		gma_frame_flush_bytes, BCACHE);
 }
 
+static void flush_scanout_memory(void)
+{
+	(void)cacheflush((void *)(gma_ram + GMA_FRAME_OFF),
+		gma_frame_flush_bytes, BCACHE);
+}
+
 static void ge_display_open(hcge_context *storage)
 {
 	char line[96];
@@ -3293,12 +3305,20 @@ static void present_frame(void)
 	static unsigned presents;
 
 	/*
-	 * Match gma_dmba_update() from the vendor framebuffer driver: build the
-	 * inactive 0x280-byte block, ring DMBA, then alternate blocks on every
-	 * update.  This keeps the active descriptor immutable while giving HC15 a
-	 * real frame-boundary transaction for each completed GE frame.
+	 * Latch two independent native descriptors while establishing ownership.
+	 * Once the panel synchronizer is running, the descriptor and its source
+	 * address are immutable: later console updates need only refresh pixels in
+	 * the same scanout surface.  Avoiding redundant DMBA swaps both removes a
+	 * race with the panel ownership interrupt and saves work on the weak CPU.
 	 */
 	presents++;
+	if (gma_fixed_scanout) {
+		ge_copy_render_to_scanout();
+		flush_scanout_memory();
+		if (presents <= 6u)
+			progress_mark("screen-scanout-refresh", 0x3fu, presents);
+		return;
+	}
 	if (presents > 1u)
 		build_gma_descriptor();
 	if (presents <= 4u)
@@ -3604,6 +3624,7 @@ static int condition_native_scanout(void)
 	unsigned milestone = 0;
 	unsigned elapsed_ms = 0;
 	unsigned rearmed;
+	uint32_t kernel_edges = 0;
 
 	/*
 	 * G1 is the first sharp frame in every successful physical run.  Its
@@ -3665,16 +3686,56 @@ static int condition_native_scanout(void)
 	}
 
 	/*
-	 * The physical log77 interrupt count was about twice the panel frame rate,
-	 * proving that the experimental kernel handler was retriggering on the
-	 * GPIO level rather than servicing one edge.  That repeatedly disconnected
-	 * the RGB pads and recreated the moving static.  The ownership transaction
-	 * is complete here; steady RGB scanout needs no further MCU commands.
+	 * The recovered vendor vsync_irq() does not stop after four edges: it
+	 * repeats the GPIO CASET/RASET/RAMWR/RGB ownership transaction for every
+	 * TE pulse.  Transfer that lifetime job to the interrupt-backed driver now
+	 * that the userspace path and final native descriptor are both proven.
 	 */
-	panel_te_streaming = 0;
+	panel_sync_fd = open("/dev/sf2000-panel-sync", O_RDWR | O_CLOEXEC);
+	progress_mark("screen-panel-sync-fd", 0x3fu,
+		(uint32_t)panel_sync_fd);
+	if (panel_sync_fd < 0 ||
+	    ioctl(panel_sync_fd, SF2000_PANEL_SYNC_ENABLE, 0) < 0) {
+		progress_mark("screen-panel-sync-fallback", 0x3fu,
+			(uint32_t)errno);
+		if (panel_sync_fd >= 0) {
+			close(panel_sync_fd);
+			panel_sync_fd = -1;
+		}
+		/* Keep the correct userspace poller alive on an older kernel. */
+	} else {
+		panel_te_streaming = 0;
+		(void)ioctl(panel_sync_fd, SF2000_PANEL_SYNC_COUNT, &kernel_edges);
+		progress_mark("screen-panel-sync-enabled", 0x3fu, kernel_edges);
+	}
+	gma_fixed_scanout = 1;
 	progress_mark("screen-native-hold-done", 0x3fu, rearmed);
 	progress_mark("screen-te-conditioning-done", 0x3fu, panel_te_rearms);
+	progress_mark("screen-gma-fixed-scanout", 0x3fu, gma_desc_phys);
 	return 0;
+}
+
+static void sample_panel_sync(unsigned frame)
+{
+	uint32_t edges = 0;
+	uint32_t timeouts = 0;
+
+	if (panel_sync_fd < 0 || (frame > 8u && (frame & 31u)))
+		return;
+	if (ioctl(panel_sync_fd, SF2000_PANEL_SYNC_COUNT, &edges) < 0) {
+		progress_mark("screen-panel-sync-read-fail", 0x3fu,
+			(uint32_t)errno);
+		return;
+	}
+	(void)ioctl(panel_sync_fd, SF2000_PANEL_SYNC_TIMEOUTS, &timeouts);
+	progress_mark("screen-panel-sync-live", 0x3fu, edges);
+	progress_mark("screen-panel-sync-timeouts", 0x3fu, timeouts);
+	if (frame <= 2u || !(frame & 31u)) {
+		progress_mark("screen-fixed-dmba-live", 0x3fu,
+			mmio_read32(gma, GMA_DMBA_HW));
+		progress_mark("screen-fixed-gma-live", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+	}
 }
 
 static void run_direct_console(unsigned *frame)
@@ -3862,6 +3923,7 @@ handoff_complete:
 				present_frame();
 			else
 				panel_push_frame(0);
+			sample_panel_sync(*frame);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present-done", 0x3fu, *frame);
 			idle = 0;
@@ -3873,6 +3935,11 @@ handoff_complete:
 
 	if (fd >= 0)
 		close(fd);
+	if (panel_sync_fd >= 0) {
+		(void)ioctl(panel_sync_fd, SF2000_PANEL_SYNC_DISABLE, 0);
+		close(panel_sync_fd);
+		panel_sync_fd = -1;
+	}
 	console_input_close_fds(input_fds);
 	runtime_watchdog_disable();
 }
