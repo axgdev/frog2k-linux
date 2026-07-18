@@ -1,8 +1,9 @@
 # Performance and fidelity measurements
 
-The physically verified reference is the log90/loglinux0025 run based on
-commit `2a58ded`.  Performance changes must preserve that display and storage
-contract; a faster boot with a damaged raster or filesystem is a regression.
+The current physically verified reference is the log92/loglinux0027 run.  The
+older log90/loglinux0025 run remains the pre-optimization comparison point.
+Performance changes must preserve the display and storage contract; a faster
+boot with a damaged raster or filesystem is a regression.
 
 ## Reproducible commands
 
@@ -18,6 +19,11 @@ records wall time, host user/system CPU, CPU percentage, and maximum RSS in
 physical retained log against the latest QEMU display run.  Override
 `PHYSICAL_CONTRACT_LOG` and `QEMU_CONTRACT_LOG` to compare other runs.
 
+`make smoke-linux-buildroot-fidelity` runs the complete display smoke suite in
+a cycle-throttled mode, verifies that the physical HC15xx WAIT prohibition is
+still present, compares all 15 register contracts, and checks CPU/panel timing
+against the physical reference.  Normal smoke targets remain the fast mode.
+
 ## 2026-07-18 baseline and checkpoint
 
 The log90 physical baseline measured:
@@ -27,6 +33,25 @@ The log90 physical baseline measured:
 - screen spawn to ready: 6722.799 ms
 - 256 KiB storage write and verification: 80.128 ms
 - sampled guest CPU busy time: 1.21%
+
+The log92 checkpoint measured:
+
+- screen process spawn to main: 1519.435 ms
+- guarded panel initialization: 2059.253 ms
+- screen spawn to ready: 4419.975 ms
+- 256 KiB storage write and verification: 78.236 ms
+- sampled guest CPU busy time: 2.67%
+
+Screen readiness therefore improved by 2302.824 ms (34.3%), and guarded panel
+initialization improved by 2086.802 ms (50.3%).  Retained milestones put panel
+initialization, the first panel push, RGB readiness, and service readiness at
+2.142, 2.261, 2.361, and 2.362 seconds from screen entry respectively.
+
+The fidelity mode uses QEMU icount shift 1.  It reports 497.66 BogoMIPS versus
+611.32 on hardware (ratio 0.814) and panel initialization of 1933.494 ms versus
+2059.253 ms (ratio 0.939).  QEMU still executes the bFLT spawn path in 732.618
+ms versus 1519.435 ms physically, which identifies cache/MMIO/memory latency as
+the next emulator fidelity gap rather than panel timing.
 
 QEMU Linux uses an entire host core when the guest is idle: 15.01 seconds user
 CPU in a 15.00 second window (100%), with roughly 62.6 MiB RSS.  Live GDB

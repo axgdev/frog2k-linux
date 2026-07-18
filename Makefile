@@ -178,10 +178,12 @@ MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
 UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
 MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
-METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0025.txt
-PHYSICAL_CONTRACT_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/log90.txt
+METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0027.txt
+PHYSICAL_CONTRACT_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/log92.txt
 QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-buildroot-display.log
 QEMU_BENCH_SECONDS ?= 15
+QEMU_DISPLAY_ARGS ?=
+QEMU_FIDELITY_ARGS ?= -icount shift=1,sleep=on,align=on
 GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libge.a
 GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
@@ -217,6 +219,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
+	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
+	smoke-linux-physical-contract metrics-qemu-timing \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
@@ -551,7 +555,7 @@ $(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
 		$(BUILDROOT_SCREEN_ENTRY) ge/hcge_linux.c ge/ge_api.h Makefile
 	mkdir -p '$(dir $@)'
 	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' '$(BUILDROOT_SCREEN_ENTRY)' \
-		ge/hcge_linux.c ge/ge_api.h Makefile; \
+		ge/hcge_linux.c ge/ge_api.h; \
 		printf '%s\n' '$(BUILDROOT_HELPER_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
 			'$(BUILDROOT_SCREEN_LDFLAGS)' '$(BUILDROOT_SCREEN_STACK_SIZE)'; \
 	} > '$@.tmp'
@@ -1267,7 +1271,7 @@ run-linux-buildroot-display: qemu
 	SF2000_TRACE_GMA=1 \
 	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-buildroot-gma \
 	SF2000_GMA_DUMP_LIMIT=8 \
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) $(QEMU_DISPLAY_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-display.log \
 		> '$(BUILD_DIR)'/logs/linux-buildroot-display.console 2>&1 || test $$? -eq 124
@@ -1424,6 +1428,54 @@ metrics-qemu-fidelity:
 		printf "fidelity.contract_compared=%u\n", compared; \
 		printf "fidelity.contract_pct=%.2f\n", 100 * matched / compared; \
 	}' '$(PHYSICAL_CONTRACT_LOG)' '$(QEMU_CONTRACT_LOG)'
+
+run-linux-buildroot-fidelity:
+	$(MAKE) QEMU_DISPLAY_ARGS='$(QEMU_FIDELITY_ARGS)' \
+		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' run-linux-buildroot-display
+
+smoke-linux-physical-contract: linux-buildroot-asd
+	grep -A1 'if (!IS_ENABLED(CONFIG_MIPS_SF2000))' \
+		'/tmp/sf2000_linux-kernel-$(LINUX_VERSION)/arch/mips/kernel/traps.c' | \
+		grep -q 'check_wait()'
+
+metrics-qemu-timing:
+	@awk '\
+	function physical_time(   p,n,a) { \
+		p = index($$0, "source=kmsg "); if (!p) return -1; \
+		n = split(substr($$0, p + 12), a, ","); return n >= 3 ? a[3] / 1000000 : -1; \
+	} \
+	function qemu_time(   s) { \
+		if (match($$0, /\[[ ]*[0-9]+\.[0-9]+\]/)) { s = substr($$0, RSTART + 1, RLENGTH - 2); return s + 0 } \
+		return -1; \
+	} \
+	FNR == 1 { source++ } \
+	/Calibrating delay loop/ { \
+		if (match($$0, /[0-9]+\.[0-9]+ BogoMIPS/)) { v = substr($$0, RSTART, RLENGTH); sub(/ BogoMIPS/, "", v); bogo[source] = v + 0 } \
+	} \
+	/sf2000_buildroot: starting screen/ { start[source] = source == 1 ? physical_time() : qemu_time() } \
+	/sf2000-screen: main entry/ && !main[source] { main[source] = source == 1 ? physical_time() : qemu_time() } \
+	/guarded panel init begin/ { panel0[source] = source == 1 ? physical_time() : qemu_time() } \
+	/guarded panel init done/ { panel1[source] = source == 1 ? physical_time() : qemu_time() } \
+	/sf2000_buildroot: screen ready/ { ready[source] = source == 1 ? physical_time() : qemu_time() } \
+	END { \
+		printf "timing.physical_bogomips=%.2f\n", bogo[1]; printf "timing.qemu_bogomips=%.2f\n", bogo[2]; \
+		printf "timing.bogomips_ratio=%.3f\n", bogo[2]/bogo[1]; \
+		printf "timing.physical_exec_ms=%.3f\n", 1000*(main[1]-start[1]); \
+		printf "timing.qemu_exec_ms=%.3f\n", 1000*(main[2]-start[2]); \
+		printf "timing.physical_panel_ms=%.3f\n", 1000*(panel1[1]-panel0[1]); \
+		printf "timing.qemu_panel_ms=%.3f\n", 1000*(panel1[2]-panel0[2]); \
+		printf "timing.physical_ready_ms=%.3f\n", 1000*(ready[1]-start[1]); \
+		printf "timing.qemu_ready_ms=%.3f\n", 1000*(ready[2]-start[2]); \
+		if (bogo[2]/bogo[1] < .75 || bogo[2]/bogo[1] > 1.25) exit 1; \
+		if ((panel1[2]-panel0[2])/(panel1[1]-panel0[1]) < .75 || (panel1[2]-panel0[2])/(panel1[1]-panel0[1]) > 1.25) exit 1; \
+	}' '$(METRICS_LOG)' '$(QEMU_CONTRACT_LOG)'
+
+smoke-linux-buildroot-fidelity:
+	$(MAKE) QEMU_DISPLAY_ARGS='$(QEMU_FIDELITY_ARGS)' \
+		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' smoke-linux-buildroot-display
+	$(MAKE) smoke-linux-physical-contract
+	$(MAKE) metrics-qemu-fidelity
+	$(MAKE) metrics-qemu-timing
 
 smoke-linux-buildroot-fb-test:
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
