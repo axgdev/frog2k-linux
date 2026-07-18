@@ -8,4 +8,3 @@
 /dev/input d 755 0 0 - - - - -
 /dev/input/event c 660 0 0 13 64 0 1 4
 /dev/ge c 660 0 0 10 243 - - -
-/dev/sf2000-panel-sync c 660 0 0 10 244 - - -

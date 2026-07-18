@@ -943,12 +943,6 @@ static void backlight_stage_mark(const char *name, unsigned int pulses)
 	delay_count_ticks(BACKLIGHT_OFF_TICKS);
 	backlight_set(1);
 	status_led_set(0);
-	/*
-	 * The off pulse is the single physical health blink.  Leave the panel
-	 * dark afterwards so inherited ST7789 GRAM is never exposed while Linux
-	 * is still preparing the userspace display owner.
-	 */
-	backlight_set(0);
 }
 
 static void loader_panic(const char *message)

@@ -71,7 +71,8 @@ peripheral clocks. The loader therefore:
 2. performs the cache/ROM handoff required by this CPU;
 3. arms a watchdog for early failures;
 4. emits one physical health blink;
-5. leaves the backlight dark until the display service takes ownership.
+5. leaves the backlight on so a dirty inherited frame is preferable to a
+   silent, apparently dead boot.
 
 On the next quick power cycle, the retained journal is recovered into
 `log.txt`. It is deliberately outside ordinary kernel and GMA working memory.
@@ -135,8 +136,8 @@ a descriptor.
 
 The physically stable sequence is:
 
-1. keep the backlight dark after the loader's single health blink;
-2. have the display service take exclusive ownership and enable the backlight;
+1. leave the backlight on after the loader's single health blink;
+2. have the display service take exclusive ownership without adding a delay;
 3. configure and reset the SF2000 ST7789 panel in the original command order;
 4. render the selected console, solid color, or built-in logo;
 5. push one complete 320x240 MCU GRAM transaction;
@@ -152,16 +153,13 @@ The physically stable sequence is:
     and display-on state, then switch the shared pads to RGB;
 12. submit one native descriptor after the ownership switch and service four
     bounded L08 TE/RAMWR boundaries in userspace;
-13. transfer TE ownership to the kernel synchronizer, which masks L08, performs
-    the recovered GPIO `CASET`/`RASET`/`RAMWR` transaction, waits for TE to
-    deassert, acknowledges the GPIO latch, and restores RGB once per frame;
-14. keep the final native descriptor fixed and update only its RGB565 source
-    surface with GE.
+13. stop servicing L08 after those four bounded ownership edges and leave the
+    shared pads in continuous RGB mode;
+14. alternate the two inactive descriptor blocks after completed GE frames,
+    matching the vendor framebuffer update convention.
 
-The two descriptor blocks are alternated only while proving the live GMA
-fetcher during handoff. Subsequent console frames keep one already-latched
-descriptor immutable and update its source pixels, avoiding redundant DMBA
-transactions and any race with the panel ownership interrupt.
+The active descriptor is never rewritten. Each completed console update builds
+the inactive block, flushes it and the RGB565 source, then rings DMBA.
 
 ### Why the visible G1-G8 sequence appeared necessary
 
@@ -184,14 +182,15 @@ production does not traverse them.
   panel was sampling an invalid RGB stream or that scanout ownership had not
   been established.
 - HC16 active-low clock-gate rules do not apply to the HC15 display gates.
-- The vendor framebuffer alternates descriptors when layer state changes, but
-  a fixed descriptor is correct for the console's fixed geometry and source.
-  Re-ringing identical DMBA blocks wastes CPU and can race panel ownership.
-- Continuous TE service is part of the vendor panel contract. The failed
-  log77 experiment acknowledged GPIO status before the electrical pulse ended;
-  its roughly 113 Hz rate was a retrigger bug, not evidence that TE service was
-  unnecessary. The corrected threaded handler masks the child and acknowledges
-  it only after L08 returns low.
+- A fixed descriptor is not the physically proven vendor framebuffer update
+  contract. The visible log78 path alternates inactive descriptor blocks after
+  completed frames.
+- The recovered HCRToS `vsync_irq()` cannot be transplanted onto Linux's HC15
+  aggregate IRQ as a lifetime service without first proving the electrical
+  child semantics. Log84's early edge and timeout samples rise nearly together,
+  and its retained sample records 6,160 full 20 ms waits among 13,958 services.
+  Holding the shared RGB/8080 pins for that much time blanks the panel. Four
+  bounded userspace ownership edges work; continuous kernel service does not.
 - Descriptor readback alone is insufficient. The hardware `CTL_HW` and
   `DMBA_HW` mirrors must be observed after VOU is live.
 - The recovered MuFrog panel tables carry an explicit zero command-count
@@ -217,10 +216,10 @@ production does not traverse them.
 - Log83 disproves a boot or GE-command failure: Linux remains alive beyond 53
   seconds, storage verifies 256 KiB, the console loop presents repeatedly, GE
   interrupts advance, and every VOU/GMA/pinmux value matches visible log78.
-  The remaining difference was outside those readbacks. Disassembly of the
-  closed HCRToS `vsync_irq()` shows it repeats the panel frame restart on every
-  TE interrupt, whereas Linux stopped after four startup edges. This led to the
-  corrected lifetime synchronizer above.
+  Treating the closed HCRToS `vsync_irq()` as the missing operation was still an
+  unsupported inference. Log84 provides the missing negative measurement: its
+  kernel edge and timeout counters rise together while the panel stays blank,
+  so the continuous synchronizer is removed rather than adjusted again.
 - Production leaves GE clock ownership with the kernel driver. It establishes
   selector 3 (238 MHz) before exposing `/dev/ge`; the display service no longer
   performs a slower, racy runtime retime. The long-lived HCGE context remains
@@ -229,10 +228,10 @@ production does not traverse them.
 - The screen executable is an unconditional packaging prerequisite. This keeps
   generated-overlay timestamps from reusing a display binary from another git
   revision, which is how the log78 artifact diverged from its recorded source.
-- The loader and kernel stay dark after the single health blink. The display
-  service turns the backlight on only after it owns R05 and the panel bus, so a
-  failure is visible without allowing kernel progress helpers to interfere
-  with display ownership.
+- The loader and nonblocking kernel progress path leave the backlight visible
+  after the single health blink. This intentionally exposes a dirty inherited
+  frame until the display owner replaces it, making pre-console failures
+  distinguishable from a powered-off panel.
 
 ### Configurable first frame
 
@@ -334,8 +333,8 @@ The useful model is contract-accurate rather than cycle-accurate. Tests cover:
 - system interrupt routing and the first CP0 timer event;
 - HC15 SD enumeration, DMA read/write, raw-image persistence, and stock FAT
   writeback;
-- ST7789 commands, TE aggregate cadence and frame-restart service, VOU latch,
-  GMA descriptors, live scanout, and frame capture;
+- ST7789 commands, bounded TE ownership edges, VOU latch, alternating GMA
+  descriptors, live scanout, and frame capture;
 - functional GE command queues and effects;
 - keypad redraws;
 - SND0 guest DMA to WAV;

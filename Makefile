@@ -616,7 +616,6 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
-		printf 'nod /dev/sf2000-panel-sync 0660 0 0 c 10 244\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -862,7 +861,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
 		--enable SF2000_GE \
-		--enable SF2000_PANEL_SYNC \
+		--disable SF2000_PANEL_SYNC \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
 		--disable SND_PCM_OSS \
@@ -974,8 +973,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  /init disables WDT0 after userspace is alive. A pre-userspace hang should reboot.\n'; \
 		printf '  After that reboot, inspect log.txt for the previous RAM progress dump.\n\n'; \
 		printf 'Display handoff:\n'; \
-		printf '  Normal boot emits one loader health blink, then keeps the backlight dark.\n'; \
-		printf '  The display service enables it when taking exclusive panel ownership.\n'; \
+		printf '  Normal boot emits one loader health blink, then leaves the backlight visible.\n'; \
+		printf '  The display service replaces the inherited frame when taking panel ownership.\n'; \
 		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
 			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
@@ -1307,14 +1306,11 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'name=screen-native-present-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000-panel-sync .*TE frame synchronizer ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-sync-enabled' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-sync-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=screen-panel-sync-timeouts' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-gma-fixed-scanout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-scanout-refresh' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-panel-sync-fallback' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-panel-sync-read-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'sf2000-panel-sync .*TE frame synchronizer ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-panel-sync-enabled' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-panel-sync-live' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-gma-fixed-scanout' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	! grep -q 'name=screen-scanout-refresh' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
