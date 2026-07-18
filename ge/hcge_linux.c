@@ -7,9 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#ifdef __mips__
-#include <sys/cachectl.h>
-#endif
 #include <unistd.h>
 
 #ifndef O_CLOEXEC
@@ -25,6 +22,7 @@
 #define HCGE_SET_CLOCK _IO(HCGE_IOCBASE, 0x06)
 #define HCGE_GET_GE_REGISTER _IO(HCGE_IOCBASE, 0x07)
 #define HCGE_SUBMIT _IO(HCGE_IOCBASE, 0x08)
+#define HCGE_CACHE_CLEAN _IO(HCGE_IOCBASE, 0x09)
 
 struct hcge_cmdq_buf_info {
 	uint32_t addr;
@@ -33,6 +31,11 @@ struct hcge_cmdq_buf_info {
 
 struct hcge_linux_submit {
 	uint32_t data;
+	uint32_t length;
+};
+
+struct hcge_linux_cache_range {
+	uint32_t address;
 	uint32_t length;
 };
 
@@ -512,15 +515,59 @@ uint32_t hcge_linux_cached_phys(const void *address)
 	return (uint32_t)value & 0x1fffffffu;
 }
 
-int hcge_linux_cache_clean(void *address, unsigned int bytes)
+int hcge_linux_cache_clean(hcge_context *ctx, void *address,
+			   unsigned int bytes)
 {
-	if (!address || !bytes)
+	struct hcge_linux_cache_range range;
+
+	if (hcge_context_fd(ctx) < 0 || !address || !bytes)
 		return -EINVAL;
-#ifdef __mips__
-	return cacheflush(address, (int)bytes, BCACHE) < 0 ? -errno : 0;
-#else
-	return -ENOSYS;
-#endif
+	range.address = hcge_linux_cached_phys(address);
+	range.length = bytes;
+	if (!range.address)
+		return -EINVAL;
+	return ioctl(ctx->ge_fd, HCGE_CACHE_CLEAN, &range) < 0 ? -errno : 0;
+}
+
+int hcge_linux_prepare_cached(hcge_context *ctx,
+			      HCGE_CoreSurfaceBuffer *surface, void *address,
+			      unsigned int pitch, unsigned int height)
+{
+	uint32_t physical;
+
+	if (!surface || !pitch || !height || height > UINT32_MAX / pitch)
+		return -EINVAL;
+	physical = hcge_linux_cached_phys(address);
+	if (!physical)
+		return -EINVAL;
+	if (hcge_linux_cache_clean(ctx, address, pitch * height) < 0)
+		return -EIO;
+	surface->phys = physical;
+	surface->pitch = pitch;
+	return 0;
+}
+
+int hcge_linux_cache_clean_rect(hcge_context *ctx, void *address,
+				unsigned int pitch,
+				unsigned int bytes_per_pixel,
+				const HCGERectangle *rectangle)
+{
+	uint64_t offset, bytes;
+
+	if (!address || !rectangle || rectangle->x < 0 || rectangle->y < 0 ||
+	    rectangle->w <= 0 || rectangle->h <= 0 || !pitch ||
+	    !bytes_per_pixel || ((uint64_t)(unsigned int)rectangle->x +
+	    (unsigned int)rectangle->w) *
+	    bytes_per_pixel > pitch)
+		return -EINVAL;
+	offset = (uint64_t)rectangle->y * pitch +
+		(uint64_t)rectangle->x * bytes_per_pixel;
+	bytes = (uint64_t)(rectangle->h - 1) * pitch +
+		(uint64_t)rectangle->w * bytes_per_pixel;
+	if (offset > UINT32_MAX || bytes > UINT32_MAX)
+		return -EINVAL;
+	return hcge_linux_cache_clean(ctx,
+		(uint8_t *)address + (unsigned int)offset, (unsigned int)bytes);
 }
 
 uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address)

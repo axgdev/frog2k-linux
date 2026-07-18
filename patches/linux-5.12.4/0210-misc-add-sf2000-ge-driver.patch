@@ -21,7 +21,7 @@
 +obj-$(CONFIG_SF2000_GE)		+= sf2000-ge.o
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,413 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -69,6 +69,7 @@
 +#define HCGE_SET_CLOCK		_IO(HCGE_IOCBASE, 0x06)
 +#define HCGE_GET_GE_REGISTER	_IO(HCGE_IOCBASE, 0x07)
 +#define HCGE_SUBMIT		_IO(HCGE_IOCBASE, 0x08)
++#define HCGE_CACHE_CLEAN	_IO(HCGE_IOCBASE, 0x09)
 +
 +struct hcge_cmdq_buf_info {
 +	u32 addr;
@@ -77,6 +78,11 @@
 +
 +struct hcge_submit {
 +	u32 data;
++	u32 length;
++};
++
++struct hcge_cache_range {
++	u32 address;
 +	u32 length;
 +};
 +
@@ -312,6 +318,18 @@
 +submit_out:
 +		mutex_unlock(&ge->submit_lock);
 +		return ret;
++	}
++	case HCGE_CACHE_CLEAN: {
++		struct hcge_cache_range range;
++
++		if (copy_from_user(&range, (void __user *)arg, sizeof(range)))
++			return -EFAULT;
++		if (!range.address || !range.length ||
++		    range.address + range.length < range.address)
++			return -EINVAL;
++		dma_sync_single_for_device(ge->dev, range.address, range.length,
++					   DMA_TO_DEVICE);
++		return 0;
 +	}
 +	default:
 +		return -ENOTTY;

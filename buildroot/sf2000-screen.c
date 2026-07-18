@@ -308,6 +308,7 @@ static uint16_t cached_render_frame[WIDTH * HEIGHT]
 static uint16_t cached_render_scratch[WIDTH * HEIGHT]
 	__attribute__((aligned(64)));
 static int cached_render_enabled;
+static int cached_render_tick_dirty;
 
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
@@ -2907,6 +2908,7 @@ static void draw_console_dynamic(unsigned frame, uint16_t bg, uint16_t bar)
 static void draw_console_tick(unsigned frame)
 {
 	draw_console_dynamic(frame, rgb565(0, 2, 3), rgb565(0, 10, 14));
+	cached_render_tick_dirty = cached_render_enabled;
 }
 
 static void draw_console_screen(unsigned frame)
@@ -2919,6 +2921,8 @@ static void draw_console_screen(unsigned frame)
 	unsigned start = console_line_count > visible ?
 		console_line_count - visible : 0;
 	unsigned row;
+
+	cached_render_tick_dirty = 0;
 
 	console_clamp_view();
 	if (console_view_offset < start)
@@ -3335,7 +3339,23 @@ static void ge_copy_render_to_scanout(void)
 	}
 	if (!render_phys)
 		goto cpu_fallback;
-	(void)cacheflush(render_cpu, FRAME_BYTES, BCACHE);
+	if (cached_render_enabled && cached_render_tick_dirty) {
+		HCGERectangle top = { 0, 0, WIDTH, 12 };
+		HCGERectangle anchor = { WIDTH - 2, HEIGHT - 2, 2, 2 };
+		int top_ret, anchor_ret;
+
+		top_ret = hcge_linux_cache_clean_rect(display_ge, render_cpu,
+			PITCH, 2, &top);
+		anchor_ret = hcge_linux_cache_clean_rect(display_ge, render_cpu,
+			PITCH, 2, &anchor);
+		if (top_ret < 0 || anchor_ret < 0)
+			(void)cacheflush(render_cpu, FRAME_BYTES, BCACHE);
+	} else {
+		if (hcge_linux_cache_clean(display_ge, render_cpu,
+			FRAME_BYTES) < 0)
+			(void)cacheflush(render_cpu, FRAME_BYTES, BCACHE);
+	}
+	cached_render_tick_dirty = 0;
 	state = &display_ge->state;
 	memset(state, 0, sizeof(*state));
 	state->render_options = HCGE_DSRO_NONE;
@@ -3561,7 +3581,8 @@ static void run_graphics_benchmark(unsigned *frame)
 	completed = 0;
 	begin = monotonic_us();
 	if (hcge_linux_cached_phys(cached_render_frame) &&
-	    hcge_linux_cache_clean(cached_render_frame, FRAME_BYTES) == 0 &&
+	    hcge_linux_cache_clean(display_ge, cached_render_frame,
+		FRAME_BYTES) == 0 &&
 	    benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
 	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
 		GE_BENCH_BATCH_WORDS) == 0) {
