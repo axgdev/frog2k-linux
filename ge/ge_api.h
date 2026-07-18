@@ -588,4 +588,6 @@ bool hcge_clip_blit(hcge_state *state, HCGERectangle *source,
 		    int *destination_x, int *destination_y);
 bool hcge_clip_stretch_blit(hcge_state *state, HCGERectangle *source,
 			    HCGERectangle *destination);
+uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address);
+uint32_t hcge_cmdq_paddr(hcge_context *ctx, uint32_t virtual_address);
 #endif

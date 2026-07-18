@@ -444,6 +444,20 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, size_t words)
 	return ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) < 0 ? -errno : 0;
 }
 
+uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address)
+{
+	if (!ctx || physical_address < ctx->cmdq_buf_phyaddr)
+		return 0;
+	return ctx->cmdq_buf_vaddr + physical_address - ctx->cmdq_buf_phyaddr;
+}
+
+uint32_t hcge_cmdq_paddr(hcge_context *ctx, uint32_t virtual_address)
+{
+	if (!ctx)
+		return 0;
+	return ctx->cmdq_buf_phyaddr + virtual_address - ctx->cmdq_buf_vaddr;
+}
+
 void hcge_check_state(hcge_state *state, HCGEAccelerationMask accel)
 {
 	if (!state || !(accel & (HCGE_DFXL_FILLRECTANGLE | HCGE_DFXL_BLIT |

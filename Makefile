@@ -231,12 +231,15 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
 	test-ge-source-capture test-ge-formats test-ge-effects \
-	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix clean
+	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
+	test-ge-queue clean
 
 GE_UTILS_TEST := $(BUILD_DIR)/hcge-utils-test
 GE_VENDOR_UTILS_TEST := $(BUILD_DIR)/hcge-vendor-utils-test
 GE_MATRIX_TEST := $(BUILD_DIR)/hcge-matrix-test
 GE_VENDOR_MATRIX_TEST := $(BUILD_DIR)/hcge-vendor-matrix-test
+GE_QUEUE_TEST := $(BUILD_DIR)/hcge-queue-test
+GE_VENDOR_QUEUE_TEST := $(BUILD_DIR)/hcge-vendor-queue-test
 
 all: status
 
@@ -310,6 +313,20 @@ $(GE_VENDOR_MATRIX_TEST): ge/hcge_matrix_test.c ge/ge_api.h \
 test-ge-matrix: $(GE_MATRIX_TEST) $(GE_VENDOR_MATRIX_TEST)
 	qemu-mipsel '$(GE_VENDOR_MATRIX_TEST)' > '$(BUILD_DIR)/hcge-matrix.vendor'
 	qemu-mipsel '$(GE_MATRIX_TEST)' | cmp - '$(BUILD_DIR)/hcge-matrix.vendor'
+
+$(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_queue_test.c ge/ge_api.h \
+		$(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -ffunction-sections \
+		-Wl,--gc-sections -o '$@' ge/hcge_linux.c ge/hcge_queue_test.c
+
+$(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
+		$(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+		ge/hcge_queue_test.c '$(GE_VENDOR_ARCHIVE)'
+
+test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
+	qemu-mipsel '$(GE_VENDOR_QUEUE_TEST)' > '$(BUILD_DIR)/hcge-queue.vendor'
+	qemu-mipsel '$(GE_QUEUE_TEST)' | cmp - '$(BUILD_DIR)/hcge-queue.vendor'
 
 $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge
