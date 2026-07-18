@@ -435,11 +435,25 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
 		      unsigned int words)
 {
 	struct hcge_linux_submit submit;
+	hcge_batch *batch;
 	int error;
 
 	if (hcge_context_fd(ctx) < 0 || !node || !words ||
 	    words > ctx->cmdq_buf_size / sizeof(*node))
 		return -EINVAL;
+	batch = ctx->batch;
+	if (batch) {
+		if (batch->context != ctx || batch->error)
+			return batch->error ? batch->error : -EINVAL;
+		if (words > batch->capacity - batch->words) {
+			batch->error = -ENOSPC;
+			return batch->error;
+		}
+		memcpy(batch->buffer + batch->words, node,
+		       words * sizeof(*node));
+		batch->words += words;
+		return 0;
+	}
 	submit.data = (uint32_t)(uintptr_t)node;
 	submit.length = (uint32_t)(words * sizeof(*node));
 	if (ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) == 0)
@@ -451,6 +465,39 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
 	if (hcge_engine_sync(ctx) < 0)
 		return -EIO;
 	return ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) < 0 ? -errno : 0;
+}
+
+int hcge_batch_begin(hcge_context *ctx, hcge_batch *batch, uint32_t *buffer,
+		     unsigned int capacity_words)
+{
+	if (hcge_context_fd(ctx) < 0 || !batch || !buffer || !capacity_words ||
+	    ctx->batch)
+		return -EINVAL;
+	*batch = (hcge_batch){
+		.context = ctx,
+		.buffer = buffer,
+		.capacity = capacity_words,
+	};
+	ctx->batch = batch;
+	return 0;
+}
+
+int hcge_batch_end(hcge_batch *batch, int wait)
+{
+	hcge_context *ctx;
+	int ret;
+
+	if (!batch || !batch->context || batch->context->batch != batch)
+		return -EINVAL;
+	ctx = batch->context;
+	ctx->batch = NULL;
+	ret = batch->error;
+	if (!ret && batch->words)
+		ret = hcge_linux_submit(ctx, batch->buffer, batch->words);
+	if (!ret && wait)
+		ret = hcge_engine_sync(ctx);
+	batch->context = NULL;
+	return ret;
 }
 
 uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address)

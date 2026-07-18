@@ -76,6 +76,14 @@ render-to-scanout presentation. Idle counter frames update only their dynamic
 title and anchor before the hardware BLIT, avoiding a CPU redraw of the full
 320x240 surface.
 
+Sprite-heavy frontends should wrap a frame's independent operations in
+`hcge_batch_begin()`/`hcge_batch_end()`. The caller supplies the word buffer;
+normal fill, blit, stretch, key and blend calls then serialize into that buffer
+and reach the kernel in one submission. State may be changed between commands,
+and the final `wait` argument is the frame completion barrier. This removes one
+NOMMU syscall and one queue transition per sprite without allocating memory or
+introducing process-global batching state.
+
 No vendor object is linked into Linux. The eventual library will keep the
 public `hcge_*` API so MuFrog can switch from `libge.a` to source without
 changing its display backend.

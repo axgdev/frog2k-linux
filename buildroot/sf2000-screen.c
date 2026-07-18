@@ -3408,6 +3408,8 @@ static void ge_copy_render_to_scanout(void)
 }
 
 #define GE_BENCH_ITERATIONS 128u
+#define GE_BENCH_BATCH_WORDS 8192u
+static uint32_t ge_benchmark_batch_words[GE_BENCH_BATCH_WORDS];
 
 static void benchmark_report(const char *test, uint64_t elapsed_us,
 		unsigned iterations, uint32_t bytes_per_iteration)
@@ -3470,6 +3472,7 @@ static int benchmark_set_blit_state(HCGEAccelerationMask accel)
 
 static void run_graphics_benchmark(unsigned *frame)
 {
+	hcge_batch batch;
 	HCGERectangle full = { 0, 0, WIDTH, HEIGHT };
 	HCGERectangle half = { 0, 0, WIDTH / 2, HEIGHT / 2 };
 	uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
@@ -3491,52 +3494,56 @@ static void run_graphics_benchmark(unsigned *frame)
 	benchmark_show(frame, "BENCH 2/4: GE FILL");
 	completed = 0;
 	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_FILLRECTANGLE) == 0) {
+	if (benchmark_set_blit_state(HCGE_DFXL_FILLRECTANGLE) == 0 &&
+	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
+		GE_BENCH_BATCH_WORDS) == 0) {
 		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
 			display_ge->state.color.r = (uint8_t)(i * 29u);
 			display_ge->state.color.g = (uint8_t)(i * 53u);
-			hcge_set_state(display_ge, &display_ge->state,
-				HCGE_DFXL_FILLRECTANGLE);
 			if (!hcge_fill_rect(display_ge, &full))
 				break;
 			completed++;
 		}
-		if (completed && hcge_engine_sync(display_ge) < 0)
+		if (hcge_batch_end(&batch, 1) < 0)
 			completed = 0;
 	}
 	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-fill", elapsed, completed, FRAME_BYTES);
+	benchmark_report("ge-fill-b", elapsed, completed, FRAME_BYTES);
 
 	benchmark_show(frame, "BENCH 3/4: GE BLIT");
 	(void)cacheflush(src, FRAME_BYTES, BCACHE);
 	completed = 0;
 	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0) {
+	if (benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
+	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
+		GE_BENCH_BATCH_WORDS) == 0) {
 		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
 			if (!hcge_blit(display_ge, &full, 0, 0))
 				break;
 			completed++;
 		}
-		if (completed && hcge_engine_sync(display_ge) < 0)
+		if (hcge_batch_end(&batch, 1) < 0)
 			completed = 0;
 	}
 	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-blit", elapsed, completed, FRAME_BYTES);
+	benchmark_report("ge-blit-b", elapsed, completed, FRAME_BYTES);
 
 	benchmark_show(frame, "BENCH 4/4: GE SCALE");
 	completed = 0;
 	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_STRETCHBLIT) == 0) {
+	if (benchmark_set_blit_state(HCGE_DFXL_STRETCHBLIT) == 0 &&
+	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
+		GE_BENCH_BATCH_WORDS) == 0) {
 		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
 			if (!hcge_stretch_blit(display_ge, &half, &full))
 				break;
 			completed++;
 		}
-		if (completed && hcge_engine_sync(display_ge) < 0)
+		if (hcge_batch_end(&batch, 1) < 0)
 			completed = 0;
 	}
 	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-scale", elapsed, completed, FRAME_BYTES);
+	benchmark_report("ge-scale-b", elapsed, completed, FRAME_BYTES);
 	benchmark_show(frame, "BENCH FINISHED - SAFE TO REBOOT");
 }
 

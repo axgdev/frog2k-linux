@@ -232,7 +232,10 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
-	test-ge-queue test-ge-filter-extract test-ge-symbol-coverage clean
+	test-ge-queue test-ge-batch test-ge-filter-extract \
+	test-ge-symbol-coverage clean
+
+GE_BATCH_TEST := $(BUILD_DIR)/hcge-batch-test
 
 GE_UTILS_TEST := $(BUILD_DIR)/hcge-utils-test
 GE_VENDOR_UTILS_TEST := $(BUILD_DIR)/hcge-vendor-utils-test
@@ -330,6 +333,16 @@ $(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
 test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
 	qemu-mipsel '$(GE_VENDOR_QUEUE_TEST)' > '$(BUILD_DIR)/hcge-queue.vendor'
 	qemu-mipsel '$(GE_QUEUE_TEST)' | cmp - '$(BUILD_DIR)/hcge-queue.vendor'
+
+$(GE_BATCH_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_batch_test.c \
+		ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
+	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -ffunction-sections \
+		-Wl,--gc-sections -Wl,--wrap=ioctl -o '$@' ge/hcge_linux.c \
+		ge/hcge_node.c ge/hcge_batch_test.c
+
+test-ge-batch: $(GE_BATCH_TEST)
+	qemu-mipsel '$(GE_BATCH_TEST)' | grep -q \
+		'^ret=0 calls=2 words=7 data=1,2,3,4,5,6,7$$'
 
 $(GE_FILTER_TEST): ge/hcge_filter.c ge/hcge_filter_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)

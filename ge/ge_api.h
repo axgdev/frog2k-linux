@@ -541,7 +541,16 @@ typedef struct hcge_context {
     uint32_t                   node_buf[2*4+168+2];
 
     uint32_t rotation_degree;
+    void *batch; /* optional caller-owned source batch */
 } hcge_context;
+
+typedef struct hcge_batch {
+	hcge_context *context;
+	uint32_t *buffer;
+	unsigned int capacity;
+	unsigned int words;
+	int error;
+} hcge_batch;
 
 int hcge_open(hcge_context **pctx);
 int hcge_open_context(hcge_context *ctx);
@@ -568,6 +577,9 @@ void hcge_set_state(hcge_context *ctx, hcge_state *state, HCGEAccelerationMask  
 
 void hcge_fill_rect_ext(hcge_context *ctx, HCGE_CoreSurfaceBuffer *dst, HCGE_CoreSurface *surface, HCGERectangle *rect, HCGEColor *color);
 int hcge_linux_submit(hcge_context *ctx, const uint32_t *node, unsigned int words);
+int hcge_batch_begin(hcge_context *ctx, hcge_batch *batch, uint32_t *buffer,
+		     unsigned int capacity_words);
+int hcge_batch_end(hcge_batch *batch, int wait);
 
 const char *hcge_pixelformat_name(HCGESurfacePixelFormat format);
 const char *hcge_blend_to_string(HCGESurfaceBlendFunction function);
