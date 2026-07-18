@@ -3410,6 +3410,21 @@ static void ge_copy_render_to_scanout(void)
 #define GE_BENCH_ITERATIONS 128u
 #define GE_BENCH_BATCH_WORDS 8192u
 static uint32_t ge_benchmark_batch_words[GE_BENCH_BATCH_WORDS];
+static uint16_t ge_benchmark_cached_a[WIDTH * HEIGHT]
+	__attribute__((aligned(64)));
+static uint16_t ge_benchmark_cached_b[WIDTH * HEIGHT]
+	__attribute__((aligned(64)));
+static volatile uint16_t ge_benchmark_sink;
+
+static uint32_t cached_pointer_phys(const void *pointer)
+{
+	uintptr_t address = (uintptr_t)pointer;
+
+	/* SF2000 NOMMU processes use the direct cached KSEG0 mapping. */
+	if (address < 0x80000000u || address >= 0xa0000000u)
+		return 0;
+	return (uint32_t)address & 0x1fffffffu;
+}
 
 static void benchmark_report(const char *test, uint64_t elapsed_us,
 		unsigned iterations, uint32_t bytes_per_iteration)
@@ -3491,7 +3506,21 @@ static void run_graphics_benchmark(unsigned *frame)
 	elapsed = monotonic_us() - begin;
 	benchmark_report("cpu-copy", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
 
-	benchmark_show(frame, "BENCH 2/4: GE FILL");
+	benchmark_show(frame, "BENCH 2/6: CACHED COPY");
+	for (i = 0; i < WIDTH * HEIGHT; ++i)
+		ge_benchmark_cached_a[i] = (uint16_t)(i * 40503u);
+	begin = monotonic_us();
+	for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+		memcpy(ge_benchmark_cached_b, ge_benchmark_cached_a, FRAME_BYTES);
+		if (!(i & 31u))
+			watchdog_pet();
+	}
+	ge_benchmark_sink = ge_benchmark_cached_b[GE_BENCH_ITERATIONS &
+		(WIDTH * HEIGHT - 1u)];
+	elapsed = monotonic_us() - begin;
+	benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
+
+	benchmark_show(frame, "BENCH 3/6: GE FILL");
 	completed = 0;
 	begin = monotonic_us();
 	if (benchmark_set_blit_state(HCGE_DFXL_FILLRECTANGLE) == 0 &&
@@ -3510,7 +3539,7 @@ static void run_graphics_benchmark(unsigned *frame)
 	elapsed = monotonic_us() - begin;
 	benchmark_report("ge-fill-b", elapsed, completed, FRAME_BYTES);
 
-	benchmark_show(frame, "BENCH 3/4: GE BLIT");
+	benchmark_show(frame, "BENCH 4/6: GE BLIT");
 	(void)cacheflush(src, FRAME_BYTES, BCACHE);
 	completed = 0;
 	begin = monotonic_us();
@@ -3528,7 +3557,28 @@ static void run_graphics_benchmark(unsigned *frame)
 	elapsed = monotonic_us() - begin;
 	benchmark_report("ge-blit-b", elapsed, completed, FRAME_BYTES);
 
-	benchmark_show(frame, "BENCH 4/4: GE SCALE");
+	benchmark_show(frame, "BENCH 5/6: CACHED GE BLIT");
+	completed = 0;
+	begin = monotonic_us();
+	if (cached_pointer_phys(ge_benchmark_cached_a) &&
+	    cacheflush(ge_benchmark_cached_a, FRAME_BYTES, BCACHE) == 0 &&
+	    benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
+	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
+		GE_BENCH_BATCH_WORDS) == 0) {
+		display_ge->state.src.phys =
+			cached_pointer_phys(ge_benchmark_cached_a);
+		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+			if (!hcge_blit(display_ge, &full, 0, 0))
+				break;
+			completed++;
+		}
+		if (hcge_batch_end(&batch, 1) < 0)
+			completed = 0;
+	}
+	elapsed = monotonic_us() - begin;
+	benchmark_report("ge-cache-b", elapsed, completed, FRAME_BYTES);
+
+	benchmark_show(frame, "BENCH 6/6: GE SCALE");
 	completed = 0;
 	begin = monotonic_us();
 	if (benchmark_set_blit_state(HCGE_DFXL_STRETCHBLIT) == 0 &&
