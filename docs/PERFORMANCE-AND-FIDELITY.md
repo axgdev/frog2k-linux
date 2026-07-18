@@ -28,16 +28,17 @@ The log90 physical baseline measured:
 - 256 KiB storage write and verification: 80.128 ms
 - sampled guest CPU busy time: 1.21%
 
-Before this checkpoint a settled QEMU Linux run used an entire host core:
-15.01 seconds user CPU in a 15.00 second window (100%), with roughly 62.6 MiB
-RSS.  Live GDB inspection showed `cpu_wait == NULL`: early hardware bring-up
-had disabled `check_wait()` and Linux spun in `arch_cpu_idle`.
+QEMU Linux uses an entire host core when the guest is idle: 15.01 seconds user
+CPU in a 15.00 second window (100%), with roughly 62.6 MiB RSS.  Live GDB
+inspection showed `cpu_wait == NULL`, because the conservative HC15xx CPU
+profile deliberately does not select the generic 4Kc WAIT path.
 
-Restoring the standard MIPS 4Kc interrupt-driven WAIT idle reduced the same
-benchmark to 2.55 seconds user plus 0.20 seconds system CPU in 15.02 seconds,
-or 18% host CPU.  This is an 83% reduction in host CPU percentage.  The kernel
-option `nowait` remains available as a recovery path if a physical CPU revision
-has a defective WAIT implementation.
+An experiment enabling generic 4Kc WAIT reduced QEMU to 18% host CPU, but the
+physical log91 run stopped immediately after `screen-after-gma-desc`: the CPU
+did not wake to continue panel setup, no display appeared, and loglinux stayed
+empty.  Therefore HC15xx WAIT is not a valid Linux idle mechanism.  It remains
+disabled on both targets; emulator acceleration must not change this physical
+CPU contract.
 
 QEMU originally reproduced 13 of the 15 retained display values (86.67%).  Its
 panel model shifted one serial bit on every GPIO read, while the SF2000 uses an
