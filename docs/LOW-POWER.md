@@ -1,16 +1,5 @@
 # SF2000 low-power states
 
-## Implemented modes
-
-`clocked-standby` preserves kernel time: the ST7789 sleeps, its backlight is
-off, persistent logging is quiesced, the CPU uses the verified 198 MHz
-selector, and keypad polling slows to 200 ms. Any key restores 918 MHz and the
-existing framebuffer. Real battery current still needs physical measurement.
-
-`shutdown` flushes logging, syncs and unmounts the SD card, blanks the display,
-and halts. The physical switch can then remove power for minimum consumption;
-datetime is not retained.
-
 ## Current hardware facts
 
 The SF2000 keypad is a serial scan chain. Linux drives its load and clock pins

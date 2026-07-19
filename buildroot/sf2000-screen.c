@@ -248,10 +248,8 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define PINMUX_PRGB_DE 6u
 
 #define ST7789_SLPOUT 0x11u
-#define ST7789_SLPIN 0x10u
 #define ST7789_NORON 0x13u
 #define ST7789_INVON 0x21u
-#define ST7789_DISPOFF 0x28u
 #define ST7789_DISPON 0x29u
 #define ST7789_CASET 0x2au
 #define ST7789_RASET 0x2bu
@@ -4667,29 +4665,6 @@ int main(int argc, char **argv, char **envp)
 	sleep_ms(500);
 
 	while (!stopping) {
-		static int standby;
-		int requested = access("/run/sf2000-power-state", F_OK) == 0;
-
-		if (requested && !standby) {
-			backlight_set(0);
-			panel_cmd(ST7789_DISPOFF);
-			panel_cmd(ST7789_SLPIN);
-			standby = 1;
-			log_line("sf2000-screen: clocked standby display asleep\n");
-		}
-		if (!requested && standby) {
-			panel_cmd(ST7789_SLPOUT);
-			sleep_ms(120);
-			panel_cmd(ST7789_DISPON);
-			present_frame();
-			backlight_set(1);
-			standby = 0;
-			log_line("sf2000-screen: clocked standby display restored\n");
-		}
-		if (standby) {
-			sleep_ms(100);
-			continue;
-		}
 		run_direct_diag(&frame);
 		run_rgb_diag(&frame);
 	}
