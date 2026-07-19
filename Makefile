@@ -1275,8 +1275,10 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch START+X' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running SELECT+Y exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: first frame 320x240 pitch=640 format=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 
 run-linux-reboot: qemu linux-rom-sd

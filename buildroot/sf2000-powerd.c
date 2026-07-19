@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #define FRONTEND_PATH "/usr/bin/sf2000-frontend"
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
+#define BATTERY_RATE_MIN_MS 300000u
+#define BATTERY_SAMPLE_MS 60000
 
 static volatile uint8_t *sysio;
 static unsigned standby_poll_ms = DEFAULT_STANDBY_POLL_MS;
@@ -113,13 +116,15 @@ static void battery_sample(const char *mode)
 		}
 	}
 	mv = raw * 20u;
-	if (last_battery_ms && now > last_battery_ms && last_battery_mv > mv)
+	if (last_battery_ms && now - last_battery_ms >= BATTERY_RATE_MIN_MS &&
+			last_battery_mv > mv)
 		rate = (unsigned)(((uint64_t)(last_battery_mv - mv) * 3600000u) /
 			(now - last_battery_ms));
 	snprintf(line, sizeof(line),
-		"sf2000-powerd: battery mode=%s profile=%s raw=%u query_raw=%u generic_raw=%u mv=%u discharge_mv_h=%u adc0=%08x adc1=%08x adc2=%08x adc3=%08x poll_ms=%u\n",
-		mode, profile, raw, query_raw, generic_raw, mv, rate, adc[0], adc[1],
-		adc[2], adc[3], standby_poll_ms);
+		"sf2000-powerd: battery mode=%s profile=%s raw=%u query_raw=%u generic_raw=%u mv=%u discharge_mv_h=%u interval_ms=%llu adc0=%08x adc1=%08x adc2=%08x adc3=%08x poll_ms=%u\n",
+		mode, profile, raw, query_raw, generic_raw, mv, rate,
+		(unsigned long long)(last_battery_ms ? now - last_battery_ms : 0),
+		adc[0], adc[1], adc[2], adc[3], standby_poll_ms);
 	log_line(line);
 	last_battery_mv = mv;
 	last_battery_ms = now;
@@ -244,6 +249,23 @@ static void run_frontend(void)
 	log_line("sf2000-powerd: frontend returned to console\n");
 }
 
+static void drain_input(int fd)
+{
+	struct input_event event;
+	int flags = fcntl(fd, F_GETFL);
+	unsigned count = 0;
+	char line[96];
+
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+		return;
+	while (read(fd, &event, sizeof(event)) == sizeof(event))
+		count++;
+	(void)fcntl(fd, F_SETFL, flags);
+	snprintf(line, sizeof(line),
+		"sf2000-powerd: discarded %u stale frontend input events\n", count);
+	log_line(line);
+}
+
 int main(void)
 {
 	int memfd, input = -1;
@@ -268,7 +290,21 @@ int main(void)
 			sleep_ms(100);
 	}
 	log_line("sf2000-powerd: ready START+Y enters display standby\n");
-	while (read(input, &event, sizeof(event)) == sizeof(event)) {
+	for (;;) {
+		struct pollfd wait = { .fd = input, .events = POLLIN };
+		int ready = poll(&wait, 1, BATTERY_SAMPLE_MS);
+
+		if (ready == 0) {
+			battery_sample(standby ? "standby" : "normal");
+			continue;
+		}
+		if (ready < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		if (read(input, &event, sizeof(event)) != sizeof(event))
+			continue;
 		if (event.type != EV_KEY)
 			continue;
 		if (event.code == BTN_START)
@@ -292,7 +328,9 @@ int main(void)
 		} else if (!standby && launch_released && start && x) {
 			launch_released = 0;
 			run_frontend();
+			drain_input(input);
 			start = y = x = 0;
+			released = launch_released = 1;
 		}
 	}
 	if (standby)
