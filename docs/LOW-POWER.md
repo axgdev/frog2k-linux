@@ -2,11 +2,10 @@
 
 ## Implemented modes
 
-`display-standby` preserves kernel time: the ST7789 sleeps, its backlight is
-off, persistent logging is quiesced, and keypad polling slows to 200 ms. Any
-key restores the existing framebuffer. The CPU remains at its boot clock: the
-log105/QEMU experiment proved that enabling MIPS cpufreq without an external
-timer blocks the GE open path, so frequency scaling is deliberately withheld.
+`clocked-standby` preserves kernel time: the ST7789 sleeps, its backlight is
+off, persistent logging is quiesced, the CPU uses the verified 198 MHz
+selector, and keypad polling slows to 200 ms. Any key restores 918 MHz and the
+existing framebuffer. Real battery current still needs physical measurement.
 
 `shutdown` flushes logging, syncs and unmounts the SD card, blanks the display,
 and halts. The physical switch can then remove power for minimum consumption;

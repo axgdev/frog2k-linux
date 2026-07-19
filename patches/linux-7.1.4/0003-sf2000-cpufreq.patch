@@ -1,0 +1,140 @@
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+index f0b2435ff..d44dc7561 100644
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -13,5 +13,6 @@
+ #include <linux/init.h>
+ #include <linux/cpu.h>
++#include <linux/cpufreq.h>
+ #include <linux/delay.h>
+ #include <linux/hex.h>
+ #include <linux/ioport.h>
+@@ -673,6 +674,107 @@ static void sf2000_write8(unsigned int off, unsigned char value)
+ 	*(volatile unsigned char *)(SF2000_SYSIO_KSEG1 + off) = value;
+ }
+ 
++#ifdef CONFIG_CPU_FREQ
++#define SF2000_SCPU_SELECT_OFF 0x074
++#define SF2000_SCPU_PLL_OFF 0x07c
++#define SF2000_SCPU_PLL_PARAM_OFF 0x380
++#define SF2000_SCPU_SELECT_SHIFT 8
++#define SF2000_SCPU_PLL_ENABLE (1u << 7)
++#define SF2000_SCPU_COMMIT (1u << 22)
++
++static struct cpufreq_frequency_table sf2000_frequency_table[] = {
++	{ .driver_data = 3, .frequency = 198000 },
++	{ .driver_data = 2, .frequency = 297000 },
++	{ .driver_data = 1, .frequency = 396000 },
++	{ .driver_data = 0, .frequency = 594000 },
++	{ .driver_data = 7, .frequency = 918000 },
++	{ .frequency = CPUFREQ_TABLE_END },
++};
++
++static unsigned int sf2000_cpufreq_get(unsigned int cpu)
++{
++	unsigned int selector = (sf2000_read32(SF2000_SCPU_SELECT_OFF) >>
++		SF2000_SCPU_SELECT_SHIFT) & 7;
++	unsigned int pll;
++
++	(void)cpu;
++	if (selector == 7 &&
++	    (sf2000_read32(SF2000_SCPU_PLL_OFF) & SF2000_SCPU_PLL_ENABLE)) {
++		pll = sf2000_read32(SF2000_SCPU_PLL_PARAM_OFF) >> 16;
++		pll &= 0x7fff;
++		return (((pll * 27u) + 9u) / 10u) * 1000u;
++	}
++
++	switch (selector) {
++	case 0: return 594000;
++	case 1: return 396000;
++	case 2: return 297000;
++	default: return 198000;
++	}
++}
++
++static int sf2000_cpufreq_target_index(struct cpufreq_policy *policy,
++	unsigned int index)
++{
++	unsigned int selector = policy->freq_table[index].driver_data;
++	unsigned int value;
++
++	if (selector == 7) {
++		/* The bootloader's proven 918 MHz PLL parameter (9180/27). */
++		value = sf2000_read32(SF2000_SCPU_PLL_PARAM_OFF);
++		value &= 0x0000ffffu;
++		value |= (0x8000u | 340u) << 16;
++		sf2000_write32(SF2000_SCPU_PLL_PARAM_OFF, value);
++		udelay(1000);
++	}
++
++	value = sf2000_read32(SF2000_SCPU_SELECT_OFF);
++	value &= ~(7u << SF2000_SCPU_SELECT_SHIFT);
++	value |= selector << SF2000_SCPU_SELECT_SHIFT;
++	sf2000_write32(SF2000_SCPU_SELECT_OFF, value);
++
++	value = sf2000_read32(SF2000_SCPU_PLL_OFF);
++	if (selector == 7)
++		value |= SF2000_SCPU_PLL_ENABLE;
++	else
++		value &= ~SF2000_SCPU_PLL_ENABLE;
++	sf2000_write32(SF2000_SCPU_PLL_OFF, value);
++
++	value = sf2000_read32(SF2000_SCPU_SELECT_OFF);
++	sf2000_write32(SF2000_SCPU_SELECT_OFF, value | SF2000_SCPU_COMMIT);
++	udelay(5000);
++	return 0;
++}
++
++static int sf2000_cpufreq_init(struct cpufreq_policy *policy)
++{
++	policy->cpuinfo.transition_latency = 5000000;
++	policy->cur = sf2000_cpufreq_get(policy->cpu);
++	cpufreq_generic_init(policy, sf2000_frequency_table,
++		policy->cpuinfo.transition_latency);
++	return 0;
++}
++
++static struct cpufreq_driver sf2000_cpufreq_driver = {
++	.flags = CPUFREQ_NEED_INITIAL_FREQ_CHECK,
++	.verify = cpufreq_generic_frequency_table_verify,
++	.target_index = sf2000_cpufreq_target_index,
++	.get = sf2000_cpufreq_get,
++	.init = sf2000_cpufreq_init,
++	.name = "sf2000",
++};
++
++static int __init sf2000_cpufreq_register(void)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000) ||
++	    (sf2000_read32(0) >> 16) != 0x1512)
++		return -ENODEV;
++	pr_info("sf2000-cpufreq: HC1512 selectors 198-918 MHz\n");
++	return cpufreq_register_driver(&sf2000_cpufreq_driver);
++}
++late_initcall(sf2000_cpufreq_register);
++#endif
++
+ static void sf2000_gma_write32(unsigned int off, unsigned int value)
+ {
+ 	*(volatile unsigned int *)(SF2000_GMA_KSEG1 + off) = value;
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index f4f8fd7ca..d0b4b978e 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -255,6 +255,7 @@ config MIPS_SF2000
+ 	select BOOT_RAW
+ 	select BUILTIN_DTB
+ 	select ARCH_HAS_BINFMT_FLAT
++	select CPU_SUPPORTS_CPUFREQ
+ 	select CEVT_R4K
+ 	select CSRC_R4K
+ 	select DMA_NONCOHERENT
+@@ -3193,7 +3194,7 @@ config MIPS_EXTERNAL_TIMER
+ 
+ menu "CPU Power Management"
+ 
+-if CPU_SUPPORTS_CPUFREQ && MIPS_EXTERNAL_TIMER
++if (CPU_SUPPORTS_CPUFREQ && MIPS_EXTERNAL_TIMER) || MIPS_SF2000
+ source "drivers/cpufreq/Kconfig"
+ endif # CPU_SUPPORTS_CPUFREQ && MIPS_EXTERNAL_TIMER
+ 

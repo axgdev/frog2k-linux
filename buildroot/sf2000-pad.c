@@ -112,6 +112,8 @@ enum button_index {
 #define SHUTDOWN_BUTTON_MASK (BUTTON_BIT(START) | BUTTON_BIT(B))
 #define POWER_STATE_PATH "/run/sf2000-power-state"
 #define POWER_REQUEST_PATH "/run/sf2000-power-request"
+#define CPU_GOVERNOR_PATH \
+	"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
 
 static volatile uint8_t *sysio_mapping;
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
@@ -146,12 +148,26 @@ static int write_text(const char *path, const char *value)
 	return written == size ? 0 : -1;
 }
 
+static void set_governor(const char *name)
+{
+	int fd = open(CPU_GOVERNOR_PATH, O_WRONLY | O_CLOEXEC);
+
+	if (fd < 0) {
+		log_line("sf2000-power: cpufreq governor unavailable\n");
+		return;
+	}
+	if (write(fd, name, strlen(name)) != (ssize_t)strlen(name))
+		log_line("sf2000-power: cpufreq governor write failed\n");
+	close(fd);
+}
+
 static void leave_clocked_standby(void)
 {
+	set_governor("performance");
 	unlink(POWER_STATE_PATH);
 	clocked_standby = 0;
 	standby_released = 0;
-	log_line("sf2000-power: normal display restored, datetime retained\n");
+	log_line("sf2000-power: normal 918 MHz, datetime retained\n");
 }
 
 static void maybe_power(uint32_t state)
@@ -161,9 +177,10 @@ static void maybe_power(uint32_t state)
 	int requested = access(POWER_STATE_PATH, F_OK) == 0;
 
 	if (!clocked_standby && requested) {
+		set_governor("powersave");
 		clocked_standby = 1;
 		standby_released = state == 0;
-		log_line("sf2000-power: external display standby request\n");
+		log_line("sf2000-power: external clocked standby request\n");
 	}
 	if (clocked_standby && !requested) {
 		leave_clocked_standby();
@@ -181,10 +198,11 @@ static void maybe_power(uint32_t state)
 		standby_armed = 1;
 	else if (standby_armed) {
 		standby_armed = 0;
-		if (write_text(POWER_STATE_PATH, "display-standby\n") == 0) {
+		if (write_text(POWER_STATE_PATH, "clocked-standby\n") == 0) {
+			set_governor("powersave");
 			clocked_standby = 1;
 			standby_released = 0;
-			log_line("sf2000-power: display standby; press any key to wake\n");
+			log_line("sf2000-power: clocked standby 198 MHz; press any key to wake\n");
 		}
 	}
 	if ((state & SHUTDOWN_BUTTON_MASK) != SHUTDOWN_BUTTON_MASK)

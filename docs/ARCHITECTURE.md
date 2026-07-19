@@ -21,7 +21,7 @@ and reusable source GE library. It owns display startup, power coordination,
 storage-safe shutdown, and translating the keypad scan chain into evdev.
 
 The provisional platform ABI uses `/run/sf2000-power-state` for
-`display-standby` and `/run/sf2000-power-request` for `shutdown`. START+Y enters
+`clocked-standby` and `/run/sf2000-power-request` for `shutdown`. START+Y enters
 standby, any key wakes, START+B shuts down, and START+SELECT restarts.
 
 ## Application OS
