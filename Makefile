@@ -1263,8 +1263,8 @@ smoke-linux-power: run-linux-power
 
 run-linux-frontend: qemu linux-buildroot-asd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-s 500\n'; sleep 4; \
-		printf 'sendkey backspace-a 500\n'; sleep 3; printf 'quit\n') | \
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 4; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-display none -serial none -monitor stdio \
@@ -1273,8 +1273,8 @@ run-linux-frontend: qemu linux-buildroot-asd
 
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-powerd: frontend launch START+X' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-frontend: frontend running SELECT+Y exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: frontend launch START+R' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame 320x240 pitch=640 format=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log

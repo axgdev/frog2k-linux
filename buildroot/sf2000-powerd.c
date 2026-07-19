@@ -215,7 +215,7 @@ static void run_frontend(void)
 	int status;
 	int visible = 0;
 
-	log_line("sf2000-powerd: frontend launch START+X\n");
+	log_line("sf2000-powerd: frontend launch START+R\n");
 	(void)unlink(FRONTEND_READY_MARKER);
 	backlight_set(0);
 	signal_named("sf2000-screen", SIGSTOP);
@@ -269,7 +269,7 @@ static void drain_input(int fd)
 int main(void)
 {
 	int memfd, input = -1;
-	int start = 0, y = 0, x = 0, standby = 0, released = 1;
+	int start = 0, y = 0, r = 0, standby = 0, released = 1;
 	int launch_released = 1;
 	struct input_event event;
 
@@ -289,7 +289,7 @@ int main(void)
 		if (input < 0)
 			sleep_ms(100);
 	}
-	log_line("sf2000-powerd: ready START+Y enters display standby\n");
+	log_line("sf2000-powerd: ready START+Y standby START+R FrogUI\n");
 	for (;;) {
 		struct pollfd wait = { .fd = input, .events = POLLIN };
 		int ready = poll(&wait, 1, BATTERY_SAMPLE_MS);
@@ -311,11 +311,11 @@ int main(void)
 			start = event.value != 0;
 		if (event.code == BTN_WEST)
 			y = event.value != 0;
-		if (event.code == BTN_NORTH)
-			x = event.value != 0;
+		if (event.code == BTN_TR)
+			r = event.value != 0;
 		if (!start && !y)
 			released = 1;
-		if (!start && !x)
+		if (!start && !r)
 			launch_released = 1;
 		if (!standby && released && start && y) {
 			released = 0;
@@ -325,11 +325,11 @@ int main(void)
 			released = 0;
 			standby = 0;
 			set_standby(0);
-		} else if (!standby && launch_released && start && x) {
+		} else if (!standby && launch_released && start && r) {
 			launch_released = 0;
 			run_frontend();
 			drain_input(input);
-			start = y = x = 0;
+			start = y = r = 0;
 			released = launch_released = 1;
 		}
 	}
