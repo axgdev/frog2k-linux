@@ -8,7 +8,7 @@ related HC15xx/SF2000-family handhelds. The first hardware target is SF2000.
 The goal is a small, fast iteration loop:
 
 1. build the SF2000 NOMMU kernel and soft-float Buildroot userspace;
-2. boot the same ASD in the local `external/sf2000_qemu` board model;
+2. boot the same ASD in the sibling `sf2000_qemu` board model;
 3. verify the physical display, SD, input, audio, and retained-log contracts.
 
 Generated files stay under `build/`. Large vendor trees are referenced through
@@ -19,7 +19,8 @@ behave differently.
 
 ## Local References
 
-- `external/sf2000_qemu`: local submodule used for emulator bring-up.
+- `../sf2000_qemu`: separate emulator checkout used for bring-up. Set
+  `QEMU_DIR` if it lives elsewhere.
 - `external/hclinux/2024.02.y.2`: symlink to the Hichip Linux/Buildroot SDK.
 - `/root/host-frogdev/universal/sf2000_hcrtos`: HC15xx HCRTOS/AVP board data.
 - `/root/host-frogdev/universal/unifrog`: working FreeRTOS-derived open stack.
@@ -45,6 +46,9 @@ support matrix, and application-porting constraints are documented in
 The log78/log89 stale-display-artifact incident and its reproducibility rules
 are documented in
 [`docs/DISPLAY-INCIDENT-LOG78-LOG89.md`](docs/DISPLAY-INCIDENT-LOG78-LOG89.md).
+The disposable build layout and the reason the uClinux Buildroot toolchain is
+still required are documented in
+[`docs/BUILD-LAYOUT.md`](docs/BUILD-LAYOUT.md).
 
 ## Commands
 
@@ -70,7 +74,7 @@ make status
 ```
 
 `smoke-linux-buildroot-storage` now delegates to the sibling
-`external/sf2000_qemu` raw-image DMA writeback smoke, so the default storage
+`sf2000_qemu` raw-image DMA writeback smoke, so the default storage
 regression path uses the stronger emulator-side oracle instead of the brittle
 direct guest probe.
 
@@ -201,11 +205,11 @@ GMA scanout of the framebuffer after its descriptor has been installed. They
 then inject a D-pad down event, capture a second frame, and require the pixels
 to change, covering the keypad-to-frontend redraw path as well.
 
-`smoke-qemu-board-contract` runs the local `external/sf2000_qemu`
+`smoke-qemu-board-contract` runs the sibling `sf2000_qemu`
 board-contract smoke, which keeps the board-profile, display, audio, USB, and
 storage snapshots queryable from the Linux workspace as well.
 
-`smoke-qemu-display` runs the local `external/sf2000_qemu` stock-display and
+`smoke-qemu-display` runs the sibling `sf2000_qemu` stock-display and
 GB300-display smokes, giving the Linux workspace a direct
 way to exercise the stronger display oracle without replaying the guest-side
 panel boot chain.

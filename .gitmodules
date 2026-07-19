@@ -1,3 +1,0 @@
-[submodule "external/sf2000_qemu"]
-	path = external/sf2000_qemu
-	url = ../sf2000_qemu

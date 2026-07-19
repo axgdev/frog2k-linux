@@ -1,8 +1,0 @@
---- a/drivers/irqchip/irq-hichip-sysint.c
-+++ b/drivers/irqchip/irq-hichip-sysint.c
-@@ -184,3 +184,5 @@
- 	kfree(intc);
- 	return ret;
- }
-+
-+IRQCHIP_DECLARE(hichip_sysint, "hichip,generic-intc", hichip_sysint_init);

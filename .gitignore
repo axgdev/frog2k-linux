@@ -2,6 +2,7 @@
 
 /build/
 /.cache/
+/.work/
 *.o
 *.a
 *.so

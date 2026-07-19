@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-QEMU_DIR := external/sf2000_qemu
+QEMU_DIR ?= $(abspath ../sf2000_qemu)
 QEMU_ORACLE_DIR ?= $(abspath $(QEMU_DIR))
 HCLINUX_DIR := external/hclinux/2024.02.y.2
 BUILD_DIR := build

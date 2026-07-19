@@ -277,7 +277,8 @@ orderly path cannot complete.
 
 ## QEMU as an oracle
 
-`external/sf2000_qemu` must remain able to boot:
+The separate `sf2000_qemu` checkout selected by `QEMU_DIR` must remain able to
+boot:
 
 - the closed original firmware;
 - the Linux ASD;
