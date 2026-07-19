@@ -1,0 +1,147 @@
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -8,6 +8,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/miscdevice.h>
++#include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+@@ -47,7 +48,10 @@
+ #define HCGE_SUBMIT		_IO(HCGE_IOCBASE, 0x08)
+ #define HCGE_CACHE_CLEAN	_IO(HCGE_IOCBASE, 0x09)
+ #define HCGE_CACHE_CLEAN_BATCH	_IO(HCGE_IOCBASE, 0x0a)
++#define HCGE_ALLOC_BUFFER	_IO(HCGE_IOCBASE, 0x0b)
++#define HCGE_FREE_BUFFER		_IO(HCGE_IOCBASE, 0x0c)
+ #define HCGE_CACHE_BATCH_MAX	8
++#define HCGE_BUFFER_SLOTS	2
+ 
+ struct hcge_cmdq_buf_info {
+ 	u32 addr;
+@@ -69,6 +73,18 @@
+ 	struct hcge_cache_range ranges[HCGE_CACHE_BATCH_MAX];
+ };
+ 
++struct hcge_buffer_info {
++	u32 bytes;
++	u32 address;
++	u32 phys;
++	u32 handle;
++};
++
++struct sf2000_ge_buffer {
++	void *address;
++	u32 bytes;
++};
++
+ struct hcge_cmdq_node_ctx {
+ 	u32 phy_addr_min;
+ 	u32 phy_addr_max;
+@@ -97,8 +113,22 @@
+ 	bool queue_started;
+ 	int irq;
+ 	bool irq_requested;
++	struct sf2000_ge_buffer buffers[HCGE_BUFFER_SLOTS];
+ };
+ 
++static void sf2000_ge_free_buffers(struct sf2000_ge *ge)
++{
++	u32 i;
++
++	for (i = 0; i < HCGE_BUFFER_SLOTS; ++i) {
++		if (!ge->buffers[i].address)
++			continue;
++		free_pages_exact(ge->buffers[i].address, ge->buffers[i].bytes);
++		ge->buffers[i].address = NULL;
++		ge->buffers[i].bytes = 0;
++	}
++}
++
+ static void sf2000_ge_clock_enable(struct sf2000_ge *ge)
+ {
+ 	u32 value = readl(ge->sys + SF2000_SYS_GATE1);
+@@ -163,6 +193,15 @@
+ 	return 0;
+ }
+ 
++static int sf2000_ge_release(struct inode *inode, struct file *file)
++{
++	struct sf2000_ge *ge = file->private_data;
++
++	(void)inode;
++	sf2000_ge_free_buffers(ge);
++	return 0;
++}
++
+ static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
+ 			    unsigned long arg)
+ {
+@@ -335,6 +374,51 @@
+ 				DMA_TO_DEVICE);
+ 		return 0;
+ 	}
++	case HCGE_ALLOC_BUFFER: {
++		struct hcge_buffer_info info;
++		void *address;
++		u32 slot;
++
++		if (copy_from_user(&info, (void __user *)arg, sizeof(info)))
++			return -EFAULT;
++		if (!info.bytes || info.bytes > SZ_1M)
++			return -EINVAL;
++		for (slot = 0; slot < HCGE_BUFFER_SLOTS; ++slot)
++			if (!ge->buffers[slot].address)
++				break;
++		if (slot == HCGE_BUFFER_SLOTS)
++			return -ENOSPC;
++		info.bytes = PAGE_ALIGN(info.bytes);
++		address = alloc_pages_exact(info.bytes, GFP_KERNEL | __GFP_ZERO);
++		if (!address)
++			return -ENOMEM;
++		ge->buffers[slot].address = address;
++		ge->buffers[slot].bytes = info.bytes;
++		info.address = (u32)(unsigned long)address;
++		info.phys = (u32)virt_to_phys(address);
++		info.handle = slot + 1;
++		if (copy_to_user((void __user *)arg, &info, sizeof(info))) {
++			free_pages_exact(address, info.bytes);
++			ge->buffers[slot].address = NULL;
++			ge->buffers[slot].bytes = 0;
++			return -EFAULT;
++		}
++		return 0;
++	}
++	case HCGE_FREE_BUFFER: {
++		u32 slot = (u32)arg;
++
++		if (!slot || slot > HCGE_BUFFER_SLOTS)
++			return -EINVAL;
++		--slot;
++		if (!ge->buffers[slot].address)
++			return -ENOENT;
++		free_pages_exact(ge->buffers[slot].address,
++				 ge->buffers[slot].bytes);
++		ge->buffers[slot].address = NULL;
++		ge->buffers[slot].bytes = 0;
++		return 0;
++	}
+ 	default:
+ 		return -ENOTTY;
+ 	}
+@@ -343,6 +427,7 @@
+ static const struct file_operations sf2000_ge_fops = {
+ 	.owner = THIS_MODULE,
+ 	.open = sf2000_ge_open,
++	.release = sf2000_ge_release,
+ 	.unlocked_ioctl = sf2000_ge_ioctl,
+ 	.llseek = noop_llseek,
+ };
+@@ -417,6 +502,7 @@
+ 
+ 	if (ge->irq_requested)
+ 		free_irq(ge->irq, ge);
++	sf2000_ge_free_buffers(ge);
+ 	misc_deregister(&ge->misc);
+ }
+ 

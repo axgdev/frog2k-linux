@@ -300,23 +300,21 @@ static unsigned console_line_start;
 static unsigned console_view_offset;
 static uint16_t *cached_render_frame;
 static uint16_t *cached_render_scratch;
+static uint32_t cached_render_frame_phys;
+static uint32_t cached_render_scratch_phys;
+static uint32_t cached_render_frame_handle;
+static uint32_t cached_render_scratch_handle;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
+static hcge_context *display_ge;
 
-static uint16_t *allocate_frame(void)
+static uint16_t *allocate_frame(uint32_t *physical, uint32_t *handle)
 {
-	uintptr_t address;
-	void *allocation = malloc(FRAME_BYTES + 63u);
-
-	if (!allocation)
-		return NULL;
-	address = ((uintptr_t)allocation + 63u) & ~(uintptr_t)63u;
-	return (uint16_t *)address;
+	return hcge_linux_alloc_buffer(display_ge, FRAME_BYTES, physical, handle);
 }
 
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
-static hcge_context *display_ge;
 static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
 static unsigned display_ge_attempts;
@@ -4374,9 +4372,11 @@ static void run_direct_console(unsigned *frame)
 
 handoff_complete:
 	if (!cached_render_frame)
-		cached_render_frame = allocate_frame();
+		cached_render_frame = allocate_frame(&cached_render_frame_phys,
+			&cached_render_frame_handle);
 	if (!cached_render_scratch)
-		cached_render_scratch = allocate_frame();
+		cached_render_scratch = allocate_frame(&cached_render_scratch_phys,
+			&cached_render_scratch_handle);
 	if (display_ge && rgb_active &&
 	    cached_render_frame &&
 	    hcge_linux_cached_phys(cached_render_frame)) {

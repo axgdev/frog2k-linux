@@ -885,6 +885,10 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable BLK_DEV \
 		--enable PARTITION_ADVANCED \
 		--enable MSDOS_PARTITION \
+		--disable EFI_PARTITION \
+		--disable MQ_IOSCHED_DEADLINE \
+		--disable MQ_IOSCHED_KYBER \
+		--disable IOSCHED_BFQ \
 		--disable CGROUP_SCHED \
 		--disable FAIR_GROUP_SCHED \
 		--disable CGROUP_PIDS \
@@ -899,30 +903,33 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable KEYS \
 		--enable INPUT \
 		--enable INPUT_EVDEV \
+		--disable INPUT_KEYBOARD \
+		--disable INPUT_MOUSE \
+		--disable SERIO \
 		--enable INPUT_MISC \
 		--enable INPUT_UINPUT \
 		--disable HID \
-		--enable USB_SUPPORT \
-		--enable USB_COMMON \
-		--enable USB \
-		--enable USB_ANNOUNCE_NEW_DEVICES \
-		--enable USB_DEFAULT_PERSIST \
+		--disable HID_SUPPORT \
+		--disable HIDRAW \
+		--disable USB_SUPPORT \
+		--disable USB_COMMON \
+		--disable USB \
+		--disable USB_ANNOUNCE_NEW_DEVICES \
+		--disable USB_DEFAULT_PERSIST \
 		--disable USB_XHCI_HCD \
 		--disable USB_EHCI_HCD \
 		--disable USB_EHCI_HCD_PLATFORM \
 		--disable USB_OHCI_HCD \
 		--disable USB_OHCI_HCD_PLATFORM \
 		--disable USB_DWC2 \
-		--enable USB_MUSB_HDRC \
-		--enable USB_MUSB_HOST \
-		--enable USB_MUSB_SF2000 \
-		--enable NOP_USB_XCEIV \
-		--enable MUSB_PIO_ONLY \
-		--enable USB_STORAGE \
-		--enable HID \
-		--enable HID_GENERIC \
-		--enable USB_HID \
-		--enable HIDRAW \
+		--disable USB_MUSB_HDRC \
+		--disable USB_MUSB_HOST \
+		--disable USB_MUSB_SF2000 \
+		--disable NOP_USB_XCEIV \
+		--disable MUSB_PIO_ONLY \
+		--disable USB_STORAGE \
+		--disable HID_GENERIC \
+		--disable USB_HID \
 		--disable VIRTIO \
 		--disable VIRTIO_MENU \
 		--disable VIRTIO_BLK \
@@ -936,6 +943,10 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable GPIO_SYSFS \
 		--disable GPIO_CDEV \
 		--disable POWER_SUPPLY \
+		--disable PM \
+		--disable SUSPEND \
+		--disable FW_LOADER \
+		--disable MAGIC_SYSRQ \
 		--enable MMC \
 		--enable MMC_BLOCK \
 		--set-val MMC_BLOCK_MINORS 8 \
@@ -960,8 +971,9 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable MTD_BLOCK \
 		--disable MTD_UBI \
 		--disable VT \
-		--enable SCSI \
-		--enable BLK_DEV_SD \
+		--disable SCSI \
+		--disable SCSI_MOD \
+		--disable BLK_DEV_SD \
 		--enable FAT_FS \
 		--enable MSDOS_FS \
 		--enable VFAT_FS \
@@ -1000,6 +1012,25 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable SND_USB_AUDIO \
 		--disable MEDIA_SUPPORT \
 		--disable DRM \
+		--disable GOLDFISH \
+		--disable GOLDFISH_PIPE \
+		--disable GOLDFISH_TTY \
+		--disable FB_GOLDFISH \
+		--disable KEYBOARD_GOLDFISH_EVENTS \
+		--disable MMC_LITEX \
+		--disable LITEX \
+		--disable LITEX_SOC_CONTROLLER \
+		--disable COMMON_CLK_PISTACHIO \
+		--disable CLKSRC_PISTACHIO \
+		--disable RESET_PISTACHIO \
+		--disable PHY_PISTACHIO_USB \
+		--disable REGULATOR \
+		--disable GENERIC_PHY \
+		--enable COMMON_CLK \
+		--disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
+		--disable DEBUG_INFO_DWARF4 \
+		--disable DEBUG_INFO_DWARF5 \
+		--enable DEBUG_INFO_NONE \
 		--enable FB \
 		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
 		--enable FB_SIMPLE
@@ -1237,9 +1268,7 @@ smoke-linux-buildroot-asd:
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-ge .*HC15xx GE queue at' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 1' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'musb-hdrc.*new USB bus registered, assigned bus number 2' '$(BUILD_DIR)'/logs/linux-asd.log
-	! grep -q 'IRQ mc not found' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'new USB bus registered' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 

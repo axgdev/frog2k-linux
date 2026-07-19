@@ -24,6 +24,8 @@
 #define HCGE_SUBMIT _IO(HCGE_IOCBASE, 0x08)
 #define HCGE_CACHE_CLEAN _IO(HCGE_IOCBASE, 0x09)
 #define HCGE_CACHE_CLEAN_BATCH _IO(HCGE_IOCBASE, 0x0a)
+#define HCGE_ALLOC_BUFFER _IO(HCGE_IOCBASE, 0x0b)
+#define HCGE_FREE_BUFFER _IO(HCGE_IOCBASE, 0x0c)
 #define HCGE_CACHE_BATCH_MAX 8u
 
 struct hcge_cmdq_buf_info {
@@ -44,6 +46,13 @@ struct hcge_linux_cache_range {
 struct hcge_linux_cache_batch {
 	uint32_t count;
 	struct hcge_linux_cache_range ranges[HCGE_CACHE_BATCH_MAX];
+};
+
+struct hcge_linux_buffer_info {
+	uint32_t bytes;
+	uint32_t address;
+	uint32_t phys;
+	uint32_t handle;
 };
 
 struct hcge_format {
@@ -520,6 +529,27 @@ uint32_t hcge_linux_cached_phys(const void *address)
 	if (value < 0x80000000u || value >= 0xa0000000u)
 		return 0;
 	return (uint32_t)value & 0x1fffffffu;
+}
+
+void *hcge_linux_alloc_buffer(hcge_context *ctx, unsigned int bytes,
+			      uint32_t *physical, uint32_t *handle)
+{
+	struct hcge_linux_buffer_info info = { .bytes = bytes };
+
+	if (hcge_context_fd(ctx) < 0 || !bytes || !physical || !handle)
+		return NULL;
+	if (ioctl(ctx->ge_fd, HCGE_ALLOC_BUFFER, &info) < 0)
+		return NULL;
+	*physical = info.phys;
+	*handle = info.handle;
+	return (void *)(uintptr_t)info.address;
+}
+
+int hcge_linux_free_buffer(hcge_context *ctx, uint32_t handle)
+{
+	if (hcge_context_fd(ctx) < 0 || !handle)
+		return -EINVAL;
+	return ioctl(ctx->ge_fd, HCGE_FREE_BUFFER, handle) < 0 ? -errno : 0;
 }
 
 int hcge_linux_cache_clean(hcge_context *ctx, void *address,

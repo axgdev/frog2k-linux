@@ -595,6 +595,9 @@ int hcge_linux_cache_clean_rects(hcge_context *ctx, void *address,
 				 unsigned int bytes_per_pixel,
 				 const HCGERectangle *rectangles,
 				 unsigned int count);
+void *hcge_linux_alloc_buffer(hcge_context *ctx, unsigned int bytes,
+			      uint32_t *physical, uint32_t *handle);
+int hcge_linux_free_buffer(hcge_context *ctx, uint32_t handle);
 
 const char *hcge_pixelformat_name(HCGESurfacePixelFormat format);
 const char *hcge_blend_to_string(HCGESurfaceBlendFunction function);
