@@ -56,6 +56,8 @@ BUILDROOT_PAD_ENTRY := buildroot/sf2000-pad-entry.S
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_POWERD_SRC := buildroot/sf2000-powerd.c
 BUILDROOT_POWERD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
+FRONTEND_PROJECT ?= ../sf2000_linux_frontend
+BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend-demo
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
 BUILDROOT_AUDIO_ENTRY := buildroot/sf2000-audio-entry.S
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
@@ -220,6 +222,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-power smoke-linux-power \
+	run-linux-frontend smoke-linux-frontend \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
 	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
@@ -636,6 +639,12 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefi
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
+$(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/tests -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	$(MAKE) -C '$(FRONTEND_PROJECT)' demo \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+	mkdir -p '$(dir $@)'
+	cp '$(FRONTEND_PROJECT)'/build/sf2000-frontend-demo '$@'
+
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(BUILDROOT_AUDIO_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
@@ -726,7 +735,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1239,7 +1248,7 @@ smoke-linux-input: run-linux-input
 run-linux-power: qemu linux-buildroot-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-a 500\n'; sleep 4; \
-		printf 'sendkey x 200\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey x 2500\n'; sleep 4; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-display none -serial none -monitor stdio \
@@ -1251,6 +1260,23 @@ smoke-linux-power: run-linux-power
 	grep -q 'sf2000-powerd: display standby entering' '$(BUILD_DIR)'/logs/linux-power.log
 	grep -q 'sf2000-powerd: display standby resumed' '$(BUILD_DIR)'/logs/linux-power.log
 	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-power.log
+
+run-linux-frontend: qemu linux-buildroot-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey ret-s 500\n'; sleep 4; \
+		printf 'sendkey backspace-a 500\n'; sleep 3; printf 'quit\n') | \
+			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-frontend.log \
+		> '$(BUILD_DIR)'/logs/linux-frontend.console 2>&1
+
+smoke-linux-frontend: run-linux-frontend
+	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: frontend launch START+X' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: demo running SELECT+Y exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'

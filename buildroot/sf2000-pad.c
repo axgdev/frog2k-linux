@@ -53,6 +53,8 @@
 #define KEY_SHIFTER_CLOCK_LOW_SPINS 180u
 #define KEY_SHIFTER_CLOCK_HIGH_SPINS 180u
 #define POLL_INTERVAL_MS 20u
+#define STANDBY_MARKER "/run/sf2000-display-standby"
+#define DEFAULT_STANDBY_POLL_MS 2000u
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
 #endif
@@ -450,6 +452,28 @@ static void handle_signal(int sig)
 	stopping = 1;
 }
 
+static unsigned poll_interval_ms(void)
+{
+	int fd = open(STANDBY_MARKER, O_RDONLY | O_CLOEXEC);
+	char value[16];
+	ssize_t got;
+
+	if (fd < 0)
+		return POLL_INTERVAL_MS;
+	got = read(fd, value, sizeof(value) - 1u);
+	close(fd);
+	if (got > 0) {
+		char *end;
+		unsigned long configured;
+
+		value[got] = 0;
+		configured = strtoul(value, &end, 10);
+		if (end != value && configured >= 100u && configured <= 10000u)
+			return (unsigned)configured;
+	}
+	return DEFAULT_STANDBY_POLL_MS;
+}
+
 int main(int argc, char **argv)
 {
 	enum pad_profile profile = parse_profile(getenv("SF2000_PAD_PROFILE"));
@@ -477,6 +501,7 @@ int main(int argc, char **argv)
 	log_line(line);
 
 	while (!stopping) {
+		unsigned poll_ms = poll_interval_ms();
 		uint32_t raw = scan_buttons(profile);
 
 		if (raw == raw_prev) {
@@ -487,14 +512,15 @@ int main(int argc, char **argv)
 			raw_count = 0;
 		}
 
-		if (raw_count >= 2 && raw != state) {
+		/* Normal scans debounce; a low-rate standby scan is already stable. */
+		if (raw_count >= (poll_ms == POLL_INTERVAL_MS ? 2u : 0u) && raw != state) {
 			emit_changes(uinput_fd, state, raw);
 			state = raw;
 			log_button_state(state);
 		}
 		maybe_reboot(state);
 
-		sleep_ms(POLL_INTERVAL_MS);
+		sleep_ms(poll_ms);
 	}
 
 	(void)ioctl(uinput_fd, UI_DEV_DESTROY);

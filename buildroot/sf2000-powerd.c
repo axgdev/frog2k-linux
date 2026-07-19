@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -20,8 +21,15 @@
 #define GPIO_R_DIR_OFF 0xf8u
 #define PIN_R05 5u
 #define STANDBY_MARKER "/run/sf2000-display-standby"
+#define POWER_CONFIG "/etc/sf2000-power.conf"
+#define ADC_BASE ((volatile uint32_t *)(uintptr_t)0xb8818400u)
+#define DEFAULT_STANDBY_POLL_MS 2000u
+#define FRONTEND_PATH "/usr/bin/sf2000-frontend-demo"
 
 static volatile uint8_t *sysio;
+static unsigned standby_poll_ms = DEFAULT_STANDBY_POLL_MS;
+static unsigned last_battery_mv;
+static uint64_t last_battery_ms;
 
 static void log_line(const char *text)
 {
@@ -38,6 +46,65 @@ static void sleep_ms(unsigned ms)
 	struct timespec delay = { ms / 1000u, (long)(ms % 1000u) * 1000000L };
 	while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
 		;
+}
+
+static uint64_t monotonic_ms(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+	return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static void load_config(void)
+{
+	char data[128];
+	int fd = open(POWER_CONFIG, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
+	char *value, *end;
+	unsigned long parsed;
+
+	if (fd < 0)
+		return;
+	got = read(fd, data, sizeof(data) - 1u);
+	close(fd);
+	if (got <= 0)
+		return;
+	data[got] = 0;
+	value = strstr(data, "standby_poll_ms=");
+	if (!value)
+		return;
+	value += strlen("standby_poll_ms=");
+	parsed = strtoul(value, &end, 10);
+	if (end != value && parsed >= 100u && parsed <= 10000u)
+		standby_poll_ms = (unsigned)parsed;
+}
+
+static void battery_sample(const char *mode)
+{
+	volatile uint32_t *adc = ADC_BASE;
+	uint64_t now = monotonic_ms();
+	unsigned raw, mv, rate = 0;
+	char line[192];
+
+	/* Proven HC15xx ADC setup from the vendor-compatible UniFrog source. */
+	adc[3] = (adc[3] & ~(3u << 16)) | (1u << 16);
+	adc[2] = (adc[2] & ~0xffffu) | 0x00ffu;
+	adc[1] = (adc[1] & ~0xff000f01u) | 0x01000f01u;
+	adc[1] = (adc[1] & ~0x0000ff01u) | 0x0000ff01u;
+	sleep_ms(1);
+	raw = (adc[0] >> 16) & 0xffu;
+	mv = raw * 20u;
+	if (last_battery_ms && now > last_battery_ms && last_battery_mv > mv)
+		rate = (unsigned)(((uint64_t)(last_battery_mv - mv) * 3600000u) /
+			(now - last_battery_ms));
+	snprintf(line, sizeof(line),
+		"sf2000-powerd: battery mode=%s raw=%u mv=%u discharge_mv_h=%u adc0=%08x poll_ms=%u\n",
+		mode, raw, mv, rate, adc[0], standby_poll_ms);
+	log_line(line);
+	last_battery_mv = mv;
+	last_battery_ms = now;
 }
 
 static void backlight_set(int on)
@@ -91,18 +158,25 @@ static void set_standby(int standby)
 {
 	if (standby) {
 		log_line("sf2000-powerd: display standby entering\n");
+		battery_sample("normal-exit");
 		{
 			int fd = open(STANDBY_MARKER,
 				O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 
-			if (fd >= 0)
+			if (fd >= 0) {
+				char value[16];
+				int length = snprintf(value, sizeof(value), "%u\n",
+					standby_poll_ms);
+				(void)write(fd, value, (size_t)length);
 				close(fd);
+			}
 		}
 		/* Give logd one polling interval to flush before quiescing GE. */
 		sleep_ms(100);
 		backlight_set(0);
 		signal_named("sf2000-screen", SIGSTOP);
 	} else {
+		battery_sample("standby-exit");
 		signal_named("sf2000-screen", SIGCONT);
 		backlight_set(1);
 		(void)unlink(STANDBY_MARKER);
@@ -110,10 +184,32 @@ static void set_standby(int standby)
 	}
 }
 
+static void run_frontend(void)
+{
+	static char *const argv[] = { (char *)FRONTEND_PATH,
+		(char *)"/mnt/sd/sf2000-demo.rom", NULL };
+	pid_t pid;
+	int status;
+
+	log_line("sf2000-powerd: frontend launch START+X\n");
+	signal_named("sf2000-screen", SIGSTOP);
+	pid = vfork();
+	if (pid == 0) {
+		execv(FRONTEND_PATH, argv);
+		_exit(127);
+	}
+	if (pid > 0)
+		while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+			;
+	signal_named("sf2000-screen", SIGCONT);
+	log_line("sf2000-powerd: frontend returned to console\n");
+}
+
 int main(void)
 {
 	int memfd, input = -1;
-	int start = 0, y = 0, standby = 0, released = 1;
+	int start = 0, y = 0, x = 0, standby = 0, released = 1;
+	int launch_released = 1;
 	struct input_event event;
 
 	memfd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
@@ -124,6 +220,8 @@ int main(void)
 	}
 	if (!sysio || sysio == MAP_FAILED)
 		sysio = (volatile uint8_t *)(uintptr_t)0xb8800000u;
+	load_config();
+	battery_sample("normal");
 
 	while (input < 0) {
 		input = open("/dev/input/event0", O_RDONLY | O_CLOEXEC);
@@ -138,8 +236,12 @@ int main(void)
 			start = event.value != 0;
 		if (event.code == BTN_WEST)
 			y = event.value != 0;
+		if (event.code == BTN_NORTH)
+			x = event.value != 0;
 		if (!start && !y)
 			released = 1;
+		if (!start && !x)
+			launch_released = 1;
 		if (!standby && released && start && y) {
 			released = 0;
 			standby = 1;
@@ -148,6 +250,10 @@ int main(void)
 			released = 0;
 			standby = 0;
 			set_standby(0);
+		} else if (!standby && launch_released && start && x) {
+			launch_released = 0;
+			run_frontend();
+			start = y = x = 0;
 		}
 	}
 	if (standby)
