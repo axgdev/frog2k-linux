@@ -1291,7 +1291,15 @@ static void copy_linux_elf(const u8 *blob)
 	u16 i;
 
 	ph = (const struct elf32_phdr *)(blob + eh->e_phoff);
-	for (i = 0; i < eh->e_phnum; i++) {
+	/*
+	 * The embedded ELF starts below its load addresses.  Treat all LOAD
+	 * records as one overlapping move: a low destination can cover source
+	 * bytes belonging to a later program header even when that individual
+	 * record is copied with memmove semantics.  Linux emits LOAD records in
+	 * ascending address order, so walking them backwards preserves every
+	 * unread source byte.
+	 */
+	for (i = eh->e_phnum; i-- != 0;) {
 		uintptr dst;
 
 		if (ph[i].p_type != PT_LOAD)

@@ -11,7 +11,7 @@ INIT_RAW := $(BUILD_DIR)/initramfs-init.raw
 GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
 BFLTPACK := $(BUILD_DIR)/bfltpack
-QEMU_BIN := $(QEMU_DIR)/.cache/qemu-10.2.2/build/qemu-system-mipsel
+QEMU_BIN := /tmp/sf2000-qemu/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
 QEMU_CPU ?= 4Km
 QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
@@ -73,7 +73,7 @@ BUILDROOT_PANEL_PROBE_TARGET ?= sf2000-screen
 BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
 BUILDROOT_PANEL_INIT_ENTRY := buildroot/sf2000-panel-init-entry.S
 BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-launcher.S
-BUILDROOT_PANEL_INIT_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
+BUILDROOT_PANEL_INIT_CFLAGS = $(BUILDROOT_HELPER_CFLAGS)
 BUILDROOT_PANEL_FASTPROBE_SRC := buildroot/sf2000-panel-fastprobe.c
 BUILDROOT_PANEL_FASTPROBE_ENTRY := buildroot/sf2000-panel-fastprobe-entry.S
 BUILDROOT_PANEL_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-fastprobe
@@ -87,7 +87,7 @@ BUILDROOT_STORAGE_PROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS) -Wl,--gc-sections
 BUILDROOT_STORAGE_FASTPROBE_SRC := buildroot/sf2000-storage-fastprobe.c
 BUILDROOT_STORAGE_FASTPROBE_ENTRY := buildroot/sf2000-storage-fastprobe-entry.S
 BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
-BUILDROOT_STORAGE_FASTPROBE_CFLAGS := $(BUILDROOT_HELPER_CFLAGS) -ffunction-sections -fdata-sections
+BUILDROOT_STORAGE_FASTPROBE_CFLAGS = $(BUILDROOT_HELPER_CFLAGS) -ffunction-sections -fdata-sections
 BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS) -Wl,--gc-sections
 BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
 BUILDROOT_RESET_FASTPROBE_ENTRY := buildroot/sf2000-reset-fastprobe-entry.S
@@ -112,17 +112,17 @@ BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
 BUILDROOT_FLTHDR := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-flthdr
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
 BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
-	-mno-abicalls -fno-pic -mno-gpopt
-BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static
+	-mno-abicalls -fno-pic -fno-pie -mno-gpopt
+BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static -no-pie
 BUILDROOT_HELPER_STACK_SIZE := 65536
 BUILDROOT_SCREEN_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
 BUILDROOT_SUPERVISOR_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
 BUILDROOT_SUPERVISOR_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
-BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -Wl,-elf2flt=-r \
+BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -no-pie -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
 BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
 INIT_CFLAGS ?=
-BUILDROOT_SCREEN_LDFLAGS := -nostartfiles -static -Wl,-elf2flt=-r \
+BUILDROOT_SCREEN_LDFLAGS := -nostartfiles -static -no-pie -Wl,-elf2flt=-r \
 	-Wl,--section-start=.text=0 -Wl,-e,_start
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
@@ -532,7 +532,7 @@ $(INIT_RAW): init/sf2000-flat-init.S Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
-		-fno-pic -mno-gpopt -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
+		-fno-pic -fno-pie -no-pie -mno-gpopt -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
 		-Wl,--gc-sections -Wl,-z,noexecstack -o '$@.elf' '$<'
 	'$(OBJCOPY_MIPS)' -O binary -j .text '$@.elf' '$@'
 
@@ -1001,6 +1001,10 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
 	$(MAKE) -j'$(JOBS)' -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
+	# The loader consumes only allocated ELF sections.  Keeping DWARF in the
+	# embedded image wastes most of RAM and makes relocation overlap needlessly
+	# large; the kernel build's vmlinux.unstripped remains available for symbols.
+	'$(STRIP_MIPS)' --strip-debug '$(LINUX_VMLINUX)'
 
 linux: $(LINUX_VMLINUX) $(SF2000_DTB)
 

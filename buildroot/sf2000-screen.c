@@ -303,12 +303,21 @@ static char console_lines[CONSOLE_SCROLLBACK_LINES][CONSOLE_LINE_LEN];
 static unsigned console_line_count;
 static unsigned console_line_start;
 static unsigned console_view_offset;
-static uint16_t cached_render_frame[WIDTH * HEIGHT]
-	__attribute__((aligned(64)));
-static uint16_t cached_render_scratch[WIDTH * HEIGHT]
-	__attribute__((aligned(64)));
+static uint16_t *cached_render_frame;
+static uint16_t *cached_render_scratch;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
+
+static uint16_t *allocate_frame(void)
+{
+	uintptr_t address;
+	void *allocation = malloc(FRAME_BYTES + 63u);
+
+	if (!allocation)
+		return NULL;
+	address = ((uintptr_t)allocation + 63u) & ~(uintptr_t)63u;
+	return (uint16_t *)address;
+}
 
 static uint16_t *framebuffer(void);
 static int ge_fill_render(uint16_t color);
@@ -3525,18 +3534,23 @@ static void run_graphics_benchmark(unsigned *frame)
 	benchmark_report("cpu-copy", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
 
 	benchmark_show(frame, "BENCH 2/6: CACHED COPY");
-	for (i = 0; i < WIDTH * HEIGHT; ++i)
-		cached_render_frame[i] = (uint16_t)(i * 40503u);
-	begin = monotonic_us();
-	for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-		memcpy(cached_render_scratch, cached_render_frame, FRAME_BYTES);
-		if (!(i & 31u))
-			watchdog_pet();
+	if (cached_render_frame && cached_render_scratch) {
+		for (i = 0; i < WIDTH * HEIGHT; ++i)
+			cached_render_frame[i] = (uint16_t)(i * 40503u);
+		begin = monotonic_us();
+		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
+			memcpy(cached_render_scratch, cached_render_frame, FRAME_BYTES);
+			if (!(i & 31u))
+				watchdog_pet();
+		}
+		ge_benchmark_sink = cached_render_scratch[GE_BENCH_ITERATIONS &
+			(WIDTH * HEIGHT - 1u)];
+		elapsed = monotonic_us() - begin;
+		benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS,
+			FRAME_BYTES);
+	} else {
+		benchmark_report("cpu-cached-unavailable", 0, 0, 0);
 	}
-	ge_benchmark_sink = cached_render_scratch[GE_BENCH_ITERATIONS &
-		(WIDTH * HEIGHT - 1u)];
-	elapsed = monotonic_us() - begin;
-	benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
 
 	benchmark_show(frame, "BENCH 3/6: GE FILL");
 	completed = 0;
@@ -4388,7 +4402,12 @@ static void run_direct_console(unsigned *frame)
 	log_gma_ready();
 
 handoff_complete:
+	if (!cached_render_frame)
+		cached_render_frame = allocate_frame();
+	if (!cached_render_scratch)
+		cached_render_scratch = allocate_frame();
 	if (display_ge && rgb_active &&
+	    cached_render_frame &&
 	    hcge_linux_cached_phys(cached_render_frame)) {
 		memcpy(cached_render_frame,
 		       (const void *)(gma_ram + GMA_RENDER_OFF), FRAME_BYTES);
