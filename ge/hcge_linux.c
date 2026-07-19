@@ -23,6 +23,8 @@
 #define HCGE_GET_GE_REGISTER _IO(HCGE_IOCBASE, 0x07)
 #define HCGE_SUBMIT _IO(HCGE_IOCBASE, 0x08)
 #define HCGE_CACHE_CLEAN _IO(HCGE_IOCBASE, 0x09)
+#define HCGE_CACHE_CLEAN_BATCH _IO(HCGE_IOCBASE, 0x0a)
+#define HCGE_CACHE_BATCH_MAX 8u
 
 struct hcge_cmdq_buf_info {
 	uint32_t addr;
@@ -37,6 +39,11 @@ struct hcge_linux_submit {
 struct hcge_linux_cache_range {
 	uint32_t address;
 	uint32_t length;
+};
+
+struct hcge_linux_cache_batch {
+	uint32_t count;
+	struct hcge_linux_cache_range ranges[HCGE_CACHE_BATCH_MAX];
 };
 
 struct hcge_format {
@@ -568,6 +575,47 @@ int hcge_linux_cache_clean_rect(hcge_context *ctx, void *address,
 		return -EINVAL;
 	return hcge_linux_cache_clean(ctx,
 		(uint8_t *)address + (unsigned int)offset, (unsigned int)bytes);
+}
+
+int hcge_linux_cache_clean_rects(hcge_context *ctx, void *address,
+				 unsigned int pitch,
+				 unsigned int bytes_per_pixel,
+				 const HCGERectangle *rectangles,
+				 unsigned int count)
+{
+	struct hcge_linux_cache_batch batch;
+	unsigned int i;
+
+	if (hcge_context_fd(ctx) < 0 || !address || !rectangles || !count ||
+	    count > HCGE_CACHE_BATCH_MAX || !pitch || !bytes_per_pixel)
+		return -EINVAL;
+	memset(&batch, 0, sizeof(batch));
+	batch.count = count;
+	for (i = 0; i < count; ++i) {
+		const HCGERectangle *rectangle = &rectangles[i];
+		uint64_t offset, bytes;
+		uint32_t physical;
+
+		if (rectangle->x < 0 || rectangle->y < 0 || rectangle->w <= 0 ||
+		    rectangle->h <= 0 ||
+		    ((uint64_t)(unsigned int)rectangle->x +
+		    (unsigned int)rectangle->w) * bytes_per_pixel > pitch)
+			return -EINVAL;
+		offset = (uint64_t)rectangle->y * pitch +
+			(uint64_t)rectangle->x * bytes_per_pixel;
+		bytes = (uint64_t)(rectangle->h - 1) * pitch +
+			(uint64_t)rectangle->w * bytes_per_pixel;
+		if (offset > UINT32_MAX || bytes > UINT32_MAX)
+			return -EINVAL;
+		physical = hcge_linux_cached_phys((uint8_t *)address +
+			(unsigned int)offset);
+		if (!physical)
+			return -EINVAL;
+		batch.ranges[i].address = physical;
+		batch.ranges[i].length = (uint32_t)bytes;
+	}
+	return ioctl(ctx->ge_fd, HCGE_CACHE_CLEAN_BATCH, &batch) < 0 ?
+		-errno : 0;
 }
 
 uint32_t hcge_cmdq_vaddr(hcge_context *ctx, uint32_t physical_address)

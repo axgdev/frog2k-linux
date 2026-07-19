@@ -3340,15 +3340,13 @@ static void ge_copy_render_to_scanout(void)
 	if (!render_phys)
 		goto cpu_fallback;
 	if (cached_render_enabled && cached_render_tick_dirty) {
-		HCGERectangle top = { 0, 0, WIDTH, 12 };
-		HCGERectangle anchor = { WIDTH - 2, HEIGHT - 2, 2, 2 };
-		int top_ret, anchor_ret;
+		HCGERectangle dirty[] = {
+			{ 0, 0, WIDTH, 12 },
+			{ WIDTH - 2, HEIGHT - 2, 2, 2 },
+		};
 
-		top_ret = hcge_linux_cache_clean_rect(display_ge, render_cpu,
-			PITCH, 2, &top);
-		anchor_ret = hcge_linux_cache_clean_rect(display_ge, render_cpu,
-			PITCH, 2, &anchor);
-		if (top_ret < 0 || anchor_ret < 0)
+		if (hcge_linux_cache_clean_rects(display_ge, render_cpu,
+			PITCH, 2, dirty, sizeof(dirty) / sizeof(dirty[0])) < 0)
 			(void)cacheflush(render_cpu, FRAME_BYTES, BCACHE);
 	} else {
 		if (hcge_linux_cache_clean(display_ge, render_cpu,
@@ -4444,7 +4442,8 @@ handoff_complete:
 		}
 		if (benchmark_requested) {
 			run_graphics_benchmark(frame);
-			changed = 1;
+			/* benchmark_show() already presented the final frame. */
+			changed = 0;
 			idle = 0;
 		}
 
