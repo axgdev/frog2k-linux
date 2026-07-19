@@ -943,17 +943,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable GPIO_SYSFS \
 		--disable GPIO_CDEV \
 		--disable POWER_SUPPLY \
-		--enable CPU_FREQ \
-		--enable CPU_FREQ_GOV_ATTR_SET \
-		--enable CPU_FREQ_GOV_COMMON \
-		--enable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
-		--enable CPU_FREQ_GOV_PERFORMANCE \
-		--enable CPU_FREQ_GOV_POWERSAVE \
-		--disable CPU_FREQ_STAT \
-		--enable PM \
-		--disable PM_DEBUG \
-		--disable PM_ADVANCED_DEBUG \
-		--disable PM_SLEEP \
+		--disable PM \
 		--disable SUSPEND \
 		--disable FW_LOADER \
 		--disable MAGIC_SYSRQ \
