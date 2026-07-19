@@ -1581,7 +1581,7 @@ run-linux-buildroot-fidelity:
 
 smoke-linux-physical-contract: linux-buildroot-asd
 	grep -A1 'if (!IS_ENABLED(CONFIG_MIPS_SF2000))' \
-		'/tmp/sf2000_linux-kernel-$(LINUX_VERSION)/arch/mips/kernel/traps.c' | \
+		'$(LINUX_SRC)/arch/mips/kernel/traps.c' | \
 		grep -q 'check_wait()'
 
 metrics-qemu-timing:

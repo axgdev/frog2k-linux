@@ -238,3 +238,6 @@ continue to be recorded in the retained RAM journal and UART without delaying
 boot or exposing stale panel memory. Warm recovery writes the newest 256
 retained entries to `log.txt`; older entries are counted in a
 `skipped-oldest` line instead of delaying boot with hundreds of sector writes.
+
+See `docs/LOW-POWER.md` for the measured HC15xx idle limitation, wake-source
+requirements, and the staged plan for safe clocked standby and suspend-to-RAM.

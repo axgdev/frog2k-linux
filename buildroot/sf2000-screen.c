@@ -299,11 +299,8 @@ static unsigned console_line_count;
 static unsigned console_line_start;
 static unsigned console_view_offset;
 static uint16_t *cached_render_frame;
-static uint16_t *cached_render_scratch;
 static uint32_t cached_render_frame_phys;
-static uint32_t cached_render_scratch_phys;
 static uint32_t cached_render_frame_handle;
-static uint32_t cached_render_scratch_handle;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
 static hcge_context *display_ge;
@@ -3502,20 +3499,25 @@ static void run_graphics_benchmark(unsigned *frame)
 	benchmark_report("cpu-copy", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
 
 	benchmark_show(frame, "BENCH 2/6: CACHED COPY");
-	if (cached_render_frame && cached_render_scratch) {
+	if (cached_render_frame) {
+		const size_t half_pixels = WIDTH * HEIGHT / 2u;
+		const size_t half_bytes = FRAME_BYTES / 2u;
+		uint16_t *cached_src = cached_render_frame;
+		uint16_t *cached_dst = cached_render_frame + half_pixels;
+
 		for (i = 0; i < WIDTH * HEIGHT; ++i)
 			cached_render_frame[i] = (uint16_t)(i * 40503u);
 		begin = monotonic_us();
 		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			memcpy(cached_render_scratch, cached_render_frame, FRAME_BYTES);
+			memcpy(cached_dst, cached_src, half_bytes);
 			if (!(i & 31u))
 				watchdog_pet();
 		}
-		ge_benchmark_sink = cached_render_scratch[GE_BENCH_ITERATIONS &
-			(WIDTH * HEIGHT - 1u)];
+		ge_benchmark_sink = cached_dst[GE_BENCH_ITERATIONS &
+			(half_pixels - 1u)];
 		elapsed = monotonic_us() - begin;
 		benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS,
-			FRAME_BYTES);
+			half_bytes);
 	} else {
 		console_add_line("BENCH cpu-cached: unsupported on NOMMU bFLT");
 		log_line("sf2000-bench: test=cpu-cached status=unsupported reason=no-safe-cached-allocation\n");
@@ -4374,9 +4376,6 @@ handoff_complete:
 	if (!cached_render_frame)
 		cached_render_frame = allocate_frame(&cached_render_frame_phys,
 			&cached_render_frame_handle);
-	if (!cached_render_scratch)
-		cached_render_scratch = allocate_frame(&cached_render_scratch_phys,
-			&cached_render_scratch_handle);
 	if (display_ge && rgb_active &&
 	    cached_render_frame &&
 	    hcge_linux_cached_phys(cached_render_frame)) {
