@@ -14,6 +14,8 @@
 
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
+#define POWER_STATE_PATH "/run/sf2000-power-state"
+#define POWER_REQUEST_PATH "/run/sf2000-power-request"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define TEST_TMP_PATH "/mnt/sd/.sf2000-storage-test.tmp"
 #define TEST_PATH "/mnt/sd/sf2000-storage-test.bin"
@@ -31,7 +33,8 @@ static long ticks_per_second = 100;
 
 static int stop_requested(void)
 {
-	return access(REBOOT_MARKER, F_OK) == 0;
+	return access(REBOOT_MARKER, F_OK) == 0 ||
+		access(POWER_REQUEST_PATH, F_OK) == 0;
 }
 
 static uint64_t monotonic_us(void)
@@ -414,6 +417,12 @@ int main(void)
 		ssize_t got;
 		uint64_t now;
 
+		if (access(POWER_STATE_PATH, F_OK) == 0) {
+			(void)flush_log();
+			sleep_ms(500);
+			last_flush = last_probe = monotonic_us();
+			continue;
+		}
 		if (kmsg_fd >= 0) {
 			while ((got = read(kmsg_fd, kmsg, sizeof(kmsg))) > 0)
 				append_record("kmsg", kmsg, (size_t)got);

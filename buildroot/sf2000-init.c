@@ -32,6 +32,7 @@ typedef unsigned int size_t;
 #define LINUX_REBOOT_MAGIC1 0xfee1deadUL
 #define LINUX_REBOOT_MAGIC2 672274793UL
 #define LINUX_REBOOT_CMD_RESTART 0x01234567UL
+#define LINUX_REBOOT_CMD_HALT 0xcdef0123UL
 #define CLONE_VM 0x00000100UL
 #define SERVICE_STACK_BYTES 4096u
 #define SERVICE_STACK_WORDS (SERVICE_STACK_BYTES / sizeof(unsigned long))
@@ -706,6 +707,24 @@ static void graceful_restart(long logd_pid)
 	log_message("sf2000_buildroot: reboot syscall returned\n");
 }
 
+static void graceful_shutdown(long logd_pid)
+{
+	long ret;
+
+	log_message("sf2000_buildroot: clean shutdown requested\n");
+	progress_mark("init-shutdown-request", 0x3eu, INIT_TAG);
+	(void)stop_logger(logd_pid);
+	(void)syscall0(SYS_sync);
+	ret = syscall2(SYS_umount2, (long)"/mnt/sd", 0);
+	progress_mark("init-shutdown-umount", 0x3eu, (unsigned int)ret);
+	(void)syscall0(SYS_sync);
+	log_message("sf2000_buildroot: storage safe; turn off the power switch\n");
+	(void)syscall4(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+		LINUX_REBOOT_CMD_HALT, 0);
+	for (;;)
+		(void)syscall0(SYS_pause);
+}
+
 int main(void)
 {
 	unsigned int storage_started = 0;
@@ -813,6 +832,8 @@ int main(void)
 		}
 		if (path_exists("/run/sf2000-reboot-request"))
 			graceful_restart(logd_pid);
+		if (path_exists("/run/sf2000-power-request"))
+			graceful_shutdown(logd_pid);
 		if (!panel_probe && fb_test_enabled && !fb_test_started &&
 		    screen_pid > 0 && path_exists("/run/sf2000-screen-ready")) {
 			log_message("sf2000_buildroot: stopping screen for framebuffer test\n");

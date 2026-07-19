@@ -108,10 +108,18 @@ enum button_index {
 };
 
 #define REBOOT_BUTTON_MASK (BUTTON_BIT(SELECT) | BUTTON_BIT(START))
+#define STANDBY_BUTTON_MASK (BUTTON_BIT(START) | BUTTON_BIT(Y))
+#define SHUTDOWN_BUTTON_MASK (BUTTON_BIT(START) | BUTTON_BIT(B))
+#define POWER_STATE_PATH "/run/sf2000-power-state"
+#define POWER_REQUEST_PATH "/run/sf2000-power-request"
+#define CPU_GOVERNOR_PATH \
+	"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
 
 static volatile uint8_t *sysio_mapping;
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
 static volatile sig_atomic_t stopping;
+static int clocked_standby;
+static int standby_released;
 
 static void log_line(const char *line)
 {
@@ -125,6 +133,86 @@ static void log_line(const char *line)
 	}
 
 	(void)write(STDERR_FILENO, line, strlen(line));
+}
+
+static int write_text(const char *path, const char *value)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	ssize_t size = (ssize_t)strlen(value);
+	ssize_t written;
+
+	if (fd < 0)
+		return -1;
+	written = write(fd, value, (size_t)size);
+	close(fd);
+	return written == size ? 0 : -1;
+}
+
+static void set_governor(const char *name)
+{
+	int fd = open(CPU_GOVERNOR_PATH, O_WRONLY | O_CLOEXEC);
+
+	if (fd < 0) {
+		log_line("sf2000-power: cpufreq governor unavailable\n");
+		return;
+	}
+	if (write(fd, name, strlen(name)) != (ssize_t)strlen(name))
+		log_line("sf2000-power: cpufreq governor write failed\n");
+	close(fd);
+}
+
+static void leave_clocked_standby(void)
+{
+	set_governor("performance");
+	unlink(POWER_STATE_PATH);
+	clocked_standby = 0;
+	standby_released = 0;
+	log_line("sf2000-power: normal 918 MHz, datetime retained\n");
+}
+
+static void maybe_power(uint32_t state)
+{
+	static int standby_armed = 1;
+	static int shutdown_armed = 1;
+	int requested = access(POWER_STATE_PATH, F_OK) == 0;
+
+	if (!clocked_standby && requested) {
+		set_governor("powersave");
+		clocked_standby = 1;
+		standby_released = state == 0;
+		log_line("sf2000-power: external clocked standby request\n");
+	}
+	if (clocked_standby && !requested) {
+		leave_clocked_standby();
+		return;
+	}
+
+	if (clocked_standby) {
+		if (!state)
+			standby_released = 1;
+		else if (standby_released)
+			leave_clocked_standby();
+		return;
+	}
+	if ((state & STANDBY_BUTTON_MASK) != STANDBY_BUTTON_MASK)
+		standby_armed = 1;
+	else if (standby_armed) {
+		standby_armed = 0;
+		if (write_text(POWER_STATE_PATH, "clocked-standby\n") == 0) {
+			set_governor("powersave");
+			clocked_standby = 1;
+			standby_released = 0;
+			log_line("sf2000-power: clocked standby 198 MHz; press any key to wake\n");
+		}
+	}
+	if ((state & SHUTDOWN_BUTTON_MASK) != SHUTDOWN_BUTTON_MASK)
+		shutdown_armed = 1;
+	else if (shutdown_armed) {
+		shutdown_armed = 0;
+		(void)write_text(POWER_STATE_PATH, "shutdown\n");
+		(void)write_text(POWER_REQUEST_PATH, "shutdown\n");
+		log_line("sf2000-power: clean shutdown requested\n");
+	}
 }
 
 static void delay_spins(unsigned count)
@@ -493,8 +581,9 @@ int main(int argc, char **argv)
 			log_button_state(state);
 		}
 		maybe_reboot(state);
+		maybe_power(state);
 
-		sleep_ms(POLL_INTERVAL_MS);
+		sleep_ms(clocked_standby ? 200u : POLL_INTERVAL_MS);
 	}
 
 	(void)ioctl(uinput_fd, UI_DEV_DESTROY);
