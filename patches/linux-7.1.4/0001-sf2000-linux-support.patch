@@ -1164,7 +1164,7 @@ index 1ae6d0c0e..f0b2435ff 100644
 +#define SF2000_WDT_BOOT_COUNT (0u - SF2000_WDT_BOOT_TICKS)
 +#define SF2000_WDT_BOOT_CONF 0x26u
 +#define SF2000_WDT_RESTART_COUNT 0xfffff000u
-+#define SF2000_WDT_RESTART_CONF 0x67u
++#define SF2000_WDT_RESTART_CONF SF2000_WDT_BOOT_CONF
 +
 +static unsigned int sf2000_screen_seq;
 +static unsigned int sf2000_live_write_count;

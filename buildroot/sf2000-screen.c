@@ -13,7 +13,6 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/mman.h>
-#include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <time.h>
@@ -284,10 +283,6 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_BTN_RIGHT 0x08u
 #define CONSOLE_BTN_SELECT 0x10u
 #define CONSOLE_BTN_BENCH 0x20u
-
-#ifndef LINUX_REBOOT_CMD_RESTART
-#define LINUX_REBOOT_CMD_RESTART 0x01234567
-#endif
 
 static volatile uint8_t *gma_ram_mapping;
 static volatile uint8_t *gma_mapping;
@@ -763,22 +758,6 @@ static void watchdog_pet(void)
 
 	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
 		WDT_PET_COUNT;
-}
-
-static void watchdog_restart_now(void)
-{
-	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
-
-	progress_mark("diag-watchdog-now", 0x30u, SCREEN_TAG);
-	if (sysio)
-		backlight_set(1);
-	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
-	*(volatile uint32_t *)(wdt + WDT_REG_OFF + WDT_COUNT_OFF) =
-		WDT_RESTART_COUNT;
-	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) =
-		WDT_RESTART_CONF;
-	for (;;)
-		__asm__ volatile ("" ::: "memory");
 }
 
 static void progress_copy_name(volatile char *dst, const char *src)
@@ -2983,16 +2962,7 @@ static int console_handle_buttons(uint32_t buttons)
 	int changed = 0;
 	int page = (int)CONSOLE_ROWS - 3;
 
-	if (buttons & CONSOLE_BTN_SELECT) {
-		console_add_line("SELECT pressed: restarting");
-		log_line("sf2000-screen: SELECT pressed, restarting\n");
-		runtime_watchdog_arm();
-		progress_mark_reset_snapshot_fast();
-		console_add_line("direct watchdog reset");
-		log_line("sf2000-screen: direct watchdog reset\n");
-		watchdog_restart_now();
-		reboot(LINUX_REBOOT_CMD_RESTART);
-	}
+	/* Init owns the SELECT+START reboot chord and performs sync/unmount first. */
 	if (buttons & CONSOLE_BTN_BENCH) {
 		benchmark_requested = 1;
 		changed = 1;
@@ -3549,7 +3519,8 @@ static void run_graphics_benchmark(unsigned *frame)
 		benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS,
 			FRAME_BYTES);
 	} else {
-		benchmark_report("cpu-cached-unavailable", 0, 0, 0);
+		console_add_line("BENCH cpu-cached: unsupported on NOMMU bFLT");
+		log_line("sf2000-bench: test=cpu-cached status=unsupported reason=no-safe-cached-allocation\n");
 	}
 
 	benchmark_show(frame, "BENCH 3/6: GE FILL");

@@ -814,14 +814,21 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable MIPS_CMDLINE_BUILTIN_EXTEND \
 		--disable MODULES \
 		--disable DEBUG_INFO \
+		--enable DEBUG_INFO_NONE \
 		--disable DEBUG_INFO_REDUCED \
+		--disable DEBUG_KERNEL \
+		--disable DEBUG_MISC \
+		--disable DEBUG_FS \
+		--disable BLK_DEBUG_FS \
 		--disable IKCONFIG \
 		--disable IKCONFIG_PROC \
 		--disable KALLSYMS \
 		--disable KALLSYMS_ALL \
 		--disable KALLSYMS_BASE_RELATIVE \
-		--disable INITRAMFS_COMPRESSION_GZIP \
-		--enable INITRAMFS_COMPRESSION_NONE \
+		--enable INITRAMFS_COMPRESSION_GZIP \
+		--disable INITRAMFS_COMPRESSION_NONE \
+		--disable INITRAMFS_COMPRESSION_LZ4 \
+		--enable RD_GZIP \
 		--enable DEVTMPFS \
 		--enable DEVTMPFS_MOUNT \
 		--enable PROC_FS \
@@ -900,10 +907,12 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable USB \
 		--enable USB_ANNOUNCE_NEW_DEVICES \
 		--enable USB_DEFAULT_PERSIST \
-		--enable USB_EHCI_HCD \
-		--enable USB_EHCI_HCD_PLATFORM \
-		--enable USB_OHCI_HCD \
-		--enable USB_OHCI_HCD_PLATFORM \
+		--disable USB_XHCI_HCD \
+		--disable USB_EHCI_HCD \
+		--disable USB_EHCI_HCD_PLATFORM \
+		--disable USB_OHCI_HCD \
+		--disable USB_OHCI_HCD_PLATFORM \
+		--disable USB_DWC2 \
 		--enable USB_MUSB_HDRC \
 		--enable USB_MUSB_HOST \
 		--enable USB_MUSB_SF2000 \
