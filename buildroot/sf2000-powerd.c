@@ -86,8 +86,9 @@ static void battery_sample(const char *mode)
 {
 	volatile uint32_t *adc = ADC_BASE;
 	uint64_t now = monotonic_ms();
-	unsigned raw, mv, rate = 0;
-	char line[192];
+	unsigned raw, query_raw, generic_raw = 0, mv, rate = 0;
+	const char *profile = "query";
+	char line[256];
 
 	/* Proven HC15xx ADC setup from the vendor-compatible UniFrog source. */
 	adc[3] = (adc[3] & ~(3u << 16)) | (1u << 16);
@@ -95,14 +96,30 @@ static void battery_sample(const char *mode)
 	adc[1] = (adc[1] & ~0xff000f01u) | 0x01000f01u;
 	adc[1] = (adc[1] & ~0x0000ff01u) | 0x0000ff01u;
 	sleep_ms(1);
-	raw = (adc[0] >> 16) & 0xffu;
+	query_raw = (adc[0] >> 16) & 0xffu;
+	raw = query_raw;
+	if (!raw) {
+		/* The general HC1512 driver uses clock 0 and a longer average. */
+		adc[3] &= ~((3u << 16) | 1u);
+		adc[2] = (adc[2] & ~0xffffu) | 0x0ff8u;
+		adc[1] = (adc[1] & ~0xff00ff01u) | 0x0f00ff01u;
+		sleep_ms(20);
+		generic_raw = (adc[0] >> 16) & 0xffu;
+		if (generic_raw) {
+			raw = generic_raw;
+			profile = "generic";
+		} else {
+			profile = "unavailable";
+		}
+	}
 	mv = raw * 20u;
 	if (last_battery_ms && now > last_battery_ms && last_battery_mv > mv)
 		rate = (unsigned)(((uint64_t)(last_battery_mv - mv) * 3600000u) /
 			(now - last_battery_ms));
 	snprintf(line, sizeof(line),
-		"sf2000-powerd: battery mode=%s raw=%u mv=%u discharge_mv_h=%u adc0=%08x poll_ms=%u\n",
-		mode, raw, mv, rate, adc[0], standby_poll_ms);
+		"sf2000-powerd: battery mode=%s profile=%s raw=%u query_raw=%u generic_raw=%u mv=%u discharge_mv_h=%u adc0=%08x adc1=%08x adc2=%08x adc3=%08x poll_ms=%u\n",
+		mode, profile, raw, query_raw, generic_raw, mv, rate, adc[0], adc[1],
+		adc[2], adc[3], standby_poll_ms);
 	log_line(line);
 	last_battery_mv = mv;
 	last_battery_ms = now;
