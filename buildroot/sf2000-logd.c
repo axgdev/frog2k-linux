@@ -14,6 +14,7 @@
 
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
+#define STANDBY_MARKER "/run/sf2000-display-standby"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define TEST_TMP_PATH "/mnt/sd/.sf2000-storage-test.tmp"
 #define TEST_PATH "/mnt/sd/sf2000-storage-test.bin"
@@ -414,6 +415,13 @@ int main(void)
 		ssize_t got;
 		uint64_t now;
 
+		if (access(STANDBY_MARKER, F_OK) == 0) {
+			/* Finish outstanding FAT writes, then avoid periodic SD traffic. */
+			(void)flush_log();
+			sleep_ms(500);
+			last_flush = last_probe = monotonic_us();
+			continue;
+		}
 		if (kmsg_fd >= 0) {
 			while ((got = read(kmsg_fd, kmsg, sizeof(kmsg))) > 0)
 				append_record("kmsg", kmsg, (size_t)got);
