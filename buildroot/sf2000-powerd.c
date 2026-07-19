@@ -24,7 +24,8 @@
 #define POWER_CONFIG "/etc/sf2000-power.conf"
 #define ADC_BASE ((volatile uint32_t *)(uintptr_t)0xb8818400u)
 #define DEFAULT_STANDBY_POLL_MS 2000u
-#define FRONTEND_PATH "/usr/bin/sf2000-frontend-demo"
+#define FRONTEND_PATH "/usr/bin/sf2000-frontend"
+#define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
 
 static volatile uint8_t *sysio;
 static unsigned standby_poll_ms = DEFAULT_STANDBY_POLL_MS;
@@ -190,18 +191,39 @@ static void run_frontend(void)
 		(char *)"/mnt/sd/sf2000-demo.rom", NULL };
 	pid_t pid;
 	int status;
+	int visible = 0;
 
 	log_line("sf2000-powerd: frontend launch START+X\n");
+	(void)unlink(FRONTEND_READY_MARKER);
+	backlight_set(0);
 	signal_named("sf2000-screen", SIGSTOP);
 	pid = vfork();
 	if (pid == 0) {
 		execv(FRONTEND_PATH, argv);
 		_exit(127);
 	}
-	if (pid > 0)
-		while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-			;
+	if (pid > 0) {
+		for (;;) {
+			pid_t result = waitpid(pid, &status, WNOHANG);
+
+			if (result == pid)
+				break;
+			if (result < 0 && errno != EINTR)
+				break;
+			if (!visible && access(FRONTEND_READY_MARKER, F_OK) == 0) {
+				backlight_set(1);
+				visible = 1;
+				log_line("sf2000-powerd: frontend first frame visible\n");
+			}
+			sleep_ms(10);
+		}
+	}
+	backlight_set(0);
+	(void)unlink(FRONTEND_READY_MARKER);
 	signal_named("sf2000-screen", SIGCONT);
+	/* Let the console publish a complete replacement frame while blanked. */
+	sleep_ms(50);
+	backlight_set(1);
 	log_line("sf2000-powerd: frontend returned to console\n");
 }
 

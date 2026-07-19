@@ -11,6 +11,7 @@
 
 #define MOUNT_POINT "/mnt/sd"
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
+#define UNIFROG_MOUNT_POINT "/media/mmcblk0"
 #define STATUS_PATH "/run/sf2000-storage.status"
 #define ATTEMPTS 30u
 
@@ -77,6 +78,8 @@ int main(void)
 			if (mount(devices[i], MOUNT_POINT, "vfat",
 					MS_NOATIME, NULL) != 0)
 				continue;
+			(void)mkdir("/media", 0755);
+			(void)symlink(MOUNT_POINT, UNIFROG_MOUNT_POINT);
 			snprintf(line, sizeof(line), "%s\n", devices[i]);
 			write_text(MOUNT_MARKER, line);
 			snprintf(line, sizeof(line), "mount ok %s at %s",

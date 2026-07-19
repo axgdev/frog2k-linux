@@ -57,7 +57,7 @@ BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_POWERD_SRC := buildroot/sf2000-powerd.c
 BUILDROOT_POWERD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
-BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend-demo
+BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
 BUILDROOT_AUDIO_ENTRY := buildroot/sf2000-audio-entry.S
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
@@ -640,10 +640,10 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefi
 	rm -f '$@.gdb'
 
 $(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/tests -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' demo \
+	$(MAKE) -C '$(FRONTEND_PROJECT)' frogui \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
-	cp '$(FRONTEND_PROJECT)'/build/sf2000-frontend-demo '$@'
+	cp '$(FRONTEND_PROJECT)'/build/sf2000-frontend-frogui '$@'
 
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(BUILDROOT_AUDIO_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -1274,7 +1274,8 @@ run-linux-frontend: qemu linux-buildroot-asd
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch START+X' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-frontend: demo running SELECT+Y exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: frontend running SELECT+Y exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 
