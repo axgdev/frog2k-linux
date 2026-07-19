@@ -31,7 +31,9 @@ The HCLinux tree has useful Linux support for HC16xx, but not a ready HC15xx
 Linux board port. We use it as driver and platform reference while keeping the
 initial SF2000 target small:
 
-- MIPS little-endian, using the existing SF2000 toolchain under `/opt/`.
+- MIPS32r1 little-endian, soft-float and no-MMU.
+- A project-built GCC 16.1.0/binutils 2.46.1/uClibc-ng 1.0.58 toolchain;
+  host-global cross compilers are deliberately not used.
 - UART console first.
 - Initramfs first; SD rootfs later.
 - No desktop stack, no package manager, no X11/Wayland during bring-up.
@@ -39,6 +41,11 @@ initial SF2000 target small:
 Buildroot is the preferred userspace generator for phase 1 because it can make
 tiny reproducible soft-float root filesystems. Alpine/postmarketOS can be
 revisited after the kernel ABI and core devices are proven.
+
+The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, GCC 16.1.0,
+binutils 2.46.1, uClibc-ng 1.0.58, BusyBox 1.38.0, and elf2flt 2024.05.
+`make ROOTFS=buildroot toolchain` downloads and compiles the complete cross
+toolchain into the disposable Buildroot output tree.
 
 The detailed hardware contract, bring-up history, failed assumptions, current
 support matrix, and application-porting constraints are documented in

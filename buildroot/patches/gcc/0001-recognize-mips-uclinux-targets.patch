@@ -22,12 +22,12 @@ diff --git a/gcc/config.gcc b/gcc/config.gcc
 index fa96fd74152..02d93f815e0 100644
 --- a/gcc/config.gcc
 +++ b/gcc/config.gcc
-@@ -2544,6 +2544,32 @@ mips*-mti-linux*)
+@@ -2707,4 +2707,30 @@ mips*-mti-linux*)
  	gnu_ld=yes
  	gas=yes
  	;;
 +mips*-*-uclinux*)			# uClinux MIPS, either endian.
-+	tm_file="dbxelf.h elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h flat.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h mips/uclinux.h"
++	tm_file="elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h flat.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h mips/uclinux.h"
 +	extra_options="${extra_options} linux.opt linux-android.opt"
 +	tm_p_file="${tm_p_file} linux-protos.h"
 +	tmake_file="${tmake_file} t-slibgcc t-linux t-glibc"
@@ -53,8 +53,6 @@ index fa96fd74152..02d93f815e0 100644
 +	gas=yes
 +	;;
  mips*-*-linux*)				# Linux MIPS, either endian.
- 	tm_file="dbxelf.h elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h"
- 	extra_options="${extra_options} linux-android.opt"
 diff --git a/gcc/config/mips/uclinux.h b/gcc/config/mips/uclinux.h
 new file mode 100644
 index 00000000000..b5ee492f2a9

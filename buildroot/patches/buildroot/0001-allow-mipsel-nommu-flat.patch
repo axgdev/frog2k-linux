@@ -17,10 +17,10 @@ diff --git a/arch/Config.in b/arch/Config.in
 index 490f3d27fc..9e69b13b38 100644
 --- a/arch/Config.in
 +++ b/arch/Config.in
-@@ -113,7 +113,6 @@ config BR2_mips
- 
+@@ -136,7 +136,6 @@ config BR2_mipsel
  config BR2_mipsel
- 	bool "MIPS (little endian)"
+	bool "MIPS (little endian)"
+	depends on !BR2_HIDE_SECONDARY_TARGET_OPTIONS
 -	select BR2_USE_MMU
  	help
  	  MIPS is a RISC microprocessor from MIPS Technologies. Little

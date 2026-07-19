@@ -18,7 +18,7 @@ diff --git a/package/uclibc/uclibc.mk b/package/uclibc/uclibc.mk
 index 1c1c0d3..b53e7da 100644
 --- a/package/uclibc/uclibc.mk
 +++ b/package/uclibc/uclibc.mk
-@@ -164,6 +164,13 @@
+@@ -172,6 +172,13 @@
  	$(SED) '/CONFIG_MIPS_NAN_.*/d' $(@D)/.config
  	$(call KCONFIG_ENABLE_OPT,$(UCLIBC_MIPS_NAN))
  endef
@@ -32,7 +32,7 @@ index 1c1c0d3..b53e7da 100644
  endif # mips
  
  #
-@@ -408,6 +414,7 @@
+@@ -413,6 +420,7 @@
  	$(UCLIBC_ARM_NO_CONTEXT_FUNCS)
  	$(UCLIBC_M68K_BINFMT_FLAT)
  	$(UCLIBC_MIPS_ABI_CONFIG)

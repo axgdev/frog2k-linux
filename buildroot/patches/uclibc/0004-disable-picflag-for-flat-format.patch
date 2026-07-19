@@ -16,16 +16,9 @@ diff --git a/Rules.mak b/Rules.mak
 index 5ce0abce5..85e7da55b 100644
 --- a/Rules.mak
 +++ b/Rules.mak
-@@ -328,6 +328,9 @@ CPU_LDFLAGS-$(ARCH_BIG_ENDIAN)    += -Wl,-EB
- PICFLAG-y := -fPIC
- PICFLAG-$(UCLIBC_FORMAT_FDPIC_ELF) := -mfdpic
- PICFLAG-$(UCLIBC_FORMAT_DSBT_ELF)  := -mdsbt -fpic
- PICFLAG := $(PICFLAG-y)
+@@ -327,0 +328,3 @@
 +ifeq ($(UCLIBC_FORMAT_FLAT),y)
 +PICFLAG :=
 +endif
- PIEFLAG_NAME:=-fPIE
- 
- $(eval $(call check-gcc-var,-fdata-sections))
 -- 
 2.50.0

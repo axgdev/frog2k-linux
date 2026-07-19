@@ -20,25 +20,25 @@ QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
-TOOLCHAIN_DIR ?= /opt/gdb-mips-toolchain
-CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-mti-elf-
-CC_MIPS := $(CROSS_COMPILE)gcc
-LD_MIPS := $(CROSS_COMPILE)ld
-OBJCOPY_MIPS := $(CROSS_COMPILE)objcopy
-STRIP_MIPS := $(CROSS_COMPILE)strip
-OBJDUMP_MIPS := $(CROSS_COMPILE)objdump
-READELF_MIPS := $(CROSS_COMPILE)readelf
-NM_MIPS := $(CROSS_COMPILE)nm
+TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
+CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
+CC_MIPS = $(CROSS_COMPILE)gcc
+LD_MIPS = $(CROSS_COMPILE)ld
+OBJCOPY_MIPS = $(CROSS_COMPILE)objcopy
+STRIP_MIPS = $(CROSS_COMPILE)strip
+OBJDUMP_MIPS = $(CROSS_COMPILE)objdump
+READELF_MIPS = $(CROSS_COMPILE)readelf
+NM_MIPS = $(CROSS_COMPILE)nm
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 ROOTFS ?= tiny
-LINUX_VERSION := 5.12.4
+LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
-LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v5.x/$(LINUX_TARBALL)
-LINUX_SRC ?= /tmp/sf2000_linux-kernel-$(LINUX_VERSION)
-BUILDROOT_VERSION := 2024.02.12
+LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
+LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
+BUILDROOT_VERSION := 2026.05.1
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
 BUILDROOT_URL := https://buildroot.org/downloads/$(BUILDROOT_TARBALL)
-BUILDROOT_WORK ?= /tmp/sf2000_linux-buildroot
+BUILDROOT_WORK ?= /tmp/sf2000-linux-next-buildroot
 BUILDROOT_SRC ?= $(BUILDROOT_WORK)/buildroot-$(BUILDROOT_VERSION)
 BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
 BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
@@ -199,7 +199,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all status qemu rootfs buildroot buildroot-reconfigure linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all status qemu rootfs toolchain buildroot buildroot-reconfigure linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -517,6 +517,7 @@ $(QEMU_MKSD): $(QEMU_DIR)/tools/mksf2000sd.c
 	$(MAKE) -C '$(QEMU_DIR)' build/mksf2000sd
 
 rootfs: $(ROOTFS_CPIO)
+toolchain: $(BUILDROOT_TOOLCHAIN_STAMP)
 buildroot: $(BUILDROOT_CPIO)
 
 buildroot-reconfigure:

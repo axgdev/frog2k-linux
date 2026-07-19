@@ -43,11 +43,7 @@ index 0655375..aaaaaaaa 100644
  #elif defined(TARGET_nios2)
  #define ARCH	"nios2"
  #elif defined(TARGET_xtensa)
-@@ -701,7 +710,29 @@ output_relocs (
- 				case R_68K_NONE:
- 					continue;
- 				default:
- 					goto bad_resolved_reloc;
+@@ -706,1 +715,23 @@ output_relocs (
 +#elif defined(TARGET_mips) || defined(TARGET_mipsel)
 +				case R_MIPS_32:
 +					goto good_32bit_resolved_reloc;
@@ -71,8 +67,6 @@ index 0655375..aaaaaaaa 100644
 +				default:
 +					goto bad_resolved_reloc;
  #elif defined TARGET_bfin
- 				case R_BFIN_RIMM16:
- 				case R_BFIN_LUIMM16:
 @@ -930,6 +961,54 @@ output_relocs (
  					sym_addr -= q->address;
  					break;
