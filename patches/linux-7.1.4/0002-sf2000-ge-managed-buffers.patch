@@ -61,13 +61,14 @@
  static void sf2000_ge_clock_enable(struct sf2000_ge *ge)
  {
  	u32 value = readl(ge->sys + SF2000_SYS_GATE1);
-@@ -163,6 +193,15 @@
+@@ -163,6 +193,16 @@
  	return 0;
  }
  
 +static int sf2000_ge_release(struct inode *inode, struct file *file)
 +{
-+	struct sf2000_ge *ge = file->private_data;
++	struct miscdevice *misc = file->private_data;
++	struct sf2000_ge *ge = container_of(misc, struct sf2000_ge, misc);
 +
 +	(void)inode;
 +	sf2000_ge_free_buffers(ge);

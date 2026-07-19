@@ -2848,7 +2848,7 @@ new file mode 100644
 index 000000000..7ba318bac
 --- /dev/null
 +++ b/drivers/misc/sf2000-ge.c
-@@ -0,0 +1,440 @@
+@@ -0,0 +1,468 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Hichip HC15xx/SF2000 command-queue graphics engine. */
 +
@@ -2866,6 +2866,8 @@ index 000000000..7ba318bac
 +#include <linux/platform_device.h>
 +#include <linux/spinlock.h>
 +#include <linux/uaccess.h>
++extern void sf2000_progress_mark(const char *name, unsigned int kind,
++				 unsigned int value);
 +
 +#define SF2000_GE_QUEUE_SIZE	0x3c000u
 +#define SF2000_GE_MINOR		243
@@ -3005,34 +3007,54 @@ index 000000000..7ba318bac
 +	return IRQ_HANDLED;
 +}
 +
++static void sf2000_ge_irq_mask_ack(struct sf2000_ge *ge)
++{
++	u32 ctrl = readl(ge->regs + SF2000_GE_CTRL);
++	u32 status;
++
++	writel(ctrl & ~SF2000_GE_CTRL_HQ_IRQ, ge->regs + SF2000_GE_CTRL);
++	status = readl(ge->regs + SF2000_GE_STATUS);
++	if (status)
++		writel(status, ge->regs + SF2000_GE_STATUS);
++}
++
 +static int sf2000_ge_open(struct inode *inode, struct file *file)
 +{
-+	struct miscdevice *misc = file->private_data;
-+	struct sf2000_ge *ge = container_of(misc, struct sf2000_ge, misc);
-+
-+	file->private_data = ge;
++	(void)inode;
++	(void)file;
++	sf2000_progress_mark("ge-open", 0x3f, 0);
 +	return 0;
 +}
 +
 +static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
 +			    unsigned long arg)
 +{
-+	struct sf2000_ge *ge = file->private_data;
++	struct miscdevice *misc = file->private_data;
++	struct sf2000_ge *ge = container_of(misc, struct sf2000_ge, misc);
 +	struct hcge_cmdq_node_ctx *ctx = ge->queue;
 +	u32 value;
 +
++	sf2000_progress_mark("ge-ioctl", 0x3f, cmd);
++
 +	switch (cmd) {
 +	case HCGE_REQUEST_IRQ:
++		sf2000_progress_mark("ge-irq-request", 0x3f, ge->irq);
 +		if (ge->irq_requested)
 +			return 0;
++		sf2000_ge_irq_mask_ack(ge);
 +		value = request_irq(ge->irq, sf2000_ge_irq, 0,
 +				    dev_name(ge->dev), ge);
 +		if (value)
 +			return (int)value;
 +		ge->irq_requested = true;
++		sf2000_progress_mark("ge-irq-ready", 0x3f, ge->irq);
++		value = readl(ge->regs + SF2000_GE_CTRL);
++		writel(value | SF2000_GE_CTRL_HQ_IRQ,
++		       ge->regs + SF2000_GE_CTRL);
 +		return 0;
 +	case HCGE_FREE_IRQ:
 +		if (ge->irq_requested) {
++			sf2000_ge_irq_mask_ack(ge);
 +			free_irq(ge->irq, ge);
 +			ge->irq_requested = false;
 +		}
@@ -3040,7 +3062,11 @@ index 000000000..7ba318bac
 +	case HCGE_RESET:
 +		sf2000_ge_hw_reset(ge);
 +		value = readl(ge->regs + SF2000_GE_CTRL);
-+		value |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
++		value |= SF2000_GE_CTRL_SW_MEMORY;
++		if (ge->irq_requested)
++			value |= SF2000_GE_CTRL_HQ_IRQ;
++		else
++			value &= ~SF2000_GE_CTRL_HQ_IRQ;
 +		writel(value, ge->regs + SF2000_GE_CTRL);
 +		memset(ge->queue, 0, SF2000_GE_QUEUE_SIZE);
 +		ctx->phy_addr_min = (u32)ge->queue_dma + sizeof(*ctx);
@@ -3244,8 +3270,10 @@ index 000000000..7ba318bac
 +	sf2000_ge_clock_enable(ge);
 +	sf2000_ge_hw_reset(ge);
 +	ctrl = readl(ge->regs + SF2000_GE_CTRL);
-+	ctrl |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
++	ctrl |= SF2000_GE_CTRL_SW_MEMORY;
++	ctrl &= ~SF2000_GE_CTRL_HQ_IRQ;
 +	writel(ctrl, ge->regs + SF2000_GE_CTRL);
++	sf2000_ge_irq_mask_ack(ge);
 +
 +	/* Keep /dev/ge stable on the static-device NOMMU root filesystem. */
 +	ge->misc.minor = SF2000_GE_MINOR;
