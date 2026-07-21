@@ -172,6 +172,8 @@ SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BROWSER_TEST_SD := $(BUILD_DIR)/browser-test.sd.img
+BROWSER_TEST_ROM := $(BUILD_DIR)/browser-test.gb
+BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
@@ -1270,16 +1272,25 @@ smoke-linux-power: run-linux-power
 	grep -q 'sf2000-powerd: display standby resumed' '$(BUILD_DIR)'/logs/linux-power.log
 	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-power.log
 
-$(BROWSER_TEST_SD): Makefile
+$(BROWSER_TEST_ROM_TOOL): tools/mkgbtest.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) $(HOSTCFLAGS) -o '$@' '$<'
+
+$(BROWSER_TEST_ROM): $(BROWSER_TEST_ROM_TOOL)
+	'$<' '$@'
+
+$(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
 	mmd -i '$@' ::/GB ::/GBC
+	mcopy -i '$@' '$(BROWSER_TEST_ROM)' ::/GB/TEST.GB
 	mcopy -i '$@' Makefile ::/README.TXT
 
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 10; \
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
@@ -1294,8 +1305,11 @@ smoke-linux-frontend: run-linux-frontend
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-browser: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
