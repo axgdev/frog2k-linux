@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -27,6 +26,7 @@
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #define FRONTEND_PATH "/usr/bin/sf2000-frontend"
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
+#define SCREEN_PID_PATH "/run/sf2000-screen.pid"
 #define BATTERY_RATE_MIN_MS 300000u
 #define BATTERY_SAMPLE_MS 60000
 
@@ -144,37 +144,37 @@ static void backlight_set(int on)
 		*out |= bit;
 }
 
-static void signal_named(const char *wanted, int signal_number)
+static int signal_screen(int signal_number)
 {
-	DIR *proc = opendir("/proc");
-	struct dirent *entry;
+	char value[24], comm[32], path[64], *end;
+	long pid;
+	int fd = open(SCREEN_PID_PATH, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
 
-	if (!proc)
-		return;
-	while ((entry = readdir(proc))) {
-		char path[64], comm[32];
-		char *end;
-		long pid = strtol(entry->d_name, &end, 10);
-		int fd;
-		ssize_t got;
-
-		if (!entry->d_name[0] || *end || pid <= 1 || pid == getpid())
-			continue;
-		snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
-		fd = open(path, O_RDONLY | O_CLOEXEC);
-		if (fd < 0)
-			continue;
-		got = read(fd, comm, sizeof(comm) - 1u);
-		close(fd);
-		if (got <= 0)
-			continue;
-		comm[got] = 0;
-		if (comm[got - 1] == '\n')
-			comm[got - 1] = 0;
-		if (!strcmp(comm, wanted))
-			(void)kill((pid_t)pid, signal_number);
-	}
-	closedir(proc);
+	if (fd < 0)
+		return -1;
+	got = read(fd, value, sizeof(value) - 1u);
+	close(fd);
+	if (got <= 0)
+		return -1;
+	value[got] = 0;
+	pid = strtol(value, &end, 10);
+	if (end == value || pid <= 1 || pid == getpid())
+		return -1;
+	snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	got = read(fd, comm, sizeof(comm) - 1u);
+	close(fd);
+	if (got <= 0)
+		return -1;
+	comm[got] = 0;
+	if (comm[got - 1] == '\n')
+		comm[got - 1] = 0;
+	if (strcmp(comm, "sf2000-screen"))
+		return -1;
+	return kill((pid_t)pid, signal_number);
 }
 
 static void set_standby(int standby)
@@ -197,10 +197,12 @@ static void set_standby(int standby)
 		/* Give logd one polling interval to flush before quiescing GE. */
 		sleep_ms(100);
 		backlight_set(0);
-		signal_named("sf2000-screen", SIGSTOP);
+		if (signal_screen(SIGSTOP) < 0)
+			log_line("sf2000-powerd: screen stop failed\n");
 	} else {
 		battery_sample("standby-exit");
-		signal_named("sf2000-screen", SIGCONT);
+		if (signal_screen(SIGCONT) < 0)
+			log_line("sf2000-powerd: screen resume failed\n");
 		backlight_set(1);
 		(void)unlink(STANDBY_MARKER);
 		log_line("sf2000-powerd: display standby resumed\n");
@@ -217,7 +219,9 @@ static void run_frontend(void)
 	log_line("sf2000-powerd: frontend launch START+R\n");
 	(void)unlink(FRONTEND_READY_MARKER);
 	backlight_set(0);
-	signal_named("sf2000-screen", SIGSTOP);
+	if (signal_screen(SIGSTOP) < 0)
+		log_line("sf2000-powerd: frontend screen stop failed\n");
+	sleep_ms(10);
 	pid = vfork();
 	if (pid == 0) {
 		execv(FRONTEND_PATH, argv);
@@ -241,7 +245,8 @@ static void run_frontend(void)
 	}
 	backlight_set(0);
 	(void)unlink(FRONTEND_READY_MARKER);
-	signal_named("sf2000-screen", SIGCONT);
+	if (signal_screen(SIGCONT) < 0)
+		log_line("sf2000-powerd: frontend screen resume failed\n");
 	/* Let the console publish a complete replacement frame while blanked. */
 	sleep_ms(50);
 	backlight_set(1);

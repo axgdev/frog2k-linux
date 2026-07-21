@@ -1282,12 +1282,14 @@ run-linux-frontend: qemu linux-buildroot-asd
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch START+R' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[0-9]+' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
-	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'

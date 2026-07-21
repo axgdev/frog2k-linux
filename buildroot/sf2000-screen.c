@@ -1168,6 +1168,14 @@ static int publish_marker(const char *path, const char *text)
 	return 0;
 }
 
+static void publish_screen_pid(void)
+{
+	char value[24];
+
+	snprintf(value, sizeof(value), "%ld\n", (long)getpid());
+	(void)publish_marker("/run/sf2000-screen.pid", value);
+}
+
 #if 0
 static uint32_t storage_hash_name(const char *text)
 {
@@ -4563,6 +4571,7 @@ int main(int argc, char **argv, char **envp)
 	(void)argc;
 	(void)argv;
 	log_line("sf2000-screen: main entry\n");
+	publish_screen_pid();
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	first_variant = &panel_variants[0];
 	if (envp)
