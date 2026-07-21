@@ -209,8 +209,7 @@ static void set_standby(int standby)
 
 static void run_frontend(void)
 {
-	static char *const argv[] = { (char *)FRONTEND_PATH,
-		(char *)"/mnt/sd/sf2000-demo.rom", NULL };
+	static char *const argv[] = { (char *)FRONTEND_PATH, NULL };
 	pid_t pid;
 	int status;
 	int visible = 0;
@@ -289,7 +288,7 @@ int main(void)
 		if (input < 0)
 			sleep_ms(100);
 	}
-	log_line("sf2000-powerd: ready START+Y standby START+R FrogUI\n");
+	log_line("sf2000-powerd: ready START+Y standby START+R game browser\n");
 	for (;;) {
 		struct pollfd wait = { .fd = input, .events = POLLIN };
 		int ready = poll(&wait, 1, BATTERY_SAMPLE_MS);

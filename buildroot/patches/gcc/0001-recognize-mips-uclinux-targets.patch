@@ -22,10 +22,8 @@ diff --git a/gcc/config.gcc b/gcc/config.gcc
 index fa96fd74152..02d93f815e0 100644
 --- a/gcc/config.gcc
 +++ b/gcc/config.gcc
-@@ -2707,4 +2707,30 @@ mips*-mti-linux*)
- 	gnu_ld=yes
- 	gas=yes
- 	;;
+@@ -2710,2 +2710,28 @@ mips*-mti-linux*)
+	;;
 +mips*-*-uclinux*)			# uClinux MIPS, either endian.
 +	tm_file="elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h flat.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h mips/uclinux.h"
 +	extra_options="${extra_options} linux.opt linux-android.opt"
