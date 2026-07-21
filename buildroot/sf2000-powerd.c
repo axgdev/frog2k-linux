@@ -27,6 +27,7 @@
 #define FRONTEND_PATH "/usr/bin/sf2000-frontend"
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
 #define SCREEN_PID_PATH "/run/sf2000-screen.pid"
+#define SCREEN_PAUSED_MARKER "/run/sf2000-screen-paused"
 #define BATTERY_RATE_MIN_MS 300000u
 #define BATTERY_SAMPLE_MS 60000
 
@@ -177,6 +178,27 @@ static int signal_screen(int signal_number)
 	return kill((pid_t)pid, signal_number);
 }
 
+static int pause_screen(void)
+{
+	unsigned wait;
+
+	(void)unlink(SCREEN_PAUSED_MARKER);
+	if (signal_screen(SIGUSR1) < 0)
+		return -1;
+	for (wait = 0; wait < 100u; wait++) {
+		if (access(SCREEN_PAUSED_MARKER, F_OK) == 0)
+			return 0;
+		sleep_ms(1);
+	}
+	errno = ETIMEDOUT;
+	return -1;
+}
+
+static int resume_screen(void)
+{
+	return signal_screen(SIGUSR2);
+}
+
 static void set_standby(int standby)
 {
 	if (standby) {
@@ -197,11 +219,11 @@ static void set_standby(int standby)
 		/* Give logd one polling interval to flush before quiescing GE. */
 		sleep_ms(100);
 		backlight_set(0);
-		if (signal_screen(SIGSTOP) < 0)
+		if (pause_screen() < 0)
 			log_line("sf2000-powerd: screen stop failed\n");
 	} else {
 		battery_sample("standby-exit");
-		if (signal_screen(SIGCONT) < 0)
+		if (resume_screen() < 0)
 			log_line("sf2000-powerd: screen resume failed\n");
 		backlight_set(1);
 		(void)unlink(STANDBY_MARKER);
@@ -219,9 +241,8 @@ static void run_frontend(void)
 	log_line("sf2000-powerd: frontend launch START+R\n");
 	(void)unlink(FRONTEND_READY_MARKER);
 	backlight_set(0);
-	if (signal_screen(SIGSTOP) < 0)
+	if (pause_screen() < 0)
 		log_line("sf2000-powerd: frontend screen stop failed\n");
-	sleep_ms(10);
 	pid = vfork();
 	if (pid == 0) {
 		execv(FRONTEND_PATH, argv);
@@ -245,7 +266,7 @@ static void run_frontend(void)
 	}
 	backlight_set(0);
 	(void)unlink(FRONTEND_READY_MARKER);
-	if (signal_screen(SIGCONT) < 0)
+	if (resume_screen() < 0)
 		log_line("sf2000-powerd: frontend screen resume failed\n");
 	/* Let the console publish a complete replacement frame while blanked. */
 	sleep_ms(50);

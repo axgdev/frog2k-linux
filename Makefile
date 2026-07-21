@@ -171,6 +171,7 @@ SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
+BROWSER_TEST_SD := $(BUILD_DIR)/browser-test.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
@@ -1269,12 +1270,20 @@ smoke-linux-power: run-linux-power
 	grep -q 'sf2000-powerd: display standby resumed' '$(BUILD_DIR)'/logs/linux-power.log
 	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-power.log
 
-run-linux-frontend: qemu linux-buildroot-asd
+$(BROWSER_TEST_SD): Makefile
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/GB ::/GBC
+	mcopy -i '$@' Makefile ::/README.TXT
+
+run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 4; \
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 10; \
 		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(BROWSER_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-frontend.log \
 		> '$(BUILD_DIR)'/logs/linux-frontend.console 2>&1
@@ -1282,7 +1291,7 @@ run-linux-frontend: qemu linux-buildroot-asd
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch START+R' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[0-9]+' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log

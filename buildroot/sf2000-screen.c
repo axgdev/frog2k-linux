@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/input.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -291,6 +292,7 @@ static volatile uint8_t *sysio_mapping;
 #define gma (gma_mapping ? gma_mapping : KSEG1ADDR(GMA_MMIO_PHYS))
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_PHYS))
 static volatile int stopping;
+static volatile sig_atomic_t application_paused;
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
@@ -1656,6 +1658,25 @@ static void runtime_watchdog_disable(void)
 	volatile uint8_t *wdt = KSEG1ADDR(WDT_BASE_PHYS);
 
 	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
+}
+
+static void application_pause_signal(int signal_number)
+{
+	application_paused = signal_number == SIGUSR1;
+}
+
+static void application_pause_service(void)
+{
+	struct timespec delay = { 0, 10000000L };
+
+	if (!application_paused)
+		return;
+	runtime_watchdog_disable();
+	(void)publish_marker("/run/sf2000-screen-paused", "paused\n");
+	while (application_paused)
+		(void)nanosleep(&delay, NULL);
+	(void)unlink("/run/sf2000-screen-paused");
+	runtime_watchdog_arm();
 }
 
 static void panel_vou_rgb_enable(void)
@@ -4413,6 +4434,7 @@ handoff_complete:
 		int changed = 0;
 		unsigned kmsg_reads = 0;
 
+		application_pause_service();
 		if (fd >= 0) {
 			do {
 				got = read(fd, buf, sizeof(buf) - 1u);
@@ -4572,6 +4594,8 @@ int main(int argc, char **argv, char **envp)
 	(void)argv;
 	log_line("sf2000-screen: main entry\n");
 	publish_screen_pid();
+	(void)signal(SIGUSR1, application_pause_signal);
+	(void)signal(SIGUSR2, application_pause_signal);
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	first_variant = &panel_variants[0];
 	if (envp)
