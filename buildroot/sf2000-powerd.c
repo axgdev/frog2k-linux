@@ -263,6 +263,20 @@ static void run_frontend(void)
 			}
 			sleep_ms(10);
 		}
+		{
+			char line[128];
+			if (WIFEXITED(status))
+				snprintf(line, sizeof(line),
+					"sf2000-powerd: frontend exit status=%d\n",
+					WEXITSTATUS(status));
+			else if (WIFSIGNALED(status))
+				snprintf(line, sizeof(line),
+					"sf2000-powerd: frontend signal=%d\n", WTERMSIG(status));
+			else
+				snprintf(line, sizeof(line),
+					"sf2000-powerd: frontend wait status=0x%x\n", status);
+			log_line(line);
+		}
 	}
 	backlight_set(0);
 	(void)unlink(FRONTEND_READY_MARKER);
