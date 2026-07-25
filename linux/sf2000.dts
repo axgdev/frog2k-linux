@@ -153,7 +153,8 @@
 		audio: sound@1880a000 {
 			compatible = "hichip,hc15xx-snd0";
 			reg = <0x1880a000 0x1000>,
-			      <0x1880b000 0x1000>;
+			      <0x1880b000 0x1000>,
+			      <0x18800000 0x1000>;
 			status = "okay";
 		};
 

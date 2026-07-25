@@ -1,0 +1,305 @@
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -83,6 +83,12 @@
+ struct sf2000_ge_buffer {
+ 	void *address;
+ 	u32 bytes;
++	struct sf2000_ge_file *owner;
++};
++
++struct sf2000_ge_file {
++	struct sf2000_ge *ge;
++	bool irq_requested;
+ };
+ 
+ struct hcge_cmdq_node_ctx {
+@@ -112,7 +118,7 @@
+ 	u32 pending_last;
+ 	bool queue_started;
+ 	int irq;
+-	bool irq_requested;
++	u32 irq_users;
+ 	struct sf2000_ge_buffer buffers[HCGE_BUFFER_SLOTS];
+ };
+ 
+@@ -126,6 +132,22 @@
+ 		free_pages_exact(ge->buffers[i].address, ge->buffers[i].bytes);
+ 		ge->buffers[i].address = NULL;
+ 		ge->buffers[i].bytes = 0;
++		ge->buffers[i].owner = NULL;
++	}
++}
++
++static void sf2000_ge_free_file_buffers(struct sf2000_ge_file *ctx)
++{
++	struct sf2000_ge *ge = ctx->ge;
++	u32 i;
++
++	for (i = 0; i < HCGE_BUFFER_SLOTS; ++i) {
++		if (ge->buffers[i].owner != ctx)
++			continue;
++		free_pages_exact(ge->buffers[i].address, ge->buffers[i].bytes);
++		ge->buffers[i].address = NULL;
++		ge->buffers[i].bytes = 0;
++		ge->buffers[i].owner = NULL;
+ 	}
+ }
+ 
+@@ -188,42 +210,69 @@
+ {
+ 	struct miscdevice *misc = file->private_data;
+ 	struct sf2000_ge *ge = container_of(misc, struct sf2000_ge, misc);
++	struct sf2000_ge_file *ctx;
+ 
+-	file->private_data = ge;
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++	ctx->ge = ge;
++	file->private_data = ctx;
+ 	return 0;
+ }
+ 
+ static int sf2000_ge_release(struct inode *inode, struct file *file)
+ {
+-	struct sf2000_ge *ge = file->private_data;
++	struct sf2000_ge_file *ctx = file->private_data;
++	struct sf2000_ge *ge = ctx->ge;
+ 
+ 	(void)inode;
+-	sf2000_ge_free_buffers(ge);
++	mutex_lock(&ge->submit_lock);
++	sf2000_ge_free_file_buffers(ctx);
++	if (ctx->irq_requested) {
++		ctx->irq_requested = false;
++		if (!--ge->irq_users)
++			free_irq(ge->irq, ge);
++	}
++	mutex_unlock(&ge->submit_lock);
++	kfree(ctx);
+ 	return 0;
+ }
+ 
+ static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
+ 			    unsigned long arg)
+ {
+-	struct sf2000_ge *ge = file->private_data;
++	struct sf2000_ge_file *file_ctx = file->private_data;
++	struct sf2000_ge *ge = file_ctx->ge;
+ 	struct hcge_cmdq_node_ctx *ctx = ge->queue;
+ 	u32 value;
+ 
+ 	switch (cmd) {
+ 	case HCGE_REQUEST_IRQ:
+-		if (ge->irq_requested)
++		mutex_lock(&ge->submit_lock);
++		if (file_ctx->irq_requested) {
++			mutex_unlock(&ge->submit_lock);
+ 			return 0;
+-		value = request_irq(ge->irq, sf2000_ge_irq, 0,
+-				    dev_name(ge->dev), ge);
+-		if (value)
+-			return (int)value;
+-		ge->irq_requested = true;
++		}
++		if (!ge->irq_users) {
++			value = request_irq(ge->irq, sf2000_ge_irq, 0,
++					    dev_name(ge->dev), ge);
++			if (value) {
++				mutex_unlock(&ge->submit_lock);
++				return (int)value;
++			}
++		}
++		ge->irq_users++;
++		file_ctx->irq_requested = true;
++		mutex_unlock(&ge->submit_lock);
+ 		return 0;
+ 	case HCGE_FREE_IRQ:
+-		if (ge->irq_requested) {
+-			free_irq(ge->irq, ge);
+-			ge->irq_requested = false;
++		mutex_lock(&ge->submit_lock);
++		if (file_ctx->irq_requested) {
++			file_ctx->irq_requested = false;
++			if (!--ge->irq_users)
++				free_irq(ge->irq, ge);
+ 		}
++		mutex_unlock(&ge->submit_lock);
+ 		return 0;
+ 	case HCGE_RESET:
+ 		sf2000_ge_hw_reset(ge);
+@@ -383,17 +432,23 @@
+ 			return -EFAULT;
+ 		if (!info.bytes || info.bytes > SZ_1M)
+ 			return -EINVAL;
++		mutex_lock(&ge->submit_lock);
+ 		for (slot = 0; slot < HCGE_BUFFER_SLOTS; ++slot)
+ 			if (!ge->buffers[slot].address)
+ 				break;
+-		if (slot == HCGE_BUFFER_SLOTS)
++		if (slot == HCGE_BUFFER_SLOTS) {
++			mutex_unlock(&ge->submit_lock);
+ 			return -ENOSPC;
++		}
+ 		info.bytes = PAGE_ALIGN(info.bytes);
+ 		address = alloc_pages_exact(info.bytes, GFP_KERNEL | __GFP_ZERO);
+-		if (!address)
++		if (!address) {
++			mutex_unlock(&ge->submit_lock);
+ 			return -ENOMEM;
++		}
+ 		ge->buffers[slot].address = address;
+ 		ge->buffers[slot].bytes = info.bytes;
++		ge->buffers[slot].owner = file_ctx;
+ 		info.address = (u32)(unsigned long)address;
+ 		info.phys = (u32)virt_to_phys(address);
+ 		info.handle = slot + 1;
+@@ -401,8 +456,11 @@
+ 			free_pages_exact(address, info.bytes);
+ 			ge->buffers[slot].address = NULL;
+ 			ge->buffers[slot].bytes = 0;
++			ge->buffers[slot].owner = NULL;
++			mutex_unlock(&ge->submit_lock);
+ 			return -EFAULT;
+ 		}
++		mutex_unlock(&ge->submit_lock);
+ 		return 0;
+ 	}
+ 	case HCGE_FREE_BUFFER: {
+@@ -411,12 +469,21 @@
+ 		if (!slot || slot > HCGE_BUFFER_SLOTS)
+ 			return -EINVAL;
+ 		--slot;
+-		if (!ge->buffers[slot].address)
++		mutex_lock(&ge->submit_lock);
++		if (!ge->buffers[slot].address) {
++			mutex_unlock(&ge->submit_lock);
+ 			return -ENOENT;
++		}
++		if (ge->buffers[slot].owner != file_ctx) {
++			mutex_unlock(&ge->submit_lock);
++			return -EPERM;
++		}
+ 		free_pages_exact(ge->buffers[slot].address,
+ 				 ge->buffers[slot].bytes);
+ 		ge->buffers[slot].address = NULL;
+ 		ge->buffers[slot].bytes = 0;
++		ge->buffers[slot].owner = NULL;
++		mutex_unlock(&ge->submit_lock);
+ 		return 0;
+ 	}
+ 	default:
+@@ -500,7 +567,7 @@
+ {
+ 	struct sf2000_ge *ge = platform_get_drvdata(pdev);
+ 
+-	if (ge->irq_requested)
++	if (ge->irq_users)
+ 		free_irq(ge->irq, ge);
+ 	sf2000_ge_free_buffers(ge);
+ 	misc_deregister(&ge->misc);
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -6,6 +6,7 @@
+ #include <linux/io.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_address.h>
+ #include <linux/platform_device.h>
+ #include <linux/timer.h>
+ #include <sound/core.h>
+@@ -23,6 +24,10 @@
+ #define SF2000_SND_FADE		0x90
+ 
+ #define SF2000_DAC_CTL		0x00
++#define SF2000_GPIO_R_OUT	0xf4
++#define SF2000_GPIO_R_DIR	0xf8
++#define SF2000_PINMUX_R07	0x4e7
++#define SF2000_AMP_R07		BIT(7)
+ #define SF2000_RATE		32000
+ #define SF2000_BUFFER_MAX	(128 * 1024)
+ #define SF2000_PERIOD_MIN	256
+@@ -32,6 +37,7 @@
+ 	struct device *dev;
+ 	void __iomem *snd;
+ 	void __iomem *dac;
++	void __iomem *sys;
+ 	struct snd_card *card;
+ 	struct snd_pcm *pcm;
+ 	struct snd_pcm_substream *substream;
+@@ -65,6 +71,22 @@
+ 	writel((old & ~mask) | (value & mask), reg);
+ }
+ 
++static void sf2000_amp_enable(struct sf2000_pcm *chip, bool enable)
++{
++	u32 value;
++
++	/* The SF2000 mono amplifier enable is GPIO R07, active low. */
++	writeb(0, chip->sys + SF2000_PINMUX_R07);
++	value = readl(chip->sys + SF2000_GPIO_R_DIR);
++	writel(value | SF2000_AMP_R07, chip->sys + SF2000_GPIO_R_DIR);
++	value = readl(chip->sys + SF2000_GPIO_R_OUT);
++	if (enable)
++		value &= ~SF2000_AMP_R07;
++	else
++		value |= SF2000_AMP_R07;
++	writel(value, chip->sys + SF2000_GPIO_R_OUT);
++}
++
+ static snd_pcm_uframes_t sf2000_pcm_pointer(struct snd_pcm_substream *substream)
+ {
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+@@ -120,6 +142,7 @@
+ 	unsigned long flags;
+ 
+ 	timer_delete_sync(&chip->timer);
++	sf2000_amp_enable(chip, false);
+ 	spin_lock_irqsave(&chip->lock, flags);
+ 	chip->running = false;
+ 	chip->substream = NULL;
+@@ -175,11 +198,13 @@
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL08, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL0C, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), BIT(29));
++		sf2000_amp_enable(chip, true);
+ 		mod_timer(&chip->timer, jiffies + 1);
+ 		return 0;
+ 	case SNDRV_PCM_TRIGGER_STOP:
+ 	case SNDRV_PCM_TRIGGER_SUSPEND:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		sf2000_amp_enable(chip, false);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), 0);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL0C, BIT(0), 0);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL08, BIT(0), 0);
+@@ -210,6 +235,7 @@
+ 	struct device *dev = &pdev->dev;
+ 	struct sf2000_pcm *chip;
+ 	struct snd_card *card;
++	struct resource sys_res;
+ 	struct resource *res;
+ 	int ret;
+ 
+@@ -238,6 +264,15 @@
+ 		ret = PTR_ERR(chip->dac);
+ 		goto err_card;
+ 	}
++	ret = of_address_to_resource(dev->of_node, 2, &sys_res);
++	if (ret)
++		goto err_card;
++	chip->sys = devm_ioremap(dev, sys_res.start, resource_size(&sys_res));
++	if (!chip->sys) {
++		ret = -ENOMEM;
++		goto err_card;
++	}
++	sf2000_amp_enable(chip, false);
+ 
+ 	ret = snd_pcm_new(card, "SF2000 PCM", 0, 1, 0, &chip->pcm);
+ 	if (ret)
+@@ -271,6 +306,7 @@
+ 	struct sf2000_pcm *chip = card->private_data;
+ 
+ 	timer_delete_sync(&chip->timer);
++	sf2000_amp_enable(chip, false);
+ 	snd_card_free(card);
+ }
