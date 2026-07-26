@@ -1759,7 +1759,12 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
+	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
+	dd if='$(BUILD_DIR)'/sf2000-audio.wav bs=1 skip=44 2>/dev/null | \
+		od -An -v -td2 | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
+			END { exit !found }'
 
 $(UNIFROG_QEMU_SD): $(UNIFROG_ASD) $(UNIFROG_SD_ROOT) Makefile
 	test -d '$(UNIFROG_SD_ROOT)'

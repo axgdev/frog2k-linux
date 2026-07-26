@@ -1,0 +1,147 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -14,6 +14,7 @@
+ #include <sound/pcm.h>
+ #include <sound/pcm_params.h>
+ 
++#define SF2000_SND_CTL04	0x04
+ #define SF2000_SND_CTL08	0x08
+ #define SF2000_SND_CTL0C	0x0c
+ #define SF2000_SND_DMA_BASE	0x30
+@@ -21,13 +22,31 @@
+ #define SF2000_SND_DMA_POS	0x38
+ #define SF2000_SND_I2S_CTL	0x3c
+ #define SF2000_SND_CTL50	0x50
++#define SF2000_SND_PERIOD	0x5c
+ #define SF2000_SND_FADE		0x90
+ 
+ #define SF2000_DAC_CTL		0x00
++#define SF2000_SYS_AUDIO_PLL	0x148
++#define SF2000_SYS_AUDIO_GATE	0x154
+ #define SF2000_GPIO_R_OUT	0xf4
+ #define SF2000_GPIO_R_DIR	0xf8
+ #define SF2000_PINMUX_R07	0x4e7
+ #define SF2000_AMP_R07		BIT(7)
++#define SF2000_DMA_CHANNEL_MASK	GENMASK(17, 16)
++#define SF2000_DMA_FORMAT_MASK	GENMASK(21, 20)
++#define SF2000_DMA_MONO_PACK	BIT(24)
++#define SF2000_DMA_LEFT_ALIGN	BIT(25)
++#define SF2000_DMA_BIT26		BIT(26)
++#define SF2000_DMA_ENABLE	BIT(27)
++#define SF2000_DMA_PAUSE	BIT(28)
++#define SF2000_DMA_CONFIG_MASK	(SF2000_DMA_CHANNEL_MASK | \
++	SF2000_DMA_FORMAT_MASK | SF2000_DMA_MONO_PACK | \
++	SF2000_DMA_LEFT_ALIGN | SF2000_DMA_BIT26 | SF2000_DMA_ENABLE | \
++	SF2000_DMA_PAUSE)
++#define SF2000_DMA_MONO_S16_LE	(SF2000_DMA_MONO_PACK | \
++	SF2000_DMA_LEFT_ALIGN | BIT(20) | SF2000_DMA_ENABLE)
++#define SF2000_AUDIO_PLL_32K	0x0c000120
++#define SF2000_VOLUME_90		0xcb
+ #define SF2000_RATE		32000
+ #define SF2000_BUFFER_MAX	(128 * 1024)
+ #define SF2000_PERIOD_MIN	256
+@@ -50,7 +69,7 @@
+ static const struct snd_pcm_hardware sf2000_pcm_hardware = {
+ 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER |
+ 		SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
+-		SNDRV_PCM_INFO_BATCH,
++		SNDRV_PCM_INFO_BATCH | SNDRV_PCM_INFO_NO_REWINDS,
+ 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+ 	.rates = SNDRV_PCM_RATE_32000,
+ 	.rate_min = SF2000_RATE,
+@@ -91,13 +110,31 @@
+ {
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+ 	struct snd_pcm_runtime *runtime = substream->runtime;
+-	size_t pos = (readl(chip->snd + SF2000_SND_DMA_POS) & 0xffff) << 4;
++	size_t pos = readw(chip->snd + SF2000_SND_DMA_POS + 2) << 4;
+ 
+ 	if (pos >= frames_to_bytes(runtime, runtime->buffer_size))
+ 		pos = 0;
+ 	return bytes_to_frames(runtime, pos);
+ }
+ 
++static int sf2000_pcm_ack(struct snd_pcm_substream *substream)
++{
++	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	snd_pcm_uframes_t appl_ptr = READ_ONCE(runtime->control->appl_ptr);
++	size_t pos;
++
++	/*
++	 * SND0 packs two 16-byte DMA cursors into offset 0x38.  Software
++	 * publishes the producer in the low halfword while hardware reports
++	 * its consumer in the high halfword.  A 16-bit write is important:
++	 * a 32-bit read/modify/write can race the live consumer cursor.
++	 */
++	pos = frames_to_bytes(runtime, appl_ptr % runtime->buffer_size);
++	writew(pos >> 4, chip->snd + SF2000_SND_DMA_POS);
++	return 0;
++}
++
+ static void sf2000_pcm_timer(struct timer_list *timer)
+ {
+ 	struct sf2000_pcm *chip = timer_container_of(chip, timer, timer);
+@@ -168,17 +205,35 @@
+ 	size_t bytes = frames_to_bytes(runtime, runtime->buffer_size);
+ 
+ 	if (!runtime->dma_area || !bytes || bytes > SF2000_BUFFER_MAX ||
+-	    bytes & 0xf || upper_32_bits(runtime->dma_addr))
++	    bytes & 0xf || bytes >> 4 > U16_MAX ||
++	    runtime->period_size > U16_MAX ||
++	    upper_32_bits(runtime->dma_addr))
+ 		return -EINVAL;
+ 
+ 	writel(0x4200039e, chip->dac + SF2000_DAC_CTL);
++	/* 294.912 MHz / 24 = 12.288 MHz; / (32 kHz * 32) = 288. */
++	writel(SF2000_AUDIO_PLL_32K, chip->sys + SF2000_SYS_AUDIO_PLL);
++	sf2000_update_bits(chip->sys + SF2000_SYS_AUDIO_GATE,
++		BIT(14), BIT(14));
++	sf2000_update_bits(chip->snd + SF2000_SND_CTL50,
++		GENMASK(5, 4) | BIT(10) | BIT(11), 0);
++	sf2000_update_bits(chip->snd + SF2000_SND_CTL04,
++		BIT(0) | BIT(8), BIT(0) | BIT(8));
+ 	writel(0x0000ff41, chip->snd + SF2000_SND_I2S_CTL);
+-	writel(0x008f0000, chip->snd + SF2000_SND_FADE);
++	writeb(SF2000_VOLUME_90, chip->snd + SF2000_SND_FADE + 2);
+ 	writel(lower_32_bits(runtime->dma_addr),
+ 		chip->snd + SF2000_SND_DMA_BASE);
+-	writel(bytes >> 4, chip->snd + SF2000_SND_DMA_SIZE);
+-	writel(0, chip->snd + SF2000_SND_DMA_POS);
++	sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
++		SF2000_DMA_CONFIG_MASK, SF2000_DMA_MONO_S16_LE);
++	writew(bytes >> 4, chip->snd + SF2000_SND_DMA_SIZE);
++	writew(runtime->period_size, chip->snd + SF2000_SND_PERIOD);
++	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
++	dev_info(chip->dev,
++		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",
++		&runtime->dma_addr, bytes, runtime->period_size,
++		readl(chip->snd + SF2000_SND_DMA_SIZE),
++		readl(chip->sys + SF2000_SYS_AUDIO_PLL));
+ 	return 0;
+ }
+ 
+@@ -206,8 +261,13 @@
+ 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+ 		sf2000_amp_enable(chip, false);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), 0);
++		sf2000_update_bits(chip->snd + SF2000_SND_CTL04, BIT(16), 0);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL0C, BIT(0), 0);
+-		sf2000_update_bits(chip->snd + SF2000_SND_CTL08, BIT(0), 0);
++		sf2000_update_bits(chip->snd + SF2000_SND_CTL08,
++			BIT(0) | BIT(8), 0);
++		sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
++			SF2000_DMA_PAUSE, 0);
++		writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 		spin_lock_irqsave(&chip->lock, flags);
+ 		chip->running = false;
+ 		spin_unlock_irqrestore(&chip->lock, flags);
+@@ -227,6 +287,7 @@
+ 	.prepare = sf2000_pcm_prepare,
+ 	.trigger = sf2000_pcm_trigger,
+ 	.pointer = sf2000_pcm_pointer,
++	.ack = sf2000_pcm_ack,
+ 	.mmap = snd_pcm_lib_default_mmap,
+ };
+ 
