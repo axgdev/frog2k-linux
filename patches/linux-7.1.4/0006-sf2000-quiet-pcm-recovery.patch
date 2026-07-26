@@ -1,0 +1,10 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -232,7 +232,7 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
+-	dev_info(chip->dev,
++	dev_info_once(chip->dev,
+ 		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",
+ 		&runtime->dma_addr, bytes, runtime->period_size,
+ 		readl(chip->snd + SF2000_SND_DMA_SIZE),

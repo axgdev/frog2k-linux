@@ -32,6 +32,13 @@ typedef unsigned long uintptr;
 #define GPIO_R_OUT 0xb88000f4u
 #define GPIO_R_DIR 0xb88000f8u
 #define MAPPING_REG 0xb8800220u
+#define SYSIO_CHIP_ID 0xb8800000u
+#define SYSIO_SCPU_SELECT 0xb8800074u
+#define SYSIO_SCPU_PLL_ENABLE 0xb880007cu
+#define SYSIO_SCPU_PLL_CONTROL 0xb8800380u
+#define HC1512_CHIP_ID 0x1512u
+#define SCPU_TARGET_MHZ 918u
+#define SCPU_PLL_MCTRL2 0x8153u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
 #define WDT_BOOT_USEC 8000000u
@@ -237,6 +244,74 @@ static void mmio_write32(uintptr addr, u32 value)
 static void mmio_write8(uintptr addr, u8 value)
 {
 	*(volatile u8 *)addr = value;
+}
+
+static void progress_mark(const char *name, u32 kind, u32 value);
+
+static u32 read_c0_count(void)
+{
+	u32 value;
+
+	__asm__ volatile("mfc0 %0, $9" : "=r"(value));
+	return value;
+}
+
+static void delay_clock_count_ticks(u32 ticks)
+{
+	u32 start = read_c0_count();
+
+	while ((u32)(read_c0_count() - start) < ticks)
+		;
+}
+
+static void set_scpu_clock_918(void)
+{
+	u32 reg074;
+	u32 reg07c;
+	u32 reg380;
+
+	if ((mmio_read32(SYSIO_CHIP_ID) >> 16) != HC1512_CHIP_ID)
+		return;
+
+	reg074 = mmio_read32(SYSIO_SCPU_SELECT);
+	reg07c = mmio_read32(SYSIO_SCPU_PLL_ENABLE);
+	reg380 = mmio_read32(SYSIO_SCPU_PLL_CONTROL);
+	progress_mark("loader-scpu-before-074", 0x42, reg074);
+	progress_mark("loader-scpu-before-07c", 0x42, reg07c);
+	progress_mark("loader-scpu-before-380", 0x42, reg380);
+
+	/*
+	 * This is the HC1512 sequence used by the vendor HCRTOS clock hook and
+	 * mufrog-commandc.  Establish it before Linux starts so CP0 Count has a
+	 * single, stable 459 MHz rate for the entire kernel lifetime.
+	 */
+	reg380 = (reg380 & 0x0000ffffu) | (SCPU_PLL_MCTRL2 << 16);
+	mmio_write32(SYSIO_SCPU_PLL_CONTROL, reg380);
+	/* This is at least 1 ms even if a warm boot already runs at 918 MHz. */
+	delay_clock_count_ticks(500000u);
+
+	reg074 = (reg074 & ~(7u << 8)) | (7u << 8);
+	mmio_write32(SYSIO_SCPU_SELECT, reg074);
+	reg07c |= 1u << 7;
+	mmio_write32(SYSIO_SCPU_PLL_ENABLE, reg07c);
+	reg074 |= 1u << 22;
+	mmio_write32(SYSIO_SCPU_SELECT, reg074);
+	/* The new 918 MHz clock makes CP0 Count run at 459 ticks/us. */
+	delay_clock_count_ticks(459u * 5000u);
+
+	progress_mark("loader-scpu-after-074", 0x42,
+		mmio_read32(SYSIO_SCPU_SELECT));
+	progress_mark("loader-scpu-after-07c", 0x42,
+		mmio_read32(SYSIO_SCPU_PLL_ENABLE));
+	progress_mark("loader-scpu-after-380", 0x42,
+		mmio_read32(SYSIO_SCPU_PLL_CONTROL));
+	uart_puts("linux-loader: SCPU 918MHz regs=");
+	uart_hex(mmio_read32(SYSIO_SCPU_SELECT));
+	uart_putc('/');
+	uart_hex(mmio_read32(SYSIO_SCPU_PLL_ENABLE));
+	uart_putc('/');
+	uart_hex(mmio_read32(SYSIO_SCPU_PLL_CONTROL));
+	uart_puts("\n");
 }
 
 static struct fatfs log_fs;
@@ -1404,6 +1479,7 @@ void linux_loader_main(void)
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);
 	bootlog_wdt_arm("loader-watchdog-armed");
+	set_scpu_clock_918();
 	write_status(0);
 	jump_to_kernel(entry, dtb_dest);
 

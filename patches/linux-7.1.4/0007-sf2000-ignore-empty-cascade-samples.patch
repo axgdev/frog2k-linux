@@ -1,0 +1,32 @@
+diff --git a/drivers/irqchip/irq-hichip-sysint.c b/drivers/irqchip/irq-hichip-sysint.c
+index f1113e1c7..df864466a 100644
+--- a/drivers/irqchip/irq-hichip-sysint.c
++++ b/drivers/irqchip/irq-hichip-sysint.c
+@@ -72,7 +72,6 @@ static void hichip_sysint_handle(struct irq_desc *desc)
+ 	struct hichip_sysint *intc = irq_desc_get_handler_data(desc);
+ 	struct irq_chip *chip = irq_desc_get_chip(desc);
+ 	u32 banks = DIV_ROUND_UP(intc->max_irqs, HC_SYSINT_BANK_BITS);
+-	bool handled = false;
+ 	u32 bank;
+ 
+ 	chained_irq_enter(chip, desc);
+@@ -102,12 +101,16 @@ static void hichip_sysint_handle(struct irq_desc *desc)
+ 			if (virq)
+ 				generic_handle_irq(virq);
+ 			pending &= ~BIT(bit);
+-			handled = true;
+ 		}
+ 	}
+ 
+-	if (!handled)
+-		handle_bad_irq(desc);
++	/*
++	 * The two aggregate EIRQ inputs are level signals.  A child can
++	 * deassert after the CPU samples Cause but before this handler samples
++	 * the SYSINT status registers.  That is a normal empty cascade, not an
++	 * unhandled CPU interrupt; handle_bad_irq() would emit a large false
++	 * diagnostic and needlessly stall this small system's console/logger.
++	 */
+ 
+ 	chained_irq_exit(chip, desc);
+ }

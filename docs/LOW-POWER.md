@@ -16,8 +16,9 @@ sequence and wake source have been recovered. Enabling `CONFIG_SUSPEND` alone
 does not solve this hardware contract.
 
 The CP0 Count clocksource runs at 459 MHz at the normal CPU clock. Vendor CPU
-selectors can change the CPU to 594, 396, 297, or 198 MHz, but a raw SYSIO
-write would also change the rate seen by Linux timekeeping. A Linux cpufreq
+selectors can change the CPU to 594, 396, 297, or 198 MHz from the loader's
+918 MHz performance profile, but a raw SYSIO write would also change the rate
+seen by Linux timekeeping. A Linux cpufreq
 driver must bracket the transition and update the MIPS clocksource and
 clockevent rates. Direct register writes from userspace would make timeouts and
 wall time incorrect.

@@ -1365,6 +1365,8 @@ smoke-linux-buildroot-asd:
 	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'new USB bus registered' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q '18818600.serial: ttyS0 .*irq = 17' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'unexpected IRQ' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage:

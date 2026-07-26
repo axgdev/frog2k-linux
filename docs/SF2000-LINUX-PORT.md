@@ -264,6 +264,10 @@ orderly path cannot complete.
 
 - The built-in controls are exposed through evdev and drive the diagnostic
   console. Applications should consume evdev rather than private GPIO state.
+- UART1 is SYSINT source 17. It must not be assigned directly to MIPS CPU IRQ
+  3, because IRQ 3 is one of the parent cascade lines for the SoC interrupt
+  controller; sharing those incompatible handlers caused intermittent
+  `unexpected IRQ # 3` reports under console traffic.
 - ALSA PCM playback is implemented for the SND0 coherent circular-DMA path at
   32 kHz, signed 16-bit mono. The vendor transfer routine establishes that
   SND0+0x5c is a byte count and that SND0+0x04 bit 16 must be asserted only
@@ -329,14 +333,17 @@ work should be measured from retained ticks or `loglinux.txt`, not inferred
 from the visual counter, because QEMU wall time and the CP0 guest clock are not
 the same quantity.
 
-The SF2000 boots HC1512 with SYSIO selector 0, the stock 594 MHz CPU profile,
-and the CP0 counter runs at the expected 297 MHz half-rate. An early QEMU-derived
-918 MHz assumption made Linux time run 1.545 times too quickly on hardware,
-which stretched each nominal 16.7 ms emulator frame to 25.8 ms of real time.
-Runtime frequency switching should not be added as a raw register write: a
-proper cpufreq/clocksource integration must update delay calibration and timer
-accounting across transitions. GE clock selection is independent and is already
-set to the measured fast profile.
+The bootloader normally leaves HC1512 on selector 0, the 594 MHz profile, whose
+CP0 counter runs at 297 MHz. Linux originally described that physical boot rate
+correctly, but 594 MHz does not leave enough CPU headroom for the heavier
+emulators. The ASD loader now applies the vendor-validated selector-7 digital
+PLL sequence for 918 MHz before entering the kernel, and the device tree
+describes the resulting stable 459 MHz CP0 half-rate. Doing this before Linux
+timekeeping starts avoids a discontinuity in `CLOCK_MONOTONIC`, delay
+calibration, and clock events. Future runtime frequency switching still needs a
+proper cpufreq/clocksource integration; it must not be implemented as an
+uncoordinated userspace register write. GE clock selection is independent and
+is already set to the measured fast profile.
 
 The SoC also contains video decode and additional audio blocks, but they do not
 yet have clean Linux drivers. They are future acceleration work, not part of
