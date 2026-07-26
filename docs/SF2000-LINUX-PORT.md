@@ -265,7 +265,11 @@ orderly path cannot complete.
 - The built-in controls are exposed through evdev and drive the diagnostic
   console. Applications should consume evdev rather than private GPIO state.
 - ALSA PCM playback is implemented for the SND0 coherent circular-DMA path at
-  32 kHz, signed 16-bit mono. QEMU captures the same guest DMA stream as WAV.
+  32 kHz, signed 16-bit mono. The vendor transfer routine establishes that
+  SND0+0x5c is a byte count and that SND0+0x04 bit 16 must be asserted only
+  after the ring is primed; the I2S/DMA enable bits alone leave the amplifier
+  emitting idle hiss without advancing the consumer. QEMU enforces this
+  ordering and captures the same guest DMA stream as WAV.
 - Both HC15 MUSB controllers enumerate as host controllers in Linux/QEMU, with
   vendor endpoint/FIFO layout, reset, PHY, ID override, session edge, and SYSINT
   sources represented.
@@ -325,11 +329,14 @@ work should be measured from retained ticks or `loglinux.txt`, not inferred
 from the visual counter, because QEMU wall time and the CP0 guest clock are not
 the same quantity.
 
-The device tree records the observed 918 MHz CPU clock and the CP0 counter runs
-at the expected half-rate. Runtime frequency switching should not be added as a
-raw register write: a proper cpufreq/clocksource integration must update delay
-calibration and timer accounting across transitions. GE clock selection is
-independent and is already set to the measured fast profile.
+The SF2000 boots HC1512 with SYSIO selector 0, the stock 594 MHz CPU profile,
+and the CP0 counter runs at the expected 297 MHz half-rate. An early QEMU-derived
+918 MHz assumption made Linux time run 1.545 times too quickly on hardware,
+which stretched each nominal 16.7 ms emulator frame to 25.8 ms of real time.
+Runtime frequency switching should not be added as a raw register write: a
+proper cpufreq/clocksource integration must update delay calibration and timer
+accounting across transitions. GE clock selection is independent and is already
+set to the measured fast profile.
 
 The SoC also contains video decode and additional audio blocks, but they do not
 yet have clean Linux drivers. They are future acceleration work, not part of

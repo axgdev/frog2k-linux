@@ -1,0 +1,29 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -225,7 +225,8 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
+ 		SF2000_DMA_CONFIG_MASK, SF2000_DMA_MONO_S16_LE);
+ 	writew(bytes >> 4, chip->snd + SF2000_SND_DMA_SIZE);
+-	writew(runtime->period_size, chip->snd + SF2000_SND_PERIOD);
++	writew(frames_to_bytes(runtime, runtime->period_size),
++		chip->snd + SF2000_SND_PERIOD);
+ 	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
+ 	dev_info(chip->dev,
+@@ -248,6 +249,16 @@ static int sf2000_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL08, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL0C, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), BIT(29));
++		/*
++		 * libauddrv primes the cyclic buffer before arming SND0+0x04
++		 * bit 16.  The I2S and DMA enable bits above do not start the
++		 * consumer on HC1512 by themselves; without this final arm the
++		 * amplifier only exposes its idle hiss and ALSA remains full.
++		 * ALSA issues START after start_threshold frames are present,
++		 * which gives us the same ordering as the vendor transfer path.
++		 */
++		sf2000_update_bits(chip->snd + SF2000_SND_CTL04,
++			BIT(16), BIT(16));
+ 		sf2000_amp_enable(chip, true);
+ 		mod_timer(&chip->timer, jiffies + 1);
+ 		return 0;

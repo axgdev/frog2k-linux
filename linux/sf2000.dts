@@ -50,7 +50,12 @@
 	cpu_clk: cpu-clock {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <918000000>;
+		/*
+		 * HC1512 SYSIO selector 0 is the SF2000 stock 594 MHz profile.
+		 * CP0 Count consequently runs at 297 MHz.  The old 918 MHz
+		 * value made Linux time advance 918/594 times too quickly.
+		 */
+		clock-frequency = <594000000>;
 	};
 
 	uart_clk: uart-clock {
