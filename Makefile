@@ -21,6 +21,7 @@ QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
 AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
+AUDIO_AVSYNC_TEST := $(BUILD_DIR)/hc15xx-avsync-test
 AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
 RETAINED_TEST := $(BUILD_DIR)/hc15xx-retained-test
 RETAINED_SRC := platform/hc15xx_retained.c
@@ -843,14 +844,24 @@ $(AUDIO_RESAMPLER_TEST): audio/hc15xx_resampler.c \
 	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
 		audio/hc15xx_resampler.c audio/test_hc15xx_resampler.c -o '$@'
 
+$(AUDIO_AVSYNC_TEST): audio/hc15xx_audio.c audio/hc15xx_audio.h \
+		audio/hc15xx_avsync.c audio/hc15xx_avsync.h \
+		audio/test_hc15xx_avsync.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
+		audio/hc15xx_audio.c audio/hc15xx_avsync.c \
+		audio/test_hc15xx_avsync.c -o '$@'
+
 $(RETAINED_TEST): platform/hc15xx_retained.c include/hc15xx_retained.h \
 		tests/hc15xx-retained-test.c
 	mkdir -p '$(dir $@)'
 	'$(HOSTCC)' -std=c11 -O2 -Wall -Wextra -Werror -Iinclude \
 		platform/hc15xx_retained.c tests/hc15xx-retained-test.c -o '$@'
 
-audio-test: $(AUDIO_TEST) $(AUDIO_RESAMPLER_TEST) $(RETAINED_TEST)
+audio-test: $(AUDIO_TEST) $(AUDIO_AVSYNC_TEST) $(AUDIO_RESAMPLER_TEST) \
+		$(RETAINED_TEST)
 	'$(AUDIO_TEST)'
+	'$(AUDIO_AVSYNC_TEST)'
 	'$(AUDIO_RESAMPLER_TEST)'
 	'$(RETAINED_TEST)'
 
