@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,19 +15,22 @@
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
 #define STANDBY_MARKER "/run/sf2000-display-standby"
-#define FRONTEND_ACTIVE_MARKER "/run/sf2000-frontend-active"
+#define PERFORMANCE_MARKER "/run/sf2000-performance-active"
+#define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define LOG_BUFFER_SIZE (512u * 1024u)
 #define LOG_FLUSH_BYTES (128u * 1024u)
 #define LOG_FLUSH_MS 2000u
-#define LOG_SYNC_MS 30000u
 #define FRONTEND_PROBE_MS 10000u
 #define INPUT_FDS 16u
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 static char log_buffer[LOG_BUFFER_SIZE];
 static size_t log_used;
+static size_t log_peak;
+static uint64_t log_dropped;
 static int log_fd = -1;
+static int storage_deferred;
 static long ticks_per_second = 100;
 
 static int stop_requested(void)
@@ -78,7 +80,7 @@ static int write_all(int fd, const void *data, size_t size)
 
 static int flush_log(void)
 {
-	if (log_fd < 0 || !log_used)
+	if (storage_deferred || log_fd < 0 || !log_used)
 		return 0;
 	if (write_all(log_fd, log_buffer, log_used) != 0)
 		return -1;
@@ -88,32 +90,29 @@ static int flush_log(void)
 
 static int sync_log(void)
 {
+	if (storage_deferred)
+		return 0;
 	if (flush_log() != 0)
 		return -1;
 	return log_fd < 0 ? 0 : fsync(log_fd);
 }
 
-static int frontend_active(void)
+static int performance_active(void)
 {
-	char text[24];
-	int fd = open(FRONTEND_ACTIVE_MARKER, O_RDONLY | O_CLOEXEC);
-	ssize_t got;
-	long pid;
+	return access(PERFORMANCE_MARKER, F_OK) == 0;
+}
 
-	if (fd < 0)
-		return 0;
-	got = read(fd, text, sizeof(text) - 1u);
-	close(fd);
-	if (got <= 0)
-		goto stale;
-	text[got] = 0;
-	if (sscanf(text, "%ld", &pid) != 1 || pid <= 1)
-		goto stale;
-	if (kill((pid_t)pid, 0) == 0 || errno == EPERM)
-		return 1;
-stale:
-	(void)unlink(FRONTEND_ACTIVE_MARKER);
-	return 0;
+static void set_performance_ready(int ready)
+{
+	if (ready) {
+		int fd = open(PERFORMANCE_READY_MARKER,
+			O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+
+		if (fd >= 0)
+			close(fd);
+	} else {
+		(void)unlink(PERFORMANCE_READY_MARKER);
+	}
 }
 
 static void append_bytes(const char *text, size_t length)
@@ -121,26 +120,35 @@ static void append_bytes(const char *text, size_t length)
 	if (!length)
 		return;
 	if (length > sizeof(log_buffer)) {
-		if (log_fd >= 0) {
+		if (!storage_deferred && log_fd >= 0) {
 			(void)flush_log();
 			(void)write_all(log_fd, text, length);
+		} else {
+			log_dropped += length - sizeof(log_buffer);
+			memcpy(log_buffer, text + length - sizeof(log_buffer),
+				sizeof(log_buffer));
+			log_used = sizeof(log_buffer);
+			log_peak = log_used;
 		}
 		return;
 	}
 	if (log_used + length > sizeof(log_buffer)) {
-		if (log_fd >= 0)
+		if (!storage_deferred && log_fd >= 0)
 			(void)flush_log();
-		else {
-			/* Keep the newest complete pre-mount profiling window. */
+		if (log_used + length > sizeof(log_buffer)) {
+			/* Keep the newest bounded RAM-journal window. */
 			size_t discard = log_used + length - sizeof(log_buffer);
 
 			memmove(log_buffer, log_buffer + discard, log_used - discard);
 			log_used -= discard;
+			log_dropped += discard;
 		}
 	}
 	memcpy(log_buffer + log_used, text, length);
 	log_used += length;
-	if (log_used >= LOG_FLUSH_BYTES)
+	if (log_used > log_peak)
+		log_peak = log_used;
+	if (!storage_deferred && log_used >= LOG_FLUSH_BYTES)
 		(void)flush_log();
 }
 
@@ -168,13 +176,20 @@ static void append_record(const char *source, const char *payload,
 
 static void kmsg_line(const char *message)
 {
-	static const char prefix[] = "<6>sf2000-logd: ";
+	char line[256];
 	int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	int length;
 
 	if (fd < 0)
 		return;
-	(void)write_all(fd, prefix, sizeof(prefix) - 1u);
-	(void)write_all(fd, message, strlen(message));
+	length = snprintf(line, sizeof(line), "<6>sf2000-logd: %s", message);
+	if (length > 0) {
+		size_t bytes = (size_t)length;
+
+		if (bytes >= sizeof(line))
+			bytes = sizeof(line) - 1u;
+		(void)write_all(fd, line, bytes);
+	}
 	close(fd);
 }
 
@@ -346,6 +361,7 @@ int main(void)
 	while (!stop_requested()) {
 		ssize_t got;
 		uint64_t now;
+		int active;
 
 		if (access(STANDBY_MARKER, F_OK) == 0) {
 			/* Finish outstanding FAT writes, then avoid periodic SD traffic. */
@@ -354,13 +370,47 @@ int main(void)
 			last_flush = last_probe = last_sync = monotonic_us();
 			continue;
 		}
+		active = performance_active();
+		if (active && !storage_deferred) {
+			/*
+			 * Establish a clean storage boundary before the browser becomes
+			 * interactive.  This one transition sync prevents old dirty log
+			 * pages from being written back later during emulation.
+			 */
+			if (sync_log() != 0)
+				kmsg_line("pre-journal sync failed\n");
+			storage_deferred = 1;
+			log_peak = log_used;
+			log_dropped = 0;
+			append_record("logd", "RAM journal begin: FAT writes deferred", 38);
+			set_performance_ready(1);
+			kmsg_line("RAM journal begin: FAT writes deferred\n");
+		} else if (!active && storage_deferred) {
+			char summary[160];
+			int length = snprintf(summary, sizeof(summary),
+				"RAM journal end: bytes=%lu peak=%lu dropped=%llu\n",
+				(unsigned long)log_used, (unsigned long)log_peak,
+				(unsigned long long)log_dropped);
+
+			if (length > 0)
+				append_record("logd", summary, (size_t)length);
+			storage_deferred = 0;
+			if (length > 0)
+				kmsg_line(summary);
+			if (flush_log() != 0)
+				kmsg_line("RAM journal drain failed\n");
+			else
+				kmsg_line("RAM journal drained after frontend exit\n");
+			set_performance_ready(0);
+			last_flush = now = monotonic_us();
+		}
 		if (kmsg_fd >= 0) {
 			while ((got = read(kmsg_fd, kmsg, sizeof(kmsg))) > 0)
 				append_record("kmsg", kmsg, (size_t)got);
 		}
 		drain_input_fds(input_fds);
 		now = monotonic_us();
-		if (frontend_active()) {
+		if (active) {
 			/*
 			 * Emulator ROM reads and audio playback share the single MMC
 			 * channel with this logger.  Detailed /proc snapshots followed by
@@ -386,14 +436,13 @@ int main(void)
 			append_record("heartbeat", "alive", 5);
 			last_probe = now;
 		}
-		if (log_used >= LOG_FLUSH_BYTES ||
-				now - last_flush >= LOG_FLUSH_MS * 1000u) {
+		if (!active && (log_used >= LOG_FLUSH_BYTES ||
+				now - last_flush >= LOG_FLUSH_MS * 1000u)) {
 			if (flush_log() != 0)
 				kmsg_line("persistent log flush failed\n");
 			last_flush = now;
 		}
-		if (now - last_sync >=
-				(frontend_active() ? LOG_SYNC_MS : LOG_FLUSH_MS) * 1000u) {
+		if (!active && now - last_sync >= LOG_FLUSH_MS * 1000u) {
 			if (sync_log() != 0)
 				kmsg_line("persistent log sync failed\n");
 			last_sync = now;
@@ -403,6 +452,9 @@ int main(void)
 
 	append_record("logd", "--- SF2000 Linux logger shutdown ---",
 		strlen("--- SF2000 Linux logger shutdown ---"));
+	/* A clean system shutdown is the final safe drain budget. */
+	storage_deferred = 0;
+	set_performance_ready(0);
 	(void)sync_log();
 	for (i = 0; i < INPUT_FDS; i++)
 		if (input_fds[i] >= 0)

@@ -256,16 +256,21 @@ The production mount service is a small static bFLT at
 hot path, retries the first two partitions and raw card, mounts VFAT with
 `noatime`, and publishes `/run/sf2000-storage-mounted`. `sf2000-logd` buffers
 early records in RAM, appends `loglinux.txt` after mount, and uses bounded
-periodic flushes. Browser and emulator processes publish a PID-validated
-activity marker before ROM loading. While it is live, the logger continues to
-drain kernel messages but replaces its large `/proc` snapshots with a
-low-rate heartbeat, writes buffered records without a synchronous FAT
-barrier, and performs a durable sync every 30 seconds. This is necessary
-because the logger and ROM loader share one MMC channel: the former two-second
-snapshot-plus-fsync cycle reproducibly intercepted gpSP's fourth 1 MiB ROM
-cache read, and the same storage stalls produced periodic ALSA underruns.
-Detailed two-second profiling and durable flushes resume automatically after
-the marker owner exits; stale markers are rejected by PID liveness.
+periodic flushes while the system is idle.
+
+Before launching the browser, `sf2000-powerd` creates a performance request
+and waits for `sf2000-logd` to acknowledge it. The logger first synchronizes
+all earlier records, switches to a bounded 512 KiB RAM journal, and only then
+acknowledges the request. It continues draining kernel and input messages and
+records a low-rate heartbeat, but performs no FAT write or `fsync` until the
+browser and selected emulator have exited. It then records journal byte, peak,
+and dropped-byte counters and drains the journal. The supervisor owns the
+request lifetime, so it is released even when a child exits with an error.
+This is necessary because the logger and ROM loader share one MMC channel:
+the former two-second snapshot-plus-fsync cycle reproducibly intercepted
+gpSP's fourth 1 MiB ROM cache read, and the same storage stalls produced
+periodic ALSA underruns. Detailed two-second profiling and durable flushes
+resume automatically afterward.
 
 An abrupt watchdog reset can leave the FAT dirty even after all payload data
 was flushed. This is distinct from the fixed DMA corruption: the card remains

@@ -26,6 +26,8 @@
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #define FRONTEND_PATH "/usr/bin/sf2000-frontend"
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
+#define PERFORMANCE_MARKER "/run/sf2000-performance-active"
+#define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
 #define SCREEN_PID_PATH "/run/sf2000-screen.pid"
 #define SCREEN_PAUSED_MARKER "/run/sf2000-screen-paused"
 #define BATTERY_RATE_MIN_MS 300000u
@@ -240,6 +242,20 @@ static void run_frontend(void)
 
 	log_line("sf2000-powerd: frontend launch START+R\n");
 	(void)unlink(FRONTEND_READY_MARKER);
+	(void)unlink(PERFORMANCE_READY_MARKER);
+	{
+		int marker = open(PERFORMANCE_MARKER,
+			O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+		unsigned attempts;
+
+		if (marker >= 0)
+			close(marker);
+		for (attempts = 0; attempts < 100u &&
+				access(PERFORMANCE_READY_MARKER, F_OK) != 0; attempts++)
+			sleep_ms(10);
+		if (access(PERFORMANCE_READY_MARKER, F_OK) != 0)
+			log_line("sf2000-powerd: performance journal acknowledgement timeout\n");
+	}
 	backlight_set(0);
 	if (pause_screen() < 0)
 		log_line("sf2000-powerd: frontend screen stop failed\n");
@@ -279,6 +295,7 @@ static void run_frontend(void)
 		}
 	}
 	backlight_set(0);
+	(void)unlink(PERFORMANCE_MARKER);
 	(void)unlink(FRONTEND_READY_MARKER);
 	if (resume_screen() < 0)
 		log_line("sf2000-powerd: frontend screen resume failed\n");

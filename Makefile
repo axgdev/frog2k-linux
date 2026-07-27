@@ -1348,6 +1348,10 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
+	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1374,6 +1378,10 @@ run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 
 smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: load ROM cache 4/4' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-gpsp.log

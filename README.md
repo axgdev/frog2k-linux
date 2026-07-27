@@ -101,10 +101,19 @@ the 100 Hz monotonic tick, monotonic microseconds, process elapsed ticks, and
 logger user/system CPU ticks. It drains `/dev/kmsg`, records input events and
 USB/input topology changes, and samples CPU, memory, interrupt, uptime, load,
 and VM counters from `/proc` every two seconds. A 512 KiB RAM buffer captures
-the pre-mount boot and is committed once VFAT is ready; later data is committed
-after 8 KiB or two seconds, whichever occurs first. Storage smoke targets
-retain explicit destructive/readback coverage for development, but normal
-device boots do not create a recurring test file.
+the pre-mount boot and is committed once VFAT is ready; normal idle data is
+committed after 128 KiB or two seconds, whichever occurs first.
+
+The launcher uses a request/acknowledgement handshake with the logger before
+starting the browser. The acknowledgement is published only after prior log
+data has been synchronized. Until the browser and any selected emulator exit,
+new kernel, input, heartbeat, and performance records stay in the bounded RAM
+journal: the logger issues neither FAT writes nor `fsync`. It then records the
+journal byte, peak, and dropped-byte counters and drains the complete journal.
+The supervisor owns this lifetime, so clean exit, core failure, and browser
+failure all release it. Storage smoke targets retain explicit
+destructive/readback coverage for development, but normal device boots do not
+create a recurring test file.
 
 `smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
 the screen service's ready marker and rejects data-bus faults.
