@@ -38,7 +38,7 @@ void hc15xx_audio_init(struct hc15xx_audio *audio,
 void hc15xx_audio_clock_reset(struct hc15xx_audio *audio);
 void hc15xx_audio_configure_output(struct hc15xx_audio *audio);
 int hc15xx_audio_configure_ring(struct hc15xx_audio *audio,
-	uint32_t dma_address, uint32_t bytes, uint32_t period_bytes);
+	uint32_t dma_address, uint32_t bytes, uint32_t period_frames);
 void hc15xx_audio_set_volume(struct hc15xx_audio *audio, uint8_t volume);
 void hc15xx_audio_start(struct hc15xx_audio *audio);
 void hc15xx_audio_stop(struct hc15xx_audio *audio);

@@ -69,12 +69,12 @@ void hc15xx_audio_configure_output(struct hc15xx_audio *audio)
 }
 
 int hc15xx_audio_configure_ring(struct hc15xx_audio *audio,
-	uint32_t dma_address, uint32_t bytes, uint32_t period_bytes)
+	uint32_t dma_address, uint32_t bytes, uint32_t period_frames)
 {
 	uint32_t config;
 
 	if (!bytes || (bytes & 15) || bytes > UINT32_C(0xffff0) ||
-	    !period_bytes || period_bytes > UINT32_C(0xffff))
+	    !period_frames || period_frames > UINT32_C(0xffff))
 		return -1;
 	audio->ring_bytes = bytes;
 	audio->target = 0;
@@ -88,7 +88,7 @@ int hc15xx_audio_configure_ring(struct hc15xx_audio *audio,
 	wr(audio, SND(0x34), (rd(audio, SND(0x34)) & UINT32_C(0xffff0000)) |
 		(bytes >> 4));
 	wr(audio, SND(0x5c), (rd(audio, SND(0x5c)) & UINT32_C(0xffff0000)) |
-		period_bytes);
+		period_frames);
 	wr(audio, SND(0x38), 0);
 	return 0;
 }

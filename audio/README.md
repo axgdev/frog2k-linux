@@ -10,6 +10,10 @@ volume, cyclic DMA setup, producer publication, underrun restart, interrupt
 acknowledgement, start, and stop. The register sequences were recovered from
 the SF2000 vendor archive rather than guessed.
 
+DMA cursors and ring length use 16-byte units, while the period register uses
+PCM frames. This mixed-unit contract follows `i2so_platform_hw_params`
+exactly.
+
 One non-obvious hardware rule is essential: the two 16-byte DMA cursors have
 no separate full flag, so equal cursors mean empty. The vendor driver reserves
 64 bytes (128 in its mode 2). The source core preserves that guard and later

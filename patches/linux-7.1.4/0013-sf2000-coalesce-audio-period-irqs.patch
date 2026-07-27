@@ -1,0 +1,43 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -221,11 +221,27 @@ static irqreturn_t sf2000_pcm_irq(int irq, void *data)
+ {
+ 	struct sf2000_pcm *chip = data;
+ 	struct snd_pcm_substream *substream = READ_ONCE(chip->substream);
++	snd_pcm_uframes_t period;
++	bool elapsed = false;
+ 
+ 	(void)irq;
+ 	if (!sf2000_pcm_ack_events(chip))
+ 		return IRQ_NONE;
+-	if (READ_ONCE(chip->running) && substream)
++	/*
++	 * SND0 source 5 reports FIFO/service events more often than ALSA
++	 * periods.  Notify ALSA only after the DMA consumer crosses an actual
++	 * period; treating every service IRQ as period completion produces
++	 * false EPIPE recovery loops on physical HC1512.
++	 */
++	if (READ_ONCE(chip->running) && substream) {
++		period = sf2000_pcm_pointer(substream) /
++			substream->runtime->period_size;
++		if (period != READ_ONCE(chip->last_period)) {
++			WRITE_ONCE(chip->last_period, period);
++			elapsed = true;
++		}
++	}
++	if (elapsed)
+ 		snd_pcm_period_elapsed(substream);
+ 	return IRQ_HANDLED;
+ }
+@@ -377,6 +391,9 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 		SF2000_DMA_CONFIG_MASK, SF2000_DMA_MONO_S16_LE);
+ 	writew(bytes >> 4, chip->snd + SF2000_SND_DMA_SIZE);
+-	writew(frames_to_bytes(runtime, runtime->period_size),
+-		chip->snd + SF2000_SND_PERIOD);
++	/*
++	 * libauddrv writes params->period_size directly: this register is in
++	 * PCM frames, unlike the byte-addressed DMA cursors.
++	 */
++	writew(runtime->period_size, chip->snd + SF2000_SND_PERIOD);
+ 	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
