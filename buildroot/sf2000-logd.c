@@ -16,12 +16,9 @@
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
 #define STANDBY_MARKER "/run/sf2000-display-standby"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
-#define TEST_TMP_PATH "/mnt/sd/.sf2000-storage-test.tmp"
-#define TEST_PATH "/mnt/sd/sf2000-storage-test.bin"
 #define LOG_BUFFER_SIZE (512u * 1024u)
 #define LOG_FLUSH_BYTES 8192u
 #define LOG_FLUSH_MS 2000u
-#define STORAGE_TEST_BYTES (256u * 1024u)
 #define INPUT_FDS 16u
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -145,101 +142,6 @@ static void kmsg_line(const char *message)
 	(void)write_all(fd, prefix, sizeof(prefix) - 1u);
 	(void)write_all(fd, message, strlen(message));
 	close(fd);
-}
-
-static uint32_t pattern_word(unsigned offset)
-{
-	uint32_t x = 0x2390f00du ^ offset;
-
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-	return x;
-}
-
-static uint32_t hash_bytes(uint32_t hash, const uint8_t *data, size_t size)
-{
-	while (size--) {
-		hash ^= *data++;
-		hash *= 16777619u;
-	}
-	return hash;
-}
-
-static int storage_integrity_test(char *result, size_t result_size)
-{
-	uint32_t words[1024];
-	uint32_t write_hash = 2166136261u;
-	uint32_t read_hash = 2166136261u;
-	unsigned offset = 0;
-	int fd;
-
-	fd = open(TEST_TMP_PATH, O_CREAT | O_TRUNC | O_RDWR | O_CLOEXEC, 0644);
-	if (fd < 0)
-		goto fail;
-	for (offset = 0; offset < STORAGE_TEST_BYTES; offset += sizeof(words)) {
-		unsigned i;
-
-		for (i = 0; i < ARRAY_SIZE(words); i++)
-			words[i] = pattern_word(offset + i * sizeof(words[i]));
-		write_hash = hash_bytes(write_hash, (const uint8_t *)words,
-			sizeof(words));
-		if (write_all(fd, words, sizeof(words)) != 0)
-			goto fail_close;
-	}
-	if (fsync(fd) != 0)
-		goto fail_close;
-	if (close(fd) != 0) {
-		fd = -1;
-		goto fail_unlink;
-	}
-	fd = open(TEST_TMP_PATH, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		goto fail_unlink;
-	for (offset = 0; offset < STORAGE_TEST_BYTES; offset += sizeof(words)) {
-		size_t received = 0;
-
-		while (received < sizeof(words)) {
-			ssize_t got = read(fd, (uint8_t *)words + received,
-				sizeof(words) - received);
-
-			if (got < 0 && errno == EINTR)
-				continue;
-			if (got <= 0)
-				goto fail_close;
-			received += (size_t)got;
-		}
-		read_hash = hash_bytes(read_hash, (const uint8_t *)words,
-			sizeof(words));
-	}
-	close(fd);
-	if (write_hash != read_hash) {
-		errno = EIO;
-		goto fail_unlink;
-	}
-	if (rename(TEST_TMP_PATH, TEST_PATH) != 0)
-		goto fail_unlink;
-	/* Persist the FAT directory entry as well as the already-fsynced data. */
-	sync();
-	snprintf(result, result_size,
-		"storage-test=pass bytes=%u hash=%08x path=%s",
-		STORAGE_TEST_BYTES, write_hash, TEST_PATH);
-	return 0;
-
-fail_close:
-	{
-		int saved_errno = errno;
-
-		close(fd);
-		errno = saved_errno;
-	}
-fail_unlink:
-	(void)unlink(TEST_TMP_PATH);
-fail:
-	snprintf(result, result_size,
-		"storage-test=fail errno=%d offset=%u write_hash=%08x read_hash=%08x",
-		errno, offset, write_hash, read_hash);
-	return -1;
 }
 
 static void append_file_text(char *snapshot, size_t snapshot_size,
@@ -373,7 +275,6 @@ int main(void)
 	char kmsg[2048];
 	char topology[2048] = "";
 	char previous_topology[2048] = "";
-	char result[256];
 	uint64_t last_flush;
 	uint64_t last_probe;
 	int input_fds[INPUT_FDS];
@@ -403,11 +304,7 @@ int main(void)
 	}
 	append_record("logd", "--- SF2000 Linux storage mounted ---",
 		strlen("--- SF2000 Linux storage mounted ---"));
-	(void)storage_integrity_test(result, sizeof(result));
-	append_record("storage", result, strlen(result));
 	(void)flush_log();
-	kmsg_line(result);
-	kmsg_line("\n");
 
 	last_flush = last_probe = monotonic_us();
 

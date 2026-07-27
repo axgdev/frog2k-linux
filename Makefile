@@ -1316,10 +1316,12 @@ smoke-linux-frontend: run-linux-frontend
 	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-frontend: audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -q 'storage-test=' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 
 run-linux-reboot: qemu linux-rom-sd

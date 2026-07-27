@@ -95,16 +95,16 @@ then verifies the same signature in QEMU's SD image. Linux QEMU runs default
 to the MIPS32r1 `4Km` fixed-mapping CPU model; `4Kc` models an R4000-style TLB
 and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 
-Normal Buildroot boots keep the detected VFAT card mounted at `/mnt/sd` and
-run a 256 KiB write, `fsync`, reopen, read, and checksum test. The
+Normal Buildroot boots keep the detected VFAT card mounted at `/mnt/sd`. The
 `sf2000-logd` service appends `/loglinux.txt` on that card. Every record carries
 the 100 Hz monotonic tick, monotonic microseconds, process elapsed ticks, and
 logger user/system CPU ticks. It drains `/dev/kmsg`, records input events and
 USB/input topology changes, and samples CPU, memory, interrupt, uptime, load,
 and VM counters from `/proc` every two seconds. A 512 KiB RAM buffer captures
 the pre-mount boot and is committed once VFAT is ready; later data is committed
-after 8 KiB or two seconds, whichever occurs first. The integrity payload is retained as
-`/sf2000-storage-test.bin` so persistence can also be checked after shutdown.
+after 8 KiB or two seconds, whichever occurs first. Storage smoke targets
+retain explicit destructive/readback coverage for development, but normal
+device boots do not create a recurring test file.
 
 `smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
 the screen service's ready marker and rejects data-bus faults.
