@@ -183,6 +183,7 @@ BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
 GPSP_TEST_SD := $(BUILD_DIR)/gpsp-test.sd.img
 GPSP_TEST_ROM := $(BUILD_DIR)/gpsp-test.gba
 GPSP_TEST_ROM_TOOL := $(BUILD_DIR)/mkgabatest
+FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
@@ -237,6 +238,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
 	run-linux-gpsp smoke-linux-gpsp \
+	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
 	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
@@ -1339,6 +1341,14 @@ $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
 	mcopy -i '$@' '$(BROWSER_TEST_ROM)' ::/GB/TEST.GB
 	mcopy -i '$@' Makefile ::/README.TXT
 
+$(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/GB ::/GBA
+	mcopy -i '$@' '$(BROWSER_TEST_ROM)' ::/GB/TEST.GB
+	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
+
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
@@ -1408,6 +1418,38 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'source=frontend-metric mode event mode=normal audio=enabled pacing=core full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
+
+run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
+		$(FRONTEND_LIFECYCLE_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
+		printf 'sendkey ret-q 500\n'; sleep 3; \
+		printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(FRONTEND_LIFECYCLE_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log \
+		> '$(BUILD_DIR)'/logs/linux-frontend-lifecycle.console 2>&1
+	mcopy -o -i '$(FRONTEND_LIFECYCLE_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle-loglinux.txt
+
+smoke-linux-frontend-lifecycle: run-linux-frontend-lifecycle
+	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
+	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
+	test "$$(grep -c 'sf2000-frontend: returned cleanly' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log)" -eq 2
+	grep -Eq 'source=frontend-metric audio metric .*sampled_present_us=[0-9]+ .*presenter=GE' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle-loglinux.txt
+	! grep -Eq 'unaligned instruction access|frontend signal=|fatal signal=|reloc outside program|Kernel panic' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
 
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'

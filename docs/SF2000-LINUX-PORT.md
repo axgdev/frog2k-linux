@@ -325,6 +325,19 @@ orderly path cannot complete.
   SELECT+R provides a reversible uncapped, audio-suppressed, no-frameskip
   measurement window. Its `mode=uncapped`, `fps_milli`, and `suppressed`
   records measure real device headroom without changing an emulator core.
+  Log135 measured gpSP at 76.7--127.6 FPS across the two uncapped runs, with
+  about 85--93 FPS in the sustained demanding section. The remaining normal
+  mode budget is therefore dominated by shared host work rather than an
+  absolute dynarec ceiling. Tightly packed RGB565 frames now use one
+  whole-frame copy instead of 160 row copies, stereo resampling crosses the
+  portable module boundary once per batch instead of once per sample, and a
+  sampled `sampled_present_us` field separates GE presentation cost from core
+  execution without placing timing syscalls on every frame.
+  The same log exposed repeated Gambatte unaligned-instruction exceptions
+  after switching cores. The frontend's 256 KiB NOMMU bump allocator never
+  reclaimed a core's C++ allocations. It has been replaced by reclaimable
+  anonymous mappings, covered by a host allocation stress test and a combined
+  gpSP-exit-Gambatte-exit QEMU lifecycle gate.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst

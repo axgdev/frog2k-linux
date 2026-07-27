@@ -8,7 +8,10 @@
 int main(void)
 {
 	struct hc15xx_resampler state;
+	struct hc15xx_resampler batch_state;
 	int16_t output;
+	int16_t stereo[32768 * 2];
+	int16_t batch_output[32768];
 	unsigned produced = 0;
 	unsigned i;
 
@@ -28,6 +31,15 @@ int main(void)
 		produced += (unsigned)emitted;
 	}
 	assert(produced == 32000);
+	assert(hc15xx_resampler_init(&batch_state, 32768, 32000) == 0);
+	for (i = 0; i < 32768; ++i) {
+		stereo[i * 2] = (int16_t)(i & 0x7fff);
+		stereo[i * 2 + 1] = (int16_t)(i & 0x7fff);
+	}
+	assert(hc15xx_resampler_process_stereo_s16(&batch_state, stereo,
+		32768, batch_output, 32768) == 32000);
+	assert(hc15xx_resampler_process_stereo_s16(&batch_state, stereo,
+		1, batch_output, 0) == 0);
 	assert(hc15xx_resampler_init(&state, 16000, 32000) < 0);
 	puts("hc15xx resampler tests: PASS");
 	return 0;
