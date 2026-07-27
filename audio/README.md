@@ -10,6 +10,13 @@ volume, cyclic DMA setup, producer publication, underrun restart, interrupt
 acknowledgement, start, and stop. The register sequences were recovered from
 the SF2000 vendor archive rather than guessed.
 
+The same source now covers both hardware system-time counters from the
+vendor's `avsync_*` family: 45 kHz tick conversion, tick and millisecond
+access, divisor programming, and independent pause/resume bits. These are
+OS-neutral building blocks for future hardware-decoded media and composite
+A/V synchronization; emulator frame pacing remains tied to the Linux
+monotonic clock.
+
 DMA cursors and ring length use 16-byte units, while the period register uses
 PCM frames. This mixed-unit contract follows `i2so_platform_hw_params`
 exactly.

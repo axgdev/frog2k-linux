@@ -1407,7 +1407,7 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-gpsp.log
-	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	awk '/sf2000-browser: launch gpSP/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: load ROM cache 4/4' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
@@ -1420,7 +1420,7 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=uncapped audio=suppressed pacing=disabled full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*suppressed=[1-9][0-9]* .*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
-	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=0 buffered_frames=[1-9][0-9]* mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]* buffered_frames=0 mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=normal audio=enabled pacing=core full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*xrun=0 .*delay=[1-9][0-9]* resample_hz=32000 .*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt

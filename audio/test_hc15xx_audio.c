@@ -64,5 +64,18 @@ int main(void)
 	assert(hc15xx_audio_service_ring(&audio));
 	assert((fake.regs[0x38 / 4] & 0xffff) == 0);
 	assert(fake.barriers >= 2);
+
+	/* libauddrv's two hardware STCs share SND0 control at 0xb0. */
+	hc15xx_audio_set_stc_divisor(&audio, HC15XX_STC0, 0x1234);
+	hc15xx_audio_pause_stc(&audio, HC15XX_STC0, 1);
+	hc15xx_audio_pause_stc(&audio, HC15XX_STC1, 1);
+	assert(fake.regs[0xb0 / 4] == 0x00031234);
+	hc15xx_audio_set_stc_ms(&audio, HC15XX_STC0, 1000);
+	hc15xx_audio_set_stc_tick(&audio, HC15XX_STC1, 90000);
+	assert(hc15xx_audio_stc_tick(&audio, HC15XX_STC0) == 45000);
+	assert(hc15xx_audio_stc_ms(&audio, HC15XX_STC1) == 2000);
+	assert(hc15xx_audio_stc_tick_to_ms(UINT32_MAX) == 0);
+	hc15xx_audio_pause_stc(&audio, HC15XX_STC0, 0);
+	assert(fake.regs[0xb0 / 4] == 0x00021234);
 	return 0;
 }

@@ -6,7 +6,7 @@ The current status is:
 
 | Vendor archive | Current source replacement | Status |
 |---|---|---|
-| `libauddrv.a` | `audio/hc15xx_audio.c`, `audio/hc15xx_resampler.c`, plus the ALSA platform driver | SF2000 playback path complete: APLL, PWM DAC, mono I2S, volume, DMA ring, IRQ, underrun, amplifier routing, and fixed-point linear stereo-to-mono conversion for the native 32 kHz sink. Both library components are allocation-free and OS-neutral. Not archive-wide parity: capture I2S, PDM/TDM/PCM, SPDIF/HDMI, decoder/sink, AV sync, EQ and DRC remain outside the handheld playback requirement. |
+| `libauddrv.a` | `audio/hc15xx_audio.c`, `audio/hc15xx_resampler.c`, plus the ALSA platform driver | SF2000 playback path complete: APLL, PWM DAC, mono I2S, volume, DMA ring, IRQ, underrun, amplifier routing, fixed-point linear stereo-to-mono conversion, and both 45 kHz hardware STCs. The library components are allocation-free and OS-neutral. Not archive-wide parity: capture I2S, PDM/TDM/PCM, SPDIF/HDMI, decoder/sink, higher-level AV-sync policy, EQ and DRC remain outside the handheld playback requirement. |
 | `libge.a` | `ge/` plus the Linux GE driver | Supported vendor HC15xx compositor path is source-compatible and node-tested against the archive. Flags that the vendor public header itself marks unsupported remain rejected. It is not a binary ABI clone of every private helper. |
 | `libmmchosthc15.a` | Linux `hc15_mmc` host driver | Functional SD command, PIO fallback and aligned DMA read/write support, including safe FAT writeback. It is a Linux MMC host implementation, not an HCRTOS archive ABI clone or a replacement for the separate filesystem/protocol `libmmc.a`. |
 | `lslibauddrv.a` | — | No archive with this name exists in the supplied SDK. The available related archive is `libauddrv.a`. |
@@ -31,6 +31,9 @@ The working HCRTOS configuration selects the SD display, chooses PAL or NTSC,
 and registers CVBS DAC 0. Consequently HDMI audio/video support is not a
 dependency for composite output; a Linux CVBS/display-engine adapter is the
 relevant remaining output driver.
+
+The complete archive-to-hardware classification and implementation order lives
+in [`HARDWARE-ACCELERATION.md`](HARDWARE-ACCELERATION.md).
 
 USB and networking vendor libraries are intentionally low priority on SF2000:
 the external connector is not wired as a normal USB data port.

@@ -30,6 +30,12 @@ struct hc15xx_audio {
 enum {
 	HC15XX_AUDIO_RATE = 32000,
 	HC15XX_AUDIO_RING_GUARD = 64,
+	HC15XX_STC_TICKS_PER_MS = 45,
+};
+
+enum hc15xx_stc_id {
+	HC15XX_STC0 = 0,
+	HC15XX_STC1 = 1,
 };
 
 void hc15xx_audio_init(struct hc15xx_audio *audio,
@@ -47,5 +53,19 @@ void hc15xx_audio_set_target(struct hc15xx_audio *audio,
 int hc15xx_audio_service_ring(struct hc15xx_audio *audio);
 int hc15xx_audio_ack_irq(struct hc15xx_audio *audio);
 uint32_t hc15xx_audio_consumer(const struct hc15xx_audio *audio);
+uint32_t hc15xx_audio_stc_tick(const struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id);
+uint32_t hc15xx_audio_stc_ms(const struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id);
+void hc15xx_audio_set_stc_tick(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint32_t tick);
+void hc15xx_audio_set_stc_ms(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint32_t ms);
+void hc15xx_audio_set_stc_divisor(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint16_t divisor);
+void hc15xx_audio_pause_stc(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, int resume);
+uint32_t hc15xx_audio_ms_to_stc_tick(uint32_t ms);
+uint32_t hc15xx_audio_stc_tick_to_ms(uint32_t tick);
 
 #endif

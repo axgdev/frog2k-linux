@@ -56,6 +56,9 @@ are documented in
 The disposable build layout and the reason the uClinux Buildroot toolchain is
 still required are documented in
 [`docs/BUILD-LAYOUT.md`](docs/BUILD-LAYOUT.md).
+The vendor archive classification, measured acceleration priorities, and
+module rules are documented in
+[`docs/HARDWARE-ACCELERATION.md`](docs/HARDWARE-ACCELERATION.md).
 
 ## Commands
 

@@ -360,9 +360,12 @@ orderly path cannot complete.
   source. The frontend fences that copy before returning from the libretro
   callback, then submits asynchronous scaling from the snapshot. This removes
   4.4 MiB/s of CPU frame copies at 60 Hz without extending the callback
-  buffer's lifetime. Uncapped mode retains CPU-buffered two-source delivery to
-  overlap GE with the core. `ge_stage_frames` and `buffered_frames` metrics
-  gate both paths in QEMU.
+  buffer's lifetime. Log139 then validated this path at roughly 0.56--0.72 ms
+  for gpSP versus the earlier 1.6--2.1 ms CPU-buffered path, with zero xruns.
+  Hardware staging is consequently used in both paced and uncapped modes: the
+  staging copy is fenced to honor the callback lifetime, while the following
+  stretch remains asynchronous and overlaps the core. `ge_stage_frames` and
+  `buffered_frames` metrics gate that contract in QEMU.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst

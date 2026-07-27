@@ -124,6 +124,81 @@ uint32_t hc15xx_audio_consumer(const struct hc15xx_audio *audio)
 	return ((rd(audio, audio->snd + 0x38) >> 16) & UINT32_C(0xffff)) << 4;
 }
 
+static uintptr_t hc15xx_stc_tick_register(const struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id)
+{
+	return audio->snd + (id == HC15XX_STC1 ? 0xbcu : 0xb4u);
+}
+
+uint32_t hc15xx_audio_stc_tick(const struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id)
+{
+	if (id != HC15XX_STC0 && id != HC15XX_STC1)
+		return 0;
+	return audio->io.read32(audio->io.cookie,
+		hc15xx_stc_tick_register(audio, id));
+}
+
+uint32_t hc15xx_audio_stc_ms(const struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id)
+{
+	return hc15xx_audio_stc_tick_to_ms(hc15xx_audio_stc_tick(audio, id));
+}
+
+void hc15xx_audio_set_stc_tick(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint32_t tick)
+{
+	if (id != HC15XX_STC0 && id != HC15XX_STC1)
+		return;
+	audio->io.write32(audio->io.cookie,
+		hc15xx_stc_tick_register(audio, id), tick);
+}
+
+void hc15xx_audio_set_stc_ms(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint32_t ms)
+{
+	hc15xx_audio_set_stc_tick(audio, id,
+		hc15xx_audio_ms_to_stc_tick(ms));
+}
+
+void hc15xx_audio_set_stc_divisor(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, uint16_t divisor)
+{
+	uintptr_t control = audio->snd + (id == HC15XX_STC1 ? 0xb8u : 0xb0u);
+	uint32_t value;
+
+	if (id != HC15XX_STC0 && id != HC15XX_STC1)
+		return;
+	value = audio->io.read32(audio->io.cookie, control);
+	audio->io.write32(audio->io.cookie, control,
+		(value & 0xffff0000u) | divisor);
+}
+
+void hc15xx_audio_pause_stc(struct hc15xx_audio *audio,
+	enum hc15xx_stc_id id, int resume)
+{
+	uintptr_t control = audio->snd + 0xb0u;
+	uint32_t bit;
+	uint32_t value;
+
+	if (id != HC15XX_STC0 && id != HC15XX_STC1)
+		return;
+	bit = 1u << (16u + (unsigned)id);
+	value = audio->io.read32(audio->io.cookie, control);
+	value = resume ? value | bit : value & ~bit;
+	audio->io.write32(audio->io.cookie, control, value);
+}
+
+uint32_t hc15xx_audio_ms_to_stc_tick(uint32_t ms)
+{
+	return ms * HC15XX_STC_TICKS_PER_MS;
+}
+
+uint32_t hc15xx_audio_stc_tick_to_ms(uint32_t tick)
+{
+	return tick == UINT32_MAX ? 0 : tick / HC15XX_STC_TICKS_PER_MS;
+}
+
 void hc15xx_audio_set_target(struct hc15xx_audio *audio,
 	uint32_t byte_offset, int data_pending)
 {
