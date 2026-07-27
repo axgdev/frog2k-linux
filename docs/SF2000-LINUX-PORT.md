@@ -349,10 +349,20 @@ orderly path cannot complete.
   Metrics expose `delay` and `resample_hz`; the QEMU transition gate requires
   a positive normal-mode delay, nominal 32 kHz resampling, and zero xruns.
   Audio staging now scans and copies whole converted batches rather than
-  performing circular-buffer arithmetic for every sample. A fourth kernel GE
-  allocation slot accommodates the console owner's surface plus three
-  frontend surfaces, reducing the frontend's synchronization cadence from
-  every second frame to every third without weakening ownership barriers.
+  performing circular-buffer arithmetic for every sample. The later
+  three-source GE experiment was invalidated by physical log 137 and is
+  documented under GE presentation depth below.
+  Log138 validates the restored two-source contract across normal and uncapped
+  Gambatte and gpSP runs. It also locates the next shared bottleneck: physical
+  gpSP spends roughly 8--16 ms in sampled core work and 1.6--2.1 ms presenting
+  a 240x160 frame. Paced RGB565 cores now expose their physically contiguous
+  NOMMU KSEG0 framebuffer to GE for a hardware staging copy into a managed
+  source. The frontend fences that copy before returning from the libretro
+  callback, then submits asynchronous scaling from the snapshot. This removes
+  4.4 MiB/s of CPU frame copies at 60 Hz without extending the callback
+  buffer's lifetime. Uncapped mode retains CPU-buffered two-source delivery to
+  overlap GE with the core. `ge_stage_frames` and `buffered_frames` metrics
+  gate both paths in QEMU.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst
