@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,10 +16,13 @@
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
 #define STANDBY_MARKER "/run/sf2000-display-standby"
+#define FRONTEND_ACTIVE_MARKER "/run/sf2000-frontend-active"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define LOG_BUFFER_SIZE (512u * 1024u)
-#define LOG_FLUSH_BYTES 8192u
+#define LOG_FLUSH_BYTES (128u * 1024u)
 #define LOG_FLUSH_MS 2000u
+#define LOG_SYNC_MS 30000u
+#define FRONTEND_PROBE_MS 10000u
 #define INPUT_FDS 16u
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -79,7 +83,37 @@ static int flush_log(void)
 	if (write_all(log_fd, log_buffer, log_used) != 0)
 		return -1;
 	log_used = 0;
-	return fsync(log_fd);
+	return 0;
+}
+
+static int sync_log(void)
+{
+	if (flush_log() != 0)
+		return -1;
+	return log_fd < 0 ? 0 : fsync(log_fd);
+}
+
+static int frontend_active(void)
+{
+	char text[24];
+	int fd = open(FRONTEND_ACTIVE_MARKER, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
+	long pid;
+
+	if (fd < 0)
+		return 0;
+	got = read(fd, text, sizeof(text) - 1u);
+	close(fd);
+	if (got <= 0)
+		goto stale;
+	text[got] = 0;
+	if (sscanf(text, "%ld", &pid) != 1 || pid <= 1)
+		goto stale;
+	if (kill((pid_t)pid, 0) == 0 || errno == EPERM)
+		return 1;
+stale:
+	(void)unlink(FRONTEND_ACTIVE_MARKER);
+	return 0;
 }
 
 static void append_bytes(const char *text, size_t length)
@@ -277,6 +311,7 @@ int main(void)
 	char previous_topology[2048] = "";
 	uint64_t last_flush;
 	uint64_t last_probe;
+	uint64_t last_sync;
 	int input_fds[INPUT_FDS];
 	int kmsg_fd;
 	unsigned i;
@@ -304,9 +339,9 @@ int main(void)
 	}
 	append_record("logd", "--- SF2000 Linux storage mounted ---",
 		strlen("--- SF2000 Linux storage mounted ---"));
-	(void)flush_log();
+	(void)sync_log();
 
-	last_flush = last_probe = monotonic_us();
+	last_flush = last_probe = last_sync = monotonic_us();
 
 	while (!stop_requested()) {
 		ssize_t got;
@@ -314,9 +349,9 @@ int main(void)
 
 		if (access(STANDBY_MARKER, F_OK) == 0) {
 			/* Finish outstanding FAT writes, then avoid periodic SD traffic. */
-			(void)flush_log();
+			(void)sync_log();
 			sleep_ms(500);
-			last_flush = last_probe = monotonic_us();
+			last_flush = last_probe = last_sync = monotonic_us();
 			continue;
 		}
 		if (kmsg_fd >= 0) {
@@ -325,7 +360,20 @@ int main(void)
 		}
 		drain_input_fds(input_fds);
 		now = monotonic_us();
-		if (now - last_probe >= LOG_FLUSH_MS * 1000u) {
+		if (frontend_active()) {
+			/*
+			 * Emulator ROM reads and audio playback share the single MMC
+			 * channel with this logger.  Detailed /proc snapshots followed by
+			 * fsync used to collide with gpSP's fourth 1 MiB read and caused
+			 * periodic audio starvation.  Frontends publish their own video
+			 * and audio counters, so retain kmsg continuously and use only a
+			 * low-rate heartbeat while latency-sensitive work is active.
+			 */
+			if (now - last_probe >= FRONTEND_PROBE_MS * 1000u) {
+				append_record("heartbeat", "frontend-active", 15);
+				last_probe = now;
+			}
+		} else if (now - last_probe >= LOG_FLUSH_MS * 1000u) {
 			append_system_profile();
 			topology_snapshot(topology, sizeof(topology));
 			if (strcmp(topology, previous_topology)) {
@@ -344,12 +392,18 @@ int main(void)
 				kmsg_line("persistent log flush failed\n");
 			last_flush = now;
 		}
+		if (now - last_sync >=
+				(frontend_active() ? LOG_SYNC_MS : LOG_FLUSH_MS) * 1000u) {
+			if (sync_log() != 0)
+				kmsg_line("persistent log sync failed\n");
+			last_sync = now;
+		}
 		sleep_ms(50);
 	}
 
 	append_record("logd", "--- SF2000 Linux logger shutdown ---",
 		strlen("--- SF2000 Linux logger shutdown ---"));
-	(void)flush_log();
+	(void)sync_log();
 	for (i = 0; i < INPUT_FDS; i++)
 		if (input_fds[i] >= 0)
 			close(input_fds[i]);

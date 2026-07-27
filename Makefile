@@ -176,6 +176,9 @@ LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BROWSER_TEST_SD := $(BUILD_DIR)/browser-test.sd.img
 BROWSER_TEST_ROM := $(BUILD_DIR)/browser-test.gb
 BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
+GPSP_TEST_SD := $(BUILD_DIR)/gpsp-test.sd.img
+GPSP_TEST_ROM := $(BUILD_DIR)/gpsp-test.gba
+GPSP_TEST_ROM_TOOL := $(BUILD_DIR)/mkgabatest
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
@@ -229,6 +232,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
+	run-linux-gpsp smoke-linux-gpsp \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
 	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
@@ -1295,6 +1299,20 @@ $(BROWSER_TEST_ROM_TOOL): tools/mkgbtest.c
 $(BROWSER_TEST_ROM): $(BROWSER_TEST_ROM_TOOL)
 	'$<' '$@'
 
+$(GPSP_TEST_ROM_TOOL): tools/mkgabatest.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) $(HOSTCFLAGS) -o '$@' '$<'
+
+$(GPSP_TEST_ROM): $(GPSP_TEST_ROM_TOOL)
+	'$<' '$@'
+
+$(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM)
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/GBA
+	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
+
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
@@ -1332,6 +1350,26 @@ smoke-linux-frontend: run-linux-frontend
 	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'storage-test=' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
+
+run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(GPSP_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-gpsp.log \
+		> '$(BUILD_DIR)'/logs/linux-gpsp.console 2>&1
+
+smoke-linux-gpsp: run-linux-gpsp
+	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-frontend: load ROM cache 4/4' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-frontend: first frame 240x160' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
 
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'

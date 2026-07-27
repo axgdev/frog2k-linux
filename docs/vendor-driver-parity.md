@@ -26,5 +26,11 @@ For game performance, the next useful vendor hardware blocks are:
    storage and media clocks to scale independently without duplicated magic
    register writes.
 
+The SF2000's external A/V jack is a CVBS path in the display engine, not HDMI.
+The working HCRTOS configuration selects the SD display, chooses PAL or NTSC,
+and registers CVBS DAC 0. Consequently HDMI audio/video support is not a
+dependency for composite output; a Linux CVBS/display-engine adapter is the
+relevant remaining output driver.
+
 USB and networking vendor libraries are intentionally low priority on SF2000:
 the external connector is not wired as a normal USB data port.
