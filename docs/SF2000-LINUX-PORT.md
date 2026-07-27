@@ -295,6 +295,11 @@ orderly path cannot complete.
   low-rate log path and do not query ALSA synchronously: log130 proved that the
   old observer stopped the sole emulation thread for 125-150 ms every 300
   frames, directly causing the periodic underrun it was intended to measure.
+  That run also completed its first 300 Gambatte frames in 4.478 seconds but
+  every later interval in about 5.02 seconds. The first expensive core frame
+  had left the absolute deadline in the past, causing a startup catch-up burst
+  and the initial 10 KiB discard. The host now rebases a missed deadline and
+  reports `pacing_resets` rather than replaying stale work.
 - Both HC15 MUSB controllers enumerate as host controllers in Linux/QEMU, with
   vendor endpoint/FIFO layout, reset, PHY, ID override, session edge, and SYSINT
   sources represented.
