@@ -156,6 +156,11 @@ The physically stable sequence is:
 Subsequent frames match the recovered vendor framebuffer behavior: GE copies
 the completed render surface, then software alternates two immutable
 0x280-byte descriptor blocks. The active block is never rewritten in place.
+The kernel exposes three ownership-tracked managed GE surfaces: one remains
+with the console and two are available to a foreground emulator. The libretro
+host alternates those two source surfaces and waits only before reusing an
+in-flight surface, allowing CPU emulation to overlap GE scaling while retaining
+an explicit cache and lifetime boundary.
 
 ### Why the visible G1-G8 sequence appeared necessary
 
@@ -283,6 +288,13 @@ orderly path cannot complete.
   after the ring is primed; the I2S/DMA enable bits alone leave the amplifier
   emitting idle hiss without advancing the consumer. QEMU enforces this
   ordering and captures the same guest DMA stream as WAV.
+- Core stereo is mixed and linearly resampled to that hardware format by
+  `audio/hc15xx_resampler.c`, a fixed-point, allocation-free module shared with
+  RTOS adapters. The frontend uses a circular staging queue and retains queued
+  current audio across ALSA recovery. Performance records use a pre-opened
+  low-rate log path and do not query ALSA synchronously: log130 proved that the
+  old observer stopped the sole emulation thread for 125-150 ms every 300
+  frames, directly causing the periodic underrun it was intended to measure.
 - Both HC15 MUSB controllers enumerate as host controllers in Linux/QEMU, with
   vendor endpoint/FIFO layout, reset, PHY, ID override, session edge, and SYSINT
   sources represented.
@@ -372,10 +384,9 @@ Proven now:
 
 Still needed for a complete retro-gaming distribution:
 
-- a small launcher/menu using fbdev + the source HCGE API + evdev + ALSA;
-- emulator or libretro-core ports built static/soft-float and audited for
-  NOMMU assumptions;
-- audio mixing/resampling appropriate to core output;
+- expand the integrated launcher beyond the working file browser;
+- add further emulator or libretro-core ports built static/soft-float and
+  audited for NOMMU assumptions (Gambatte and dynarec gpSP are working);
 - a user-facing shutdown/poweroff policy in addition to the implemented clean
   START+SELECT restart;
 - packaging/save-state policy that limits SD write amplification;

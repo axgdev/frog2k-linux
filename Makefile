@@ -1350,6 +1350,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1375,7 +1376,9 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: load ROM cache 4/4' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: first frame 240x160' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -Eq 'sf2000-frontend: audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
 
