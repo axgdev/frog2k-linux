@@ -1,0 +1,120 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -64,6 +64,7 @@
+ 	spinlock_t lock;
+ 	snd_pcm_uframes_t last_period;
+ 	bool running;
++	bool ever_armed;
+ };
+ 
+ static const struct snd_pcm_hardware sf2000_pcm_hardware = {
+@@ -117,6 +118,30 @@
+ 	return bytes_to_frames(runtime, pos);
+ }
+ 
++/*
++ * HC1512 clears SND0+0x04 bit 16 when the cyclic producer runs dry.
++ * libauddrv tests and restores this bit after every producer publication.
++ * Do the same, and also call this from the poll timer to close the race where
++ * hardware observes an empty ring immediately after software publishes data.
++ */
++static bool sf2000_pcm_arm_if_pending(struct sf2000_pcm *chip)
++{
++	u16 producer;
++	u16 consumer;
++
++	if (!READ_ONCE(chip->running))
++		return false;
++
++	producer = readw(chip->snd + SF2000_SND_DMA_POS);
++	consumer = readw(chip->snd + SF2000_SND_DMA_POS + 2);
++	if (producer == consumer ||
++	    readl(chip->snd + SF2000_SND_CTL04) & BIT(16))
++		return false;
++
++	sf2000_update_bits(chip->snd + SF2000_SND_CTL04, BIT(16), BIT(16));
++	return true;
++}
++
+ static int sf2000_pcm_ack(struct snd_pcm_substream *substream)
+ {
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+@@ -131,7 +156,12 @@
+ 	 * a 32-bit read/modify/write can race the live consumer cursor.
+ 	 */
+ 	pos = frames_to_bytes(runtime, appl_ptr % runtime->buffer_size);
++	dma_wmb();
+ 	writew(pos >> 4, chip->snd + SF2000_SND_DMA_POS);
++	if (sf2000_pcm_arm_if_pending(chip) && chip->ever_armed)
++		dev_info_once(chip->dev,
++			"SND0 resumed after a hardware DMA underrun\n");
++	chip->ever_armed = true;
+ 	return 0;
+ }
+ 
+@@ -142,6 +172,7 @@
+ 	snd_pcm_uframes_t period;
+ 	unsigned long flags;
+ 	bool elapsed = false;
++	bool rearmed;
+ 
+ 	spin_lock_irqsave(&chip->lock, flags);
+ 	substream = chip->substream;
+@@ -156,6 +187,12 @@
+ 	}
+ 	spin_unlock_irqrestore(&chip->lock, flags);
+ 
++	rearmed = sf2000_pcm_arm_if_pending(chip);
++	if (rearmed && chip->ever_armed)
++		dev_info_once(chip->dev,
++			"SND0 resumed after a hardware DMA underrun\n");
++	if (rearmed)
++		chip->ever_armed = true;
+ 	if (elapsed)
+ 		snd_pcm_period_elapsed(substream);
+ }
+@@ -230,6 +267,7 @@
+ 		chip->snd + SF2000_SND_PERIOD);
+ 	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
++	chip->ever_armed = false;
+ 	dev_info_once(chip->dev,
+ 		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",
+ 		&runtime->dma_addr, bytes, runtime->period_size,
+@@ -254,22 +292,16 @@
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL08, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL0C, BIT(0), BIT(0));
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), BIT(29));
+-		/*
+-		 * libauddrv primes the cyclic buffer before arming SND0+0x04
+-		 * bit 16.  The I2S and DMA enable bits above do not start the
+-		 * consumer on HC1512 by themselves; without this final arm the
+-		 * amplifier only exposes its idle hiss and ALSA remains full.
+-		 * ALSA issues START after start_threshold frames are present,
+-		 * which gives us the same ordering as the vendor transfer path.
+-		 */
+-		sf2000_update_bits(chip->snd + SF2000_SND_CTL04,
+-			BIT(16), BIT(16));
++		dma_wmb();
++		if (sf2000_pcm_arm_if_pending(chip))
++			chip->ever_armed = true;
+ 		sf2000_amp_enable(chip, true);
+ 		mod_timer(&chip->timer, jiffies + 1);
+ 		return 0;
+ 	case SNDRV_PCM_TRIGGER_STOP:
+ 	case SNDRV_PCM_TRIGGER_SUSPEND:
+ 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		WRITE_ONCE(chip->running, false);
+ 		sf2000_amp_enable(chip, false);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL50, BIT(29), 0);
+ 		sf2000_update_bits(chip->snd + SF2000_SND_CTL04, BIT(16), 0);
+@@ -279,9 +311,6 @@
+ 		sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
+ 			SF2000_DMA_PAUSE, 0);
+ 		writew(0, chip->snd + SF2000_SND_DMA_POS);
+-		spin_lock_irqsave(&chip->lock, flags);
+-		chip->running = false;
+-		spin_unlock_irqrestore(&chip->lock, flags);
+ 		timer_delete(&chip->timer);
+ 		return 0;
+ 	default:

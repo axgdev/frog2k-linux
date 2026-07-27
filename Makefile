@@ -1761,6 +1761,7 @@ run-linux-buildroot-audio: qemu
 
 smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
+	grep -q 'sf2000-pcm .*PCM playback ready (IRQ)' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
 	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log

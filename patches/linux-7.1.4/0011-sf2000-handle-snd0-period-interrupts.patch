@@ -1,0 +1,134 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/bitops.h>
+ #include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -24,6 +25,8 @@
+ #define SF2000_SND_CTL50	0x50
+ #define SF2000_SND_PERIOD	0x5c
+ #define SF2000_SND_FADE		0x90
++#define SF2000_SND08_STATUS_MASK	(BIT(16) | BIT(24) | BIT(27) | BIT(28))
++#define SF2000_SND0C_STATUS_MASK	(BIT(8) | BIT(24))
+ 
+ #define SF2000_DAC_CTL		0x00
+ #define SF2000_SYS_AUDIO_PLL	0x148
+@@ -62,6 +65,7 @@
+ 	struct snd_pcm_substream *substream;
+ 	struct timer_list timer;
+ 	spinlock_t lock;
++	int irq;
+ 	snd_pcm_uframes_t last_period;
+ 	bool running;
+ 	bool ever_armed;
+@@ -142,6 +146,43 @@
+ 	return true;
+ }
+ 
++static bool sf2000_pcm_ack_events(struct sf2000_pcm *chip)
++{
++	u32 ctl08 = readl(chip->snd + SF2000_SND_CTL08);
++	u32 ctl0c = readl(chip->snd + SF2000_SND_CTL0C);
++	u32 status08 = ctl08 & SF2000_SND08_STATUS_MASK;
++	u32 status0c = ctl0c & SF2000_SND0C_STATUS_MASK;
++	bool period = ((ctl08 & (BIT(16) | BIT(0))) ==
++			(BIT(16) | BIT(0))) ||
++		((ctl0c & (BIT(8) | BIT(0))) == (BIT(8) | BIT(0)));
++
++	/*
++	 * The upper bits are W1C event latches while their corresponding low
++	 * bits are enables.  Match libauddrv's masks so an unacknowledged
++	 * period event cannot hold the DMA consumer at the ring boundary.
++	 */
++	if (status08)
++		writel((ctl08 & GENMASK(15, 0)) | status08,
++			chip->snd + SF2000_SND_CTL08);
++	if (status0c)
++		writel((ctl0c & 0x00ff00ff) | status0c,
++			chip->snd + SF2000_SND_CTL0C);
++	return period;
++}
++
++static irqreturn_t sf2000_pcm_irq(int irq, void *data)
++{
++	struct sf2000_pcm *chip = data;
++	struct snd_pcm_substream *substream = READ_ONCE(chip->substream);
++
++	(void)irq;
++	if (!sf2000_pcm_ack_events(chip))
++		return IRQ_NONE;
++	if (READ_ONCE(chip->running) && substream)
++		snd_pcm_period_elapsed(substream);
++	return IRQ_HANDLED;
++}
++
+ static int sf2000_pcm_ack(struct snd_pcm_substream *substream)
+ {
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+@@ -177,16 +218,20 @@
+ 	spin_lock_irqsave(&chip->lock, flags);
+ 	substream = chip->substream;
+ 	if (chip->running && substream) {
+-		period = sf2000_pcm_pointer(substream) /
+-			substream->runtime->period_size;
+-		if (period != chip->last_period) {
+-			chip->last_period = period;
+-			elapsed = true;
++		if (chip->irq < 0) {
++			period = sf2000_pcm_pointer(substream) /
++				substream->runtime->period_size;
++			if (period != chip->last_period) {
++				chip->last_period = period;
++				elapsed = true;
++			}
+ 		}
+ 		mod_timer(&chip->timer, jiffies + 1);
+ 	}
+ 	spin_unlock_irqrestore(&chip->lock, flags);
+ 
++	if (chip->irq < 0)
++		(void)sf2000_pcm_ack_events(chip);
+ 	rearmed = sf2000_pcm_arm_if_pending(chip);
+ 	if (rearmed && chip->ever_armed)
+ 		dev_info_once(chip->dev,
+@@ -351,6 +396,7 @@
+ 	chip->dev = dev;
+ 	chip->card = card;
+ 	spin_lock_init(&chip->lock);
++	chip->irq = -1;
+ 	timer_setup(&chip->timer, sf2000_pcm_timer, 0);
+ 
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+@@ -374,6 +420,18 @@
+ 		goto err_card;
+ 	}
+ 	sf2000_amp_enable(chip, false);
++	chip->irq = platform_get_irq_optional(pdev, 0);
++	if (chip->irq == -ENXIO)
++		chip->irq = -1;
++	else if (chip->irq < 0) {
++		ret = chip->irq;
++		goto err_card;
++	} else {
++		ret = devm_request_irq(dev, chip->irq, sf2000_pcm_irq, 0,
++			dev_name(dev), chip);
++		if (ret)
++			goto err_card;
++	}
+ 
+ 	ret = snd_pcm_new(card, "SF2000 PCM", 0, 1, 0, &chip->pcm);
+ 	if (ret)
+@@ -393,7 +451,8 @@
+ 	if (ret)
+ 		goto err_card;
+ 	platform_set_drvdata(pdev, card);
+-	dev_info(dev, "32 kHz S16_LE mono PCM playback ready\n");
++	dev_info(dev, "32 kHz S16_LE mono PCM playback ready (%s)\n",
++		chip->irq >= 0 ? "IRQ" : "polling");
+ 	return 0;
+ 
+ err_card:
