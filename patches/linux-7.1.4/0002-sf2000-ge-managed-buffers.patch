@@ -15,7 +15,7 @@
 +#define HCGE_ALLOC_BUFFER	_IO(HCGE_IOCBASE, 0x0b)
 +#define HCGE_FREE_BUFFER		_IO(HCGE_IOCBASE, 0x0c)
  #define HCGE_CACHE_BATCH_MAX	8
-+#define HCGE_BUFFER_SLOTS	3
++#define HCGE_BUFFER_SLOTS	4
  
  struct hcge_cmdq_buf_info {
  	u32 addr;

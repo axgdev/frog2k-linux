@@ -15,6 +15,15 @@ int hc15xx_resampler_init(struct hc15xx_resampler *state,
 	return 0;
 }
 
+int hc15xx_resampler_set_output_rate(struct hc15xx_resampler *state,
+	uint32_t output_rate)
+{
+	if (!state || !output_rate || output_rate > state->input_rate)
+		return -1;
+	state->output_rate = output_rate;
+	return 0;
+}
+
 int hc15xx_resampler_push_stereo_s16(struct hc15xx_resampler *state,
 	int16_t left, int16_t right, int16_t *mono)
 {

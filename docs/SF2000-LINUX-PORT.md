@@ -338,6 +338,21 @@ orderly path cannot complete.
   reclaimed a core's C++ allocations. It has been replaced by reclaimable
   anonymous mappings, covered by a host allocation stress test and a combined
   gpSP-exit-Gambatte-exit QEMU lifecycle gate.
+  Log136 then showed that this lifecycle fix held, and isolated the remaining
+  sound defect: gpSP accumulated four new xruns and hundreds of deadline
+  rebases after returning from uncapped mode, while Gambatte accumulated no
+  xruns in the same test. gpSP still sustained roughly 87--131 FPS uncapped,
+  so this was depleted audio lead during intermittent heavy frames rather
+  than an absolute compute ceiling. Playback now primes seven periods
+  (224 ms), samples ALSA delay at a low rate, and applies a bounded 0.8%
+  resampling correction only while rebuilding or draining the target lead.
+  Metrics expose `delay` and `resample_hz`; the QEMU transition gate requires
+  a positive normal-mode delay, nominal 32 kHz resampling, and zero xruns.
+  Audio staging now scans and copies whole converted batches rather than
+  performing circular-buffer arithmetic for every sample. A fourth kernel GE
+  allocation slot accommodates the console owner's surface plus three
+  frontend surfaces, reducing the frontend's synchronization cadence from
+  every second frame to every third without weakening ownership barriers.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst
