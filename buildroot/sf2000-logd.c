@@ -17,11 +17,12 @@
 #define STANDBY_MARKER "/run/sf2000-display-standby"
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
+#define PERFORMANCE_METRICS_PATH "/run/sf2000-frontend-metrics"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define LOG_BUFFER_SIZE (512u * 1024u)
 #define LOG_FLUSH_BYTES (128u * 1024u)
 #define LOG_FLUSH_MS 2000u
-#define FRONTEND_PROBE_MS 10000u
+#define FRONTEND_PROBE_MS 60000u
 #define INPUT_FDS 16u
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -31,6 +32,8 @@ static size_t log_peak;
 static uint64_t log_dropped;
 static int log_fd = -1;
 static int storage_deferred;
+static unsigned performance_metric_records;
+static size_t performance_metric_bytes;
 static long ticks_per_second = 100;
 
 static int stop_requested(void)
@@ -227,6 +230,38 @@ static void append_profile_file(const char *source, const char *path)
 	close(fd);
 }
 
+static void import_performance_metrics(void)
+{
+	char input[512];
+	char line[512];
+	size_t line_used = 0;
+	int fd = open(PERFORMANCE_METRICS_PATH, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
+
+	if (fd < 0)
+		return;
+	while ((got = read(fd, input, sizeof(input))) > 0) {
+		ssize_t i;
+
+		performance_metric_bytes += (size_t)got;
+		for (i = 0; i < got; i++) {
+			if (input[i] == '\n') {
+				append_record("frontend-metric", line, line_used);
+				performance_metric_records++;
+				line_used = 0;
+			} else if (line_used < sizeof(line) - 1u) {
+				line[line_used++] = input[i];
+			}
+		}
+	}
+	if (line_used) {
+		append_record("frontend-metric", line, line_used);
+		performance_metric_records++;
+	}
+	close(fd);
+	(void)unlink(PERFORMANCE_METRICS_PATH);
+}
+
 static void append_system_profile(void)
 {
 	append_profile_file("proc-stat", "/proc/stat");
@@ -382,15 +417,23 @@ int main(void)
 			storage_deferred = 1;
 			log_peak = log_used;
 			log_dropped = 0;
+			performance_metric_records = 0;
+			performance_metric_bytes = 0;
+			(void)unlink(PERFORMANCE_METRICS_PATH);
 			append_record("logd", "RAM journal begin: FAT writes deferred", 38);
 			set_performance_ready(1);
 			kmsg_line("RAM journal begin: FAT writes deferred\n");
 		} else if (!active && storage_deferred) {
 			char summary[160];
-			int length = snprintf(summary, sizeof(summary),
-				"RAM journal end: bytes=%lu peak=%lu dropped=%llu\n",
+			int length;
+
+			import_performance_metrics();
+			length = snprintf(summary, sizeof(summary),
+				"RAM journal end: bytes=%lu peak=%lu dropped=%llu metrics=%u metric_bytes=%lu\n",
 				(unsigned long)log_used, (unsigned long)log_peak,
-				(unsigned long long)log_dropped);
+				(unsigned long long)log_dropped,
+				performance_metric_records,
+				(unsigned long)performance_metric_bytes);
 
 			if (length > 0)
 				append_record("logd", summary, (size_t)length);
@@ -447,7 +490,12 @@ int main(void)
 				kmsg_line("persistent log sync failed\n");
 			last_sync = now;
 		}
-		sleep_ms(50);
+		/*
+		 * During a performance session the kernel queues kmsg and evdev
+		 * records for us.  A 250 ms batch cadence cuts 16 needless
+		 * scheduler wakeups per second without losing diagnostics.
+		 */
+		sleep_ms(active ? 250u : 50u);
 	}
 
 	append_record("logd", "--- SF2000 Linux logger shutdown ---",

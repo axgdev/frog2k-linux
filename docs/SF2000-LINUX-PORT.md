@@ -263,9 +263,13 @@ and waits for `sf2000-logd` to acknowledge it. The logger first synchronizes
 all earlier records, switches to a bounded 512 KiB RAM journal, and only then
 acknowledges the request. It continues draining kernel and input messages and
 records a low-rate heartbeat, but performs no FAT write or `fsync` until the
-browser and selected emulator have exited. It then records journal byte, peak,
-and dropped-byte counters and drains the journal. The supervisor owns the
-request lifetime, so it is released even when a child exits with an error.
+browser and selected emulator have exited. Frontend metrics are appended to a
+tmpfs spool with a single write and imported into the journal at that
+transition; they never enter printk or its synchronous 115200-baud console
+during gameplay. The logger then records journal byte, peak, dropped-byte,
+metric-record, and metric-byte counters and drains the journal. The supervisor
+owns the request lifetime, so it is released even when a child exits with an
+error.
 This is necessary because the logger and ROM loader share one MMC channel:
 the former two-second snapshot-plus-fsync cycle reproducibly intercepted
 gpSP's fourth 1 MiB ROM cache read, and the same storage stalls produced
@@ -289,17 +293,27 @@ orderly path cannot complete.
   `unexpected IRQ # 3` reports under console traffic.
 - ALSA PCM playback is implemented for the SND0 coherent circular-DMA path at
   32 kHz, signed 16-bit mono. The vendor transfer routine establishes that
-  SND0+0x5c is a byte count and that SND0+0x04 bit 16 must be asserted only
+  SND0+0x5c takes the PCM period size in frames and SND0+0x04 bit 16 must be asserted only
   after the ring is primed; the I2S/DMA enable bits alone leave the amplifier
   emitting idle hiss without advancing the consumer. QEMU enforces this
   ordering and captures the same guest DMA stream as WAV.
 - Core stereo is mixed and linearly resampled to that hardware format by
   `audio/hc15xx_resampler.c`, a fixed-point, allocation-free module shared with
   RTOS adapters. The frontend uses a circular staging queue and retains queued
-  current audio across ALSA recovery. Performance records use a pre-opened
-  low-rate log path and do not query ALSA synchronously: log130 proved that the
-  old observer stopped the sole emulation thread for 125-150 ms every 300
-  frames, directly causing the periodic underrun it was intended to measure.
+  current audio across ALSA recovery. Playback now primes four 1024-frame
+  periods, providing 128 ms of scheduling lead while retaining the HC15xx
+  equal-cursor ring guard. Performance records use an append-only tmpfs spool
+  and do not query ALSA or call printk synchronously: log130 proved that the
+  old split observer stopped the sole emulation thread for 125-150 ms every
+  300 frames, while log132 showed that even one combined printk record still
+  incremented the ALSA xrun counter at almost every five-second report.
+  The spool is imported after the supervised frontend exits, so these metrics
+  survive core failures and remain in `loglinux.txt` without consuming UART
+  or FAT latency during gameplay. A shared, OS-independent retained-ring
+  writer also stores one compact `frontend-audio` record per interval directly
+  in uncached RAM. Its upper 16 bits are the cumulative xrun count and its
+  lower 16 bits are cumulative pacing resets; the next quick boot recovers
+  these records even when the filesystem spool could not be drained.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst

@@ -110,6 +110,12 @@ data has been synchronized. Until the browser and any selected emulator exit,
 new kernel, input, heartbeat, and performance records stay in the bounded RAM
 journal: the logger issues neither FAT writes nor `fsync`. It then records the
 journal byte, peak, and dropped-byte counters and drains the complete journal.
+Periodic frontend metrics use an append-only tmpfs spool instead of printk;
+the logger imports that spool before the drain. This preserves detailed
+telemetry across a core crash without synchronously feeding the slow serial
+console from the real-time emulation thread. Each interval also publishes one
+compact `frontend-audio` health word to the existing retained-RAM ring, so its
+xrun and pacing-reset totals survive a quick power cycle without a syscall.
 The supervisor owns this lifetime, so clean exit, core failure, and browser
 failure all release it. Storage smoke targets retain explicit
 destructive/readback coverage for development, but normal device boots do not

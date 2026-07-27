@@ -22,6 +22,9 @@ QEMU_SD_ARGS ?=
 HOSTCC ?= cc
 AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
 AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
+RETAINED_TEST := $(BUILD_DIR)/hc15xx-retained-test
+RETAINED_SRC := platform/hc15xx_retained.c
+RETAINED_HEADER := include/hc15xx_retained.h
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
 CC_MIPS = $(CROSS_COMPILE)gcc
@@ -657,13 +660,13 @@ $(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJEC
 	rm -f '$(dir $@)/sf2000-frontend-demo'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
-$(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' gambatte \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-gambatte '$@'
 
-$(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/gpsp -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/gpsp -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' gpsp \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
@@ -838,9 +841,16 @@ $(AUDIO_RESAMPLER_TEST): audio/hc15xx_resampler.c \
 	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
 		audio/hc15xx_resampler.c audio/test_hc15xx_resampler.c -o '$@'
 
-audio-test: $(AUDIO_TEST) $(AUDIO_RESAMPLER_TEST)
+$(RETAINED_TEST): platform/hc15xx_retained.c include/hc15xx_retained.h \
+		tests/hc15xx-retained-test.c
+	mkdir -p '$(dir $@)'
+	'$(HOSTCC)' -std=c11 -O2 -Wall -Wextra -Werror -Iinclude \
+		platform/hc15xx_retained.c tests/hc15xx-retained-test.c -o '$@'
+
+audio-test: $(AUDIO_TEST) $(AUDIO_RESAMPLER_TEST) $(RETAINED_TEST)
 	'$(AUDIO_TEST)'
 	'$(AUDIO_RESAMPLER_TEST)'
+	'$(RETAINED_TEST)'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -1340,6 +1350,8 @@ run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-frontend.log \
 		> '$(BUILD_DIR)'/logs/linux-frontend.console 2>&1
+	mcopy -o -i '$(BROWSER_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1349,14 +1361,14 @@ smoke-linux-frontend: run-linux-frontend
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -Eq 'sf2000-frontend: audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1375,18 +1387,20 @@ run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-gpsp.log \
 		> '$(BUILD_DIR)'/logs/linux-gpsp.console 2>&1
+	mcopy -o -i '$(GPSP_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 
 smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-gpsp.log
-	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: load ROM cache 4/4' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: first frame 240x160' '$(BUILD_DIR)'/logs/linux-gpsp.log
-	grep -Eq 'sf2000-frontend: audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
 
