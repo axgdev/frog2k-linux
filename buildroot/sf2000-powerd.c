@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -265,6 +266,13 @@ static void run_frontend(void)
 		_exit(127);
 	}
 	if (pid > 0) {
+		/*
+		 * Interactive emulation is the only CPU-bound foreground job.
+		 * Keep low-rate logging and battery housekeeping from winning a
+		 * timeslice when the core is close to its frame deadline.  Do this
+		 * in the parent after vfork has completed its exec hand-off.
+		 */
+		(void)setpriority(PRIO_PROCESS, (id_t)pid, -20);
 		for (;;) {
 			pid_t result = waitpid(pid, &status, WNOHANG);
 
@@ -276,6 +284,18 @@ static void run_frontend(void)
 				backlight_set(1);
 				visible = 1;
 				log_line("sf2000-powerd: frontend first frame visible\n");
+			}
+			if (visible) {
+				/*
+				 * The ready marker has completed the only asynchronous
+				 * hand-off.  A blocking wait now eliminates the old 10 ms
+				 * poll, which preempted the emulator 100 times per second
+				 * for the entire play session.
+				 */
+				do {
+					result = waitpid(pid, &status, 0);
+				} while (result < 0 && errno == EINTR);
+				break;
 			}
 			sleep_ms(10);
 		}

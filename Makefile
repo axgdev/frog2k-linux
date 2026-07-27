@@ -1379,7 +1379,9 @@ smoke-linux-frontend: run-linux-frontend
 run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
+		printf 'sendkey backspace-w 500\n'; sleep 6; \
+		printf 'sendkey backspace-w 500\n'; sleep 4; \
 		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
@@ -1401,6 +1403,9 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: first frame 240x160' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -q 'source=frontend-metric mode event mode=uncapped audio=suppressed pacing=disabled full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric .*suppressed=[1-9][0-9]* .*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -q 'source=frontend-metric mode event mode=normal audio=enabled pacing=core full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
 

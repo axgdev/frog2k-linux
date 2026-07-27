@@ -314,6 +314,17 @@ orderly path cannot complete.
   in uncached RAM. Its upper 16 bits are the cumulative xrun count and its
   lower 16 bits are cumulative pacing resets; the next quick boot recovers
   these records even when the filesystem spool could not be drained.
+  Log133 separated a remaining gpSP failure from the earlier logging stalls:
+  Gambatte held 59.74 FPS with no xrun, while a demanding gpSP scene declined
+  to 57.86 FPS and generated about 31.1k output frames per wall-clock second
+  for a fixed 32 kHz sink. The 128 ms lead therefore drained predictably.
+  Shared-path work now batches PCM writes by complete periods, samples core
+  runtime once per second rather than issuing an extra clock syscall every
+  frame, gives the foreground frontend highest nice priority, and blocks the
+  supervisor after first-frame handoff instead of polling it every 10 ms.
+  SELECT+R provides a reversible uncapped, audio-suppressed, no-frameskip
+  measurement window. Its `mode=uncapped`, `fps_milli`, and `suppressed`
+  records measure real device headroom without changing an emulator core.
   That run also completed its first 300 Gambatte frames in 4.478 seconds but
   every later interval in about 5.02 seconds. The first expensive core frame
   had left the absolute deadline in the past, causing a startup catch-up burst
