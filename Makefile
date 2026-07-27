@@ -21,6 +21,7 @@ QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
 AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
+AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
 CC_MIPS = $(CROSS_COMPILE)gcc
@@ -831,8 +832,15 @@ $(AUDIO_TEST): audio/hc15xx_audio.c audio/hc15xx_audio.h audio/test_hc15xx_audio
 	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
 		audio/hc15xx_audio.c audio/test_hc15xx_audio.c -o '$@'
 
-audio-test: $(AUDIO_TEST)
+$(AUDIO_RESAMPLER_TEST): audio/hc15xx_resampler.c \
+		audio/hc15xx_resampler.h audio/test_hc15xx_resampler.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
+		audio/hc15xx_resampler.c audio/test_hc15xx_resampler.c -o '$@'
+
+audio-test: $(AUDIO_TEST) $(AUDIO_RESAMPLER_TEST)
 	'$(AUDIO_TEST)'
+	'$(AUDIO_RESAMPLER_TEST)'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'

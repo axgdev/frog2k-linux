@@ -22,3 +22,9 @@ publishes the deferred tail once the consumer moves.
 Linux owns policy (ALSA buffering, GPIO amplifier mute, locking and IRQ
 routing). HCRTOS/FreeRTOS can use this core with small platform callbacks and
 keep their existing ASoC-facing API while replacing the closed output path.
+
+`hc15xx_resampler.c` is a second freestanding component shared by the Linux
+frontend and suitable for the RTOS adapters. It performs fixed-rate linear
+stereo S16 to mono S16 conversion without allocation, libc, floating point, or
+OS calls. This replaces nearest-sample dropping for the HC1512's fixed 32 kHz
+mono output and avoids duplicating conversion policy in each emulator host.
