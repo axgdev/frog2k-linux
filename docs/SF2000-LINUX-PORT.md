@@ -384,7 +384,11 @@ The useful model is contract-accurate rather than cycle-accurate. Tests cover:
   writeback;
 - ST7789 commands, VOU latch, alternating GMA descriptors, live scanout, and
   frame capture;
-- functional GE command queues and effects;
+- functional GE command queues and effects, including the physical asynchronous
+  BUSY/DONE transition, completion interrupt, and rejection of a second
+  doorbell while work is active;
+- an opt-in scanout oracle which hashes changed frames and classifies their
+  color diversity, active pixels, and GMA owner;
 - keypad redraws;
 - SND0 guest DMA to WAV;
 - MUSB platform registration;
@@ -394,6 +398,14 @@ QEMU should warn on impossible ordering such as a GMA doorbell before VOU/panel
 ownership is valid, but it must not silently “repair” guest state. Physical
 markers remain authoritative for analog timing, cache effects, panel persistence,
 and connector wiring.
+
+`smoke-linux-gpsp` enables the scanout oracle and runs a self-contained GBA
+cartridge which selects mode 3 and fills VRAM with an RGB555 ramp.  The test
+requires an asynchronous GE start/completion pair, no busy-doorbell violation,
+and a diverse post-launch panel frame.  This detects the class of failure seen
+in log 137, where emulation and audio continued normally behind a blank physical
+scanout; the former all-zero test cartridge could only produce a solid frame
+and could not make that distinction.
 
 ## Performance findings
 
@@ -432,6 +444,23 @@ is already set to the measured fast profile.
 The SoC also contains video decode and additional audio blocks, but they do not
 yet have clean Linux drivers. They are future acceleration work, not part of
 the proven framebuffer/ALSA contract.
+
+### GE presentation depth
+
+The physical HC15xx queue has a single running segment and one software-held
+continuation segment.  Linux therefore exposes three managed GE allocations:
+one long-lived console render surface and two frontend source surfaces.  The
+frontend fences before either source surface is reused.  Increasing this to
+three frontend surfaces did not increase measured throughput: log 137 proves
+that gpSP kept executing thousands of frames while physical scanout remained
+blank.  The same build looked healthy in QEMU because its GE doorbell completed
+synchronously.  Two source surfaces are the hardware-safe ownership contract,
+not a memory-saving fallback.
+
+The first frontend frame now records both the libretro source hash and the
+post-GE framebuffer hash in kmsg and retained RAM.  A non-changing or solid
+scanout can therefore be separated from a stopped core even when the
+performance journal has not yet been copied to FAT.
 
 ## Current support and next application target
 
