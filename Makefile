@@ -20,6 +20,7 @@ QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
+AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
 CC_MIPS = $(CROSS_COMPILE)gcc
@@ -208,7 +209,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all status qemu rootfs toolchain buildroot buildroot-reconfigure linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -820,6 +821,14 @@ $(SF2000_DTB): linux/sf2000.dts
 	dtc -I dts -O dtb -o '$@' '$<'
 
 FORCE:
+
+$(AUDIO_TEST): audio/hc15xx_audio.c audio/hc15xx_audio.h audio/test_hc15xx_audio.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iaudio \
+		audio/hc15xx_audio.c audio/test_hc15xx_audio.c -o '$@'
+
+audio-test: $(AUDIO_TEST)
+	'$(AUDIO_TEST)'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
