@@ -894,11 +894,11 @@ vdec-test: $(VDEC_TEST)
 
 $(VDEC_CODEC_TEST): vdec/hc15xx_vdec.c vdec/hc15xx_vdec.h \
 		vdec/hc15xx_vdec_codec.c vdec/hc15xx_vdec_codec.h \
-		vdec/hc15xx_vdec_codecs.c vdec/test_hc15xx_vdec_codec.c
+		vdec/test_hc15xx_vdec_codec.c
 	mkdir -p '$(dir $@)'
 	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Ivdec \
 		vdec/hc15xx_vdec.c vdec/hc15xx_vdec_codec.c \
-		vdec/hc15xx_vdec_codecs.c vdec/test_hc15xx_vdec_codec.c -o '$@'
+		vdec/test_hc15xx_vdec_codec.c -o '$@'
 
 vdec-codec-test: $(VDEC_CODEC_TEST)
 	'$(VDEC_CODEC_TEST)'

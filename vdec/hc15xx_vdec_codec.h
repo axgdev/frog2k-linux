@@ -5,58 +5,61 @@
 #include "hc15xx_vdec.h"
 
 /*
- * Codec plugin interface recovered from viddec_h264_attach in
- * libviddrv_h264dec.a.  Each codec backend allocates a context,
- * fills in this vtable, and registers with the VDEC core.
+ * Hardware DMA/display backend for use with ffmpeg software decoders.
  *
- * The vendor codecs are software decoders that use the VDEC hardware
- * for DMA data movement and display output.  Context sizes recovered
- * from the malloc calls in each attach function:
- *   H.264:  0x21538 (136504 bytes)
- *   MPEG-2: ~64K (estimated from archive size ratio)
- *   MPEG-4: ~48K
- *   VC-1:   ~80K
- *   VP8:    ~32K
- *   JPEG:   ~16K
+ * The SF2000 VDEC hardware is NOT a hardware decoder.  It provides:
+ * 1. DMA engine for fast frame buffer transfers
+ * 2. GMA compositor for scaling/overlay to the display panel
+ * 3. VSync-synchronized buffer swap for tear-free output
+ *
+ * ffmpeg (libavcodec) handles all bitstream parsing and frame
+ * reconstruction in software.  This backend handles the hardware
+ * display path: DMA transfer of decoded frames to the framebuffer
+ * and GMA compositor configuration for scaling/positioning.
+ *
+ * Integration with ffmpeg:
+ *   - Decode: ffmpeg software decoders (libx264, mpeg2video, etc.)
+ *   - Display: write decoded AVFrame data via hc15xx_vdec_display_frame()
+ *   - The DMA engine transfers the frame to the GMA framebuffer
+ *   - The GMA compositor scales/positions it on the 320x240 panel
  */
 
-struct hc15xx_vdec_codec_ops {
-	int (*init)(void *ctx, const struct hc15xx_vdec_config *config);
-	int (*decode)(void *ctx, const uint8_t *data, uint32_t size);
-	int (*flush)(void *ctx);
-	void (*close)(void *ctx);
-	int (*cfg_output)(void *ctx, uintptr_t fb_addr, uint32_t stride);
+/* Display layer configuration for GMA compositor */
+struct hc15xx_vdec_display_config {
+	uint32_t fb_phys;	/* Physical address of framebuffer */
+	uint32_t fb_size;	/* Framebuffer size in bytes */
+	uint32_t width;		/* Source frame width */
+	uint32_t height;	/* Source frame height */
+	uint32_t stride;	/* Source stride in bytes */
+	uint32_t dst_x;		/* Display window X */
+	uint32_t dst_y;		/* Display window Y */
+	uint32_t dst_w;		/* Display window width */
+	uint32_t dst_h;		/* Display window height */
+	int format;		/* Pixel format (0=RGB565, 1=YUV420) */
 };
 
-struct hc15xx_vdec_codec {
-	enum hc15xx_vdec_codec_id id;
-	const char *name;
-	const struct hc15xx_vdec_codec_ops *ops;
-	void *ctx;
-	uint32_t ctx_size;
+/* DMA transfer descriptor */
+struct hc15xx_vdec_dma_xfer {
+	uintptr_t src;		/* Source physical address */
+	uintptr_t dst;		/* Destination physical address */
+	uint32_t size;		/* Transfer size in bytes */
 };
 
-/* Hardware register banks used by codec backends (HC1512/HC1513) */
-#define HC15XX_VDEC_CODEC_REG_BASE0	0x18802000
-#define HC15XX_VDEC_CODEC_REG_BASE1	0x18802200
-#define HC15XX_VDEC_CODEC_REG_BASE2	0x18802300
-#define HC15XX_VDEC_CODEC_REG_BASE3	0x18802400
+int hc15xx_vdec_display_init(struct hc15xx_vdec *vdec,
+			     const struct hc15xx_vdec_display_config *cfg);
+int hc15xx_vdec_display_frame(struct hc15xx_vdec *vdec,
+			      const uint8_t *frame_data, uint32_t size);
+int hc15xx_vdec_display_flush(struct hc15xx_vdec *vdec);
+void hc15xx_vdec_display_close(struct hc15xx_vdec *vdec);
 
-int hc15xx_vdec_codec_attach(struct hc15xx_vdec *vdec,
-			     struct hc15xx_vdec_codec *codec,
-			     const struct hc15xx_vdec_config *config);
-void hc15xx_vdec_codec_detach(struct hc15xx_vdec *vdec,
-			      struct hc15xx_vdec_codec *codec);
-int hc15xx_vdec_codec_decode(struct hc15xx_vdec *vdec,
-			     struct hc15xx_vdec_codec *codec,
-			     const uint8_t *data, uint32_t size);
+/* DMA operations */
+int hc15xx_vdec_dma_submit(struct hc15xx_vdec *vdec,
+			   const struct hc15xx_vdec_dma_xfer *xfer);
+int hc15xx_vdec_dma_wait(struct hc15xx_vdec *vdec);
 
-/* Codec constructors - each returns a statically allocated descriptor */
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_h264(void);
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_mpeg2(void);
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_mpeg4(void);
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_vc1(void);
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_vp8(void);
-struct hc15xx_vdec_codec *hc15xx_vdec_codec_jpeg(void);
+/* GMA compositor control */
+int hc15xx_vdec_gma_configure(struct hc15xx_vdec *vdec,
+			      const struct hc15xx_vdec_display_config *cfg);
+int hc15xx_vdec_gma_swap(struct hc15xx_vdec *vdec);
 
 #endif /* HC15XX_VDEC_CODEC_H */
