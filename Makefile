@@ -1473,8 +1473,15 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000: ge-queue start seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000: ge-queue complete seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq 'source=frontend-metric audio metric .*frames=600 .*ge_stage_frames=300 buffered_frames=0 mode=normal presenter=GE' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program' \
+	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
 run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
