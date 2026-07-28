@@ -26,6 +26,7 @@ AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
 RETAINED_TEST := $(BUILD_DIR)/hc15xx-retained-test
 RETAINED_SRC := platform/hc15xx_retained.c
 RETAINED_HEADER := include/hc15xx_retained.h
+EFUSE_TEST := $(BUILD_DIR)/hc15xx-efuse-test
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
 CC_MIPS = $(CROSS_COMPILE)gcc
@@ -263,7 +264,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
 	test-ge-queue test-ge-batch test-ge-filter-extract \
-	test-ge-symbol-coverage clean
+	test-ge-symbol-coverage efuse-test clean
 
 GE_BATCH_TEST := $(BUILD_DIR)/hcge-batch-test
 
@@ -872,6 +873,14 @@ audio-test: $(AUDIO_TEST) $(AUDIO_AVSYNC_TEST) $(AUDIO_RESAMPLER_TEST) \
 	'$(AUDIO_AVSYNC_TEST)'
 	'$(AUDIO_RESAMPLER_TEST)'
 	'$(RETAINED_TEST)'
+
+$(EFUSE_TEST): efuse/hc15xx_efuse.c efuse/hc15xx_efuse.h efuse/test_hc15xx_efuse.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Iefuse \
+		efuse/hc15xx_efuse.c efuse/test_hc15xx_efuse.c -o '$@'
+
+efuse-test: $(EFUSE_TEST)
+	'$(EFUSE_TEST)'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
