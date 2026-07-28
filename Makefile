@@ -184,6 +184,8 @@ BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
 GPSP_TEST_SD := $(BUILD_DIR)/gpsp-test.sd.img
 GPSP_TEST_ROM := $(BUILD_DIR)/gpsp-test.gba
 GPSP_TEST_ROM_TOOL := $(BUILD_DIR)/mkgabatest
+GPSP_REAL_ROM ?=
+GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
@@ -239,6 +241,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
 	run-linux-gpsp smoke-linux-gpsp \
+	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
@@ -1344,6 +1347,17 @@ $(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM)
 	mmd -i '$@' ::/GBA
 	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
 
+gpsp-real-test-sd:
+	@test -n '$(GPSP_REAL_ROM)' || { \
+		echo 'set GPSP_REAL_ROM=/path/to/a/legal GBA ROM' >&2; exit 2; }
+	@test -f '$(GPSP_REAL_ROM)' || { \
+		echo 'GPSP_REAL_ROM does not name a regular file' >&2; exit 2; }
+	mkdir -p '$(dir $(GPSP_REAL_TEST_SD))'
+	truncate -s 128M '$(GPSP_REAL_TEST_SD)'
+	mkfs.vfat -F 32 -n SFTEST '$(GPSP_REAL_TEST_SD)' >/dev/null
+	mmd -i '$(GPSP_REAL_TEST_SD)' ::/GBA
+	mcopy -i '$(GPSP_REAL_TEST_SD)' '$(GPSP_REAL_ROM)' ::/GBA/TEST.GBA
+
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
@@ -1439,6 +1453,30 @@ smoke-linux-gpsp: run-linux-gpsp
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
+
+run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 15; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(GPSP_REAL_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-gpsp-real.log \
+		> '$(BUILD_DIR)'/logs/linux-gpsp-real.console 2>&1
+	mcopy -o -i '$(GPSP_REAL_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
+
+smoke-linux-gpsp-real: run-linux-gpsp-real
+	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: load JIT BIOS hook begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: load JIT BIOS hook end' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
 run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)

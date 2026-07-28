@@ -420,6 +420,27 @@ in log 137, where emulation and audio continued normally behind a blank physical
 scanout; the former all-zero test cartridge could only produce a solid frame
 and could not make that distinction.
 
+For the complete gpSP startup path, including BIOS-hook translation and a real
+game's first frame, run:
+
+```
+make smoke-linux-gpsp-real GPSP_REAL_ROM=/path/to/a/legal/game.gba
+```
+
+The ROM is copied only into an ignored temporary FAT image. It is never added
+to an artifact or repository. The gate requires both JIT BIOS-hook markers,
+successful ROM loading, a 240x160 first frame, and a clean frontend return; it
+also rejects MIPS bus faults and flat-loader relocation failures.
+
+gpSP's MIPS translator has an important NOMMU build invariant. GCC switch jump
+tables contain absolute targets which cannot safely follow the translator
+through the bFLT layout/relocation path. `cpu_threaded.c` is therefore compiled
+with jump-table lowering disabled, and its build checks that
+`translate_block_arm` contains no computed switch jump. The translator's
+non-reentrant scratch area lives after the executable mmap-backed JIT caches:
+this avoids both bFLT BSS relocations and the recursive 8 KiB stack allocation
+which previously made startup depend on incidental binary layout.
+
 ## Performance findings
 
 The latest physical profile is mostly idle once boot has completed. The large
