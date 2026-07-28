@@ -14,7 +14,7 @@ struct hc15xx_vdec_io {
 	void (*cache_invalidate)(void *cookie, uintptr_t address, size_t len);
 };
 
-enum hc15xx_vdec_codec {
+enum hc15xx_vdec_codec_id {
 	HC15XX_VDEC_CODEC_H264 = 0,
 	HC15XX_VDEC_CODEC_MPEG2,
 	HC15XX_VDEC_CODEC_MPEG4,
@@ -24,7 +24,7 @@ enum hc15xx_vdec_codec {
 };
 
 struct hc15xx_vdec_config {
-	enum hc15xx_vdec_codec codec;
+	enum hc15xx_vdec_codec_id codec;
 	uint32_t width;
 	uint32_t height;
 	uint32_t frame_rate;
