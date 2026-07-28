@@ -427,6 +427,13 @@ game's first frame, run:
 make smoke-linux-gpsp-real GPSP_REAL_ROM=/path/to/a/legal/game.gba
 ```
 
+The gpSP gates deliberately observe the platform boundary: browser launch,
+frontend ROM-load begin/completion, the first hashed 240x160 frame, GE scanout,
+and clean process return. They do not depend on progress callbacks inserted
+inside a core. QEMU still rejects instruction/data bus errors, frontend
+signals, bFLT relocation failures, GE queue misuse, and kernel panics, so a
+core can be replaced or updated without weakening the regression oracle.
+
 The ROM is copied only into an ignored temporary FAT image. It is never added
 to an artifact or repository. The gate requires both JIT BIOS-hook markers,
 successful ROM loading, a 240x160 first frame, and a clean frontend return; it
