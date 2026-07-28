@@ -172,6 +172,28 @@
 			status = "okay";
 		};
 
+		vdec: video-decoder@18810000 {
+			compatible = "hichip,hc15xx-vdec";
+			reg = <0x18810000 0x1000>,
+			      <0x18800000 0x1000>;
+			reg-names = "vdec", "sys";
+			interrupts = <6>;
+			status = "okay";
+		};
+
+		dsc: display-controller@18870000 {
+			compatible = "hichip,hc15xx-dsc";
+			reg = <0x18870000 0x100>;
+			interrupts = <7>;
+			status = "okay";
+		};
+
+		efuse: efuse@18818e00 {
+			compatible = "hichip,hc15xx-efuse";
+			reg = <0x18818e00 0x100>;
+			status = "okay";
+		};
+
 		usb0: usb@18844000 {
 			compatible = "hichip,hc15xx-musb";
 			reg = <0x18844000 0x1000>;

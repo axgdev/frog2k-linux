@@ -267,7 +267,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
 	test-ge-queue test-ge-batch test-ge-filter-extract \
-	test-ge-symbol-coverage efuse-test vdec-test vdec-codec-test dsc-test clean
+	test-ge-symbol-coverage efuse-test vdec-test vdec-codec-test dsc-test \
+	device-tests clean
 
 GE_BATCH_TEST := $(BUILD_DIR)/hcge-batch-test
 
@@ -911,6 +912,23 @@ $(DSC_TEST): dsc/hc15xx_dsc.c dsc/hc15xx_dsc.h dsc/test_hc15xx_dsc.c
 
 dsc-test: $(DSC_TEST)
 	'$(DSC_TEST)'
+
+DEVICE_TESTS := $(BUILD_DIR)/test_efuse_device $(BUILD_DIR)/test_vdec_device \
+		$(BUILD_DIR)/test_dsc_device
+
+$(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c
+	mkdir -p '$(dir $@)'
+	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+
+$(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c
+	mkdir -p '$(dir $@)'
+	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+
+$(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c
+	mkdir -p '$(dir $@)'
+	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+
+device-tests: $(DEVICE_TESTS)
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
