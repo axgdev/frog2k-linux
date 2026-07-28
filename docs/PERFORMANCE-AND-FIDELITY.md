@@ -128,7 +128,7 @@ require per-block coverage plus stable indirect gates or incoming-edge tracking
 for every RAM translation; merely retaining the current directly linked code
 would execute stale instructions.
 
-## Phase-A RAM JIT measurements and design contract
+## Rejected RAM-version experiment
 
 Phase A measured 121,382 RAM translations over approximately 22.5 seconds.
 Of those, 90,954 were exact repeats (74.93%), making content reuse a better
@@ -137,45 +137,24 @@ the corresponding host allocation reached 126.99 MiB (5.91x). The Unbound
 QEMU baseline was 51.572 FPS at frame 300 and 45.034 FPS at frame 600, with
 21,666 full-RAM store flushes.
 
-The post-change 600-frame QEMU boot sequence held 59.892 FPS at frame 300 and
-59.820 FPS at frame 600, with no capacity, RAM-arena, or DMA reset. That
-particular sequence executed only ROM code (`ram_peak=0`), so it validates the
-absence of overhead and is not evidence for the content-reuse speedup. A
-physical-device run through Unbound's CPU-heavy gameplay remains the relevant
-comparison for RAM-version hit rate and end-user performance.
+The attempted exact-content cache was rejected after physical log149. Both
+Unbound and FireRed remained on the white boot frame while alternating only
+between PCs `081dd81a` and `081dd066`. The run reported `ram_peak=0`, zero
+version hits, and roughly one million store callbacks: the experimental path
+was changing ROM-startup behavior before it had reused a single RAM
+translation. A stronger QEMU test reproduced invalid guest jumps when the
+generated block-transfer helpers were exercised.
 
-The generic RAM JIT is bounded by a 1 MiB generated-code arena and a 512 KiB
-source/metadata arena. A translation key includes the canonical guest entry,
-ARM/Thumb state, block extent, and the exact source bytes (not only a hash), so
-an unchanged block can be reused safely. Capacity eviction advances a global
-epoch and resets the RAM table; no unbounded host allocation is permitted.
+The production build therefore retains the proven 128 KiB RAM JIT and the
+safe identical-write optimization above. It does not publish the experimental
+ROM recursion, selective block-transfer invalidation, or 1 MiB RAM arena.
+After rollback, the real Unbound QEMU run again progressed from the white boot
+frame to PCs `080080d4` and `08006b92`, produced nonzero audio, rendered 600
+frames, and exited cleanly. Exact-content reuse remains a measured opportunity,
+but it must be redesigned without modifying ROM translation publication and
+must prove a nonzero RAM hit rate before entering a device build.
 
-Stores first canonicalize mirrors and compare the resulting byte/halfword/word
-contents. An identical write is a no-op for translation state. A changed write
-invalidates only translated blocks whose recorded source interval overlaps the
-write (including unaligned and cross-instruction writes), then publishes the
-store before any possible re-entry. DMA, interpreter fallbacks, and cheat/debug
-writes remain conservative: they advance the epoch and reset all RAM
-translations because their aliases and ranges are not statically bounded.
-ARM and Thumb widths/alignment, VRAM/IWRAM/EWRAM mirrors, and STM/LDM/PUSH/POP
-block transfers are part of the same overlap contract.
-
-One MIPS-specific trap is `mips_emit_b`: its conditional immediate is signed
-16-bit. A branch from a large generated block to the fixed SMC trampoline can
-silently wrap out of range. The store path now emits an absolute same-segment
-`j` to the trampoline, retaining the store in the delay slot. Block-transfer
-helpers are different: generated code saves every live guest register and
-calls the C invalidation helpers directly. This avoids exposing new assembly
-entry points as C data, which `elf2flt` relocated incorrectly in NOMMU FLAT
-executables. Non-EWRAM/IWRAM block stores bypass RAM-JIT invalidation entirely.
-
-Computed translated jumps also need a guard on uClinux/MIPS: before
-`jr`/`jalr`, reject null, misaligned, or out-of-arena targets and fall back to
-the interpreter. There is no MMU to turn a stale host pointer into a
-recoverable fault. Untranslatable speculative EWRAM/IWRAM blocks are logged as
-RAM translation fallbacks, distinct from genuine invalid-address jumps.
-
-The generated-ROM SMC suite now covers `smc-ab`, `smc-range`, `smc-isa`,
+The generated-ROM SMC diagnostic suite covers `smc-ab`, `smc-range`, `smc-isa`,
 `smc-mirror`, `smc-dma-epoch`, and `smc-block` (ARM/Thumb, aliases, DMA epoch,
 and block-transfer paths). Each mode must return cleanly with no bad jump or
 bus fault and produce the single-color scanout oracle hash `6ddf4dc5` (the

@@ -1499,6 +1499,8 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'source=frontend-metric audio metric .*frames=600 .*ge_stage_frames=300 buffered_frames=0 mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric .*peak=[1-9][0-9]* .*frames=(300|600)' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
