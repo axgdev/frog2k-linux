@@ -1480,6 +1480,8 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq '\[gpSP JIT\] rom_peak=[0-9]+ rom_capacity=[0-9]+ rom_flushes=[0-9]+ ram_peak=[0-9]+ ram_capacity=[0-9]+ ram_flushes=[0-9]+' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq '\[gpSP JIT reason\] capacity=[0-9]+ store=[0-9]+ dma=[0-9]+' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log

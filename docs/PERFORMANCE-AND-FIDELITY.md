@@ -109,3 +109,21 @@ The real-ROM QEMU smoke test requires:
 The core also reports ROM/RAM JIT peak usage and flush counts at unload. Those
 counters distinguish translation-cache churn from instruction-selection cost
 in future physical profiles without adding work to the per-instruction path.
+
+The log147/loglinux0080 comparison isolates the remaining Pokemon Unbound
+bottleneck. Two Unbound sessions recorded 87,003 and 76,219 RAM translation
+flushes, while FireRed recorded only 43 over more than 4,500 frames and held
+59.7 FPS. QEMU attributed every one of 27,211 sampled flushes to an ordinary
+generated RAM store: capacity and DMA flush counts were both zero, and peak
+RAM JIT use was only 29,240 of 131,072 bytes.
+
+The MIPS store handlers now compare tagged RAM before invalidating translated
+code. Recopying an identical byte, halfword, or word cannot change execution,
+so that write and its global flush are safely omitted; changed code still uses
+the original store-before-flush path. DMA applies the same endian-normalized
+rule. In the real-ROM QEMU workload this removed 20.3% of RAM flushes and
+improved the 600-frame rate from 43.050 to 44.947 FPS without changing scanout,
+audio, or lifecycle behavior. Eliminating the remaining flushes safely would
+require per-block coverage plus stable indirect gates or incoming-edge tracking
+for every RAM translation; merely retaining the current directly linked code
+would execute stale instructions.
