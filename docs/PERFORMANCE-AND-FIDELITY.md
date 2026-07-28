@@ -81,3 +81,31 @@ next physical log will quantify the resulting startup reduction.
 QEMU's continuous 30 Hz scanout now tracks dirty pages in the reserved GMA
 arena and skips composition and hashing when no framebuffer data changed.  It
 does not skip panel timers or alter guest-visible raster state.
+
+## GBA ROM residency and generated-code cost
+
+The log146/loglinux0079 Pokemon Unbound run establishes that this workload is
+CPU-bound inside gpSP's generated ARM-to-MIPS code. At representative points,
+normal mode fell from 36.302 FPS at frame 300 to 27.429 FPS at frame 1200;
+uncapped full-frame mode reached 58.229 FPS initially but settled near 30 FPS.
+GE presentation remained about 0.55--0.68 ms per frame, so removing presentation
+or audio work cannot supply the requested 50% improvement.
+
+Maximum GBA ROMs previously depended on a paged file cache. Linux now maps the
+otherwise-unused physical `0x02000000..0x03ffffff` reservation through the
+narrow `/dev/sf2000-rombuf` device. gpSP divides the 32 MiB fallback into
+32 KiB allocations so NOMMU fragmentation cannot make content loading fail,
+but uses the contiguous device mapping on SF2000. For an exactly 32 MiB ROM,
+the MIPS emitter masks the cartridge address and adds the aligned ROM base
+directly; this removes the read-map index, table load, and dependent pointer
+load from every generated ROM data access.
+
+The real-ROM QEMU smoke test requires:
+
+- `buffer_mib=32`, `swapped=0`, and `direct=1`;
+- zero runtime ROM page loads and bytes;
+- valid frames, GE presentation, audio, clean exit, and no guest fault.
+
+The core also reports ROM/RAM JIT peak usage and flush counts at unload. Those
+counters distinguish translation-cache churn from instruction-selection cost
+in future physical profiles without adding work to the per-instruction path.

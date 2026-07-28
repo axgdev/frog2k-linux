@@ -789,6 +789,7 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
+		printf 'nod /dev/sf2000-rombuf 0600 0 0 c 10 242\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -1087,6 +1088,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
 		--enable SF2000_GE \
+		--enable SF2000_ROM_BUFFER \
 		--disable SF2000_PANEL_SYNC \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
@@ -1472,6 +1474,12 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq '\[gpSP ROM\] size=33554432 buffer_mib=32 swapped=0 direct=1' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q '\[gpSP ROM\] runtime_page_loads=0 runtime_page_bytes=0' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq '\[gpSP JIT\] rom_peak=[0-9]+ rom_capacity=[0-9]+ rom_flushes=[0-9]+ ram_peak=[0-9]+ ram_capacity=[0-9]+ ram_flushes=[0-9]+' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log

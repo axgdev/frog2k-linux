@@ -111,12 +111,20 @@ The device tree reserves the areas that cannot be handed to the page allocator:
 | `0x00f00000..0x00ffffff` | GMA descriptors and graphics DMA arena |
 | `0x00f10000..0x00f357ff` | 320x240 RGB565 GMA scanout / `/dev/fb0` |
 | `0x00fa8000..0x00fcffff` | RGB565 render surface used by the console |
-| `0x01000000..0x03ffffff` | ROM/loader/retained diagnostic scratch |
+| `0x01000000..0x01ffffff` | ROM/loader/retained diagnostic scratch |
+| `0x02000000..0x03ffffff` | contiguous 32 MiB emulator ROM buffer |
 
 The graphics arena is accessed through an uncached alias for DMA ownership.
 Cache maintenance is still required whenever ownership changes between the CPU
 and GE. The simple framebuffer validates mappings against the physical scanout
 range while preserving the usable uncached NOMMU alias.
+
+The upper half of the old boot-ROM reservation is not touched after Linux has
+started. `CONFIG_SF2000_ROM_BUFFER` exposes only that fixed range through
+`/dev/sf2000-rombuf`; it does not grant arbitrary physical-memory access.
+Maximum-size GBA cartridges can consequently remain resident without asking
+the fragmented NOMMU page allocator for a 32 MiB high-order allocation. The
+mapping is cached because it is ordinary CPU data, not DMA memory.
 
 ## Display pipeline
 
