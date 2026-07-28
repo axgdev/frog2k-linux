@@ -184,6 +184,9 @@ BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
 GPSP_TEST_SD := $(BUILD_DIR)/gpsp-test.sd.img
 GPSP_TEST_ROM := $(BUILD_DIR)/gpsp-test.gba
 GPSP_TEST_ROM_TOOL := $(BUILD_DIR)/mkgabatest
+GPSP_SMC_TEST_MODES := smc-ab smc-range smc-isa smc-mirror smc-dma-epoch smc-block
+GPSP_SMC_TEST_ROMS := $(addprefix $(BUILD_DIR)/gpsp-,$(addsuffix .gba,$(GPSP_SMC_TEST_MODES)))
+GPSP_SMC_MODE ?= smc-ab
 GPSP_REAL_ROM ?=
 GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
@@ -242,6 +245,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-frontend smoke-linux-frontend \
 	run-linux-gpsp smoke-linux-gpsp \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
+	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
 	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
@@ -1342,6 +1346,11 @@ $(GPSP_TEST_ROM_TOOL): tools/mkgabatest.c
 $(GPSP_TEST_ROM): $(GPSP_TEST_ROM_TOOL)
 	'$<' '$@'
 
+gpsp-smc-test-roms: $(GPSP_SMC_TEST_ROMS)
+
+$(BUILD_DIR)/gpsp-smc-%.gba: $(GPSP_TEST_ROM_TOOL)
+	'$<' '$@' 'smc-$*'
+
 $(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
@@ -1492,6 +1501,22 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+
+run-linux-gpsp-smc: gpsp-smc-test-roms
+	@case ' $(GPSP_SMC_TEST_MODES) ' in \
+		*' $(GPSP_SMC_MODE) '*) ;; \
+		*) echo 'invalid GPSP_SMC_MODE=$(GPSP_SMC_MODE)' >&2; exit 2 ;; \
+	esac
+	$(MAKE) run-linux-gpsp-real \
+		GPSP_REAL_ROM='$(BUILD_DIR)/gpsp-$(GPSP_SMC_MODE).gba'
+
+smoke-linux-gpsp-smc: run-linux-gpsp-smc
+	grep -Eq 'scanout-oracle .*hash=6ddf4dc5 distinct=1 nonblack=76800 ' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: returned cleanly' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	! grep -Eq 'bad jump|Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
 run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
