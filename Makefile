@@ -29,6 +29,7 @@ RETAINED_HEADER := include/hc15xx_retained.h
 EFUSE_TEST := $(BUILD_DIR)/hc15xx-efuse-test
 VDEC_TEST := $(BUILD_DIR)/hc15xx-vdec-test
 VDEC_CODEC_TEST := $(BUILD_DIR)/hc15xx-vdec-codec-test
+DSC_TEST := $(BUILD_DIR)/hc15xx-dsc-test
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/mipsel-buildroot-uclinux-uclibc-
 CC_MIPS = $(CROSS_COMPILE)gcc
@@ -266,7 +267,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
 	test-ge-queue test-ge-batch test-ge-filter-extract \
-	test-ge-symbol-coverage efuse-test vdec-test vdec-codec-test clean
+	test-ge-symbol-coverage efuse-test vdec-test vdec-codec-test dsc-test clean
 
 GE_BATCH_TEST := $(BUILD_DIR)/hcge-batch-test
 
@@ -902,6 +903,14 @@ $(VDEC_CODEC_TEST): vdec/hc15xx_vdec.c vdec/hc15xx_vdec.h \
 
 vdec-codec-test: $(VDEC_CODEC_TEST)
 	'$(VDEC_CODEC_TEST)'
+
+$(DSC_TEST): dsc/hc15xx_dsc.c dsc/hc15xx_dsc.h dsc/test_hc15xx_dsc.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -Wextra -Werror -Idsc \
+		dsc/hc15xx_dsc.c dsc/test_hc15xx_dsc.c -o '$@'
+
+dsc-test: $(DSC_TEST)
+	'$(DSC_TEST)'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
