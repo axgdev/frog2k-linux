@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 #define KSEG1ADDR(x) ((volatile void *)(uintptr_t)((uint32_t)(x) | 0xa0000000u))
-#define PROGRESS_PHYS 0x013f0000u
+#define PROGRESS_PHYS 0x07a00000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u

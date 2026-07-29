@@ -1078,7 +1078,7 @@ index b449b6866..c08af6c28 100644
  	.set	noat
  	SAVE_SOME
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510030
 +	sw	k1, 20(k0)
 +	sw	v0, 24(k0)
@@ -1098,7 +1098,7 @@ index b449b6866..c08af6c28 100644
 +	beqz	t2, 1f
 +	 nop
 +	mtc0	t1, CP0_ERROREPC
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510032
 +	sw	k1, 20(k0)
 +	sw	t1, 24(k0)
@@ -1148,7 +1148,7 @@ index b449b6866..c08af6c28 100644
  	.set	pop
  
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510031
 +	sw	k1, 20(k0)
 +	sw	v0, 24(k0)
@@ -1159,7 +1159,7 @@ index b449b6866..c08af6c28 100644
 +	move	a0, v0
 +	jal	sf2000_syscall_mark
 +	nop
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510033
 +	sw	k1, 20(k0)
 +	sw	v0, 24(k0)
@@ -1178,7 +1178,7 @@ index b449b6866..c08af6c28 100644
  	lw	t2, (t1)		# syscall routine
  
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510534
 +	sw	k1, 128(k0)
 +	sw	v0, 132(k0)
@@ -1187,7 +1187,7 @@ index b449b6866..c08af6c28 100644
  	beqz	t2, illegal_syscall
  
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510034
 +	sw	k1, 20(k0)
 +	sw	v0, 24(k0)
@@ -1196,7 +1196,7 @@ index b449b6866..c08af6c28 100644
  	jalr	t2			# Do The Real Thing (TM)
 +	nop
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510035
 +	sw	k1, 20(k0)
 +	sw	v0, 24(k0)
@@ -1214,7 +1214,7 @@ index b449b6866..c08af6c28 100644
  	 */
  bad_stack:
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510537
 +	sw	k1, 160(k0)
 +	lw	k1, PT_R29(sp)
@@ -1228,7 +1228,7 @@ index b449b6866..c08af6c28 100644
  	 */
  illegal_syscall:
 +#ifdef CONFIG_MIPS_SF2000
-+	li	k0, 0xa1400000
++	li	k0, 0xa7a10000
 +	li	k1, 0x51510536
 +	sw	k1, 152(k0)
 +	sw	v0, 156(k0)
@@ -1304,10 +1304,10 @@ index 23a140327..679c3b9fb 100644
 +#define SF2000_SCREEN_W 320
 +#define SF2000_SCREEN_H 240
 +#define SF2000_SCREEN_PITCH (SF2000_SCREEN_W * 2)
-+#define SF2000_PROGRESS_PHYS 0x013f0000u
++#define SF2000_PROGRESS_PHYS 0x07a00000u
 +#define SF2000_PROGRESS_RESERVE_SIZE 0x00020000u
-+#define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x013f0000))
-+#define SF2000_LIVE_HANDOFF_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x0140f000))
++#define SF2000_PROGRESS_KSEG1 ((volatile struct sf2000_progress_log *)CKSEG1ADDR(0x07a00000))
++#define SF2000_LIVE_HANDOFF_KSEG1 ((volatile unsigned int *)CKSEG1ADDR(0x07a2f000))
 +#define SF2000_PROGRESS_MAGIC 0x52504653u
 +#define SF2000_PROGRESS_VERSION 1u
 +#define SF2000_PROGRESS_ENTRIES 1024u
@@ -1357,7 +1357,7 @@ index 23a140327..679c3b9fb 100644
 +{
 +	volatile u32 *wdt_count = (volatile u32 *)CKSEG1ADDR(0x18818500);
 +	volatile u8 *wdt_conf = (volatile u8 *)CKSEG1ADDR(0x18818504);
-+	volatile u32 *raw = (volatile u32 *)CKSEG1ADDR(0x01400000);
++	volatile u32 *raw = (volatile u32 *)CKSEG1ADDR(0x07a10000);
 +
 +	(void)command;
 +	if (!IS_ENABLED(CONFIG_MIPS_SF2000))

@@ -52,11 +52,12 @@ The detailed process and acceptance gates are in
 
 The integration now has no bFLT build path. The old uClinux target patches,
 `elf2flt`, `bfltpack`, and flat startup code were removed. A clean Buildroot
-toolchain produces two deliberately separate static ELF forms:
+toolchain supports two deliberately separate static ELF forms:
 
-- fixed-address `ET_EXEC` for the first-stage init;
-- position-independent `ET_DYN` for BusyBox, services, and frontends, with no
-  interpreter or shared runtime.
+- position-independent `ET_DYN` for init, BusyBox, services, and frontends,
+  with no interpreter or shared runtime;
+- opt-in fixed-address `ET_EXEC` compatibility, disabled and unreserved in the
+  default build.
 
 QEMU exposed the remaining architecture-specific failure: MIPS local GOT
 entries are not represented by individual ELF relocation records. The kernel

@@ -19,7 +19,7 @@ binfmt handler.
 
 --- /dev/null
 +++ b/fs/binfmt_elf_nommu.c
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,439 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * binfmt_elf_nommu.c - Load static ELF binaries on NOMMU MIPS (SF2000).
@@ -136,10 +136,10 @@ binfmt handler.
 +			return -ENOEXEC;
 +		}
 +	}
-+	if (!rel_addr || !rel_size || rel_ent != sizeof(*rel) ||
++	if ((!rel_addr != !rel_size) || rel_ent != sizeof(*rel) ||
 +	    rel_size % sizeof(*rel))
 +		return -ENOEXEC;
-+	if (!elf_nommu_range_in_load(phdr, phnum, rel_addr, rel_size))
++	if (rel_size && !elf_nommu_range_in_load(phdr, phnum, rel_addr, rel_size))
 +		return -ENOEXEC;
 +
 +	/*
@@ -259,7 +259,11 @@ binfmt handler.
 +
 +	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
 +		return -ENOEXEC;
-+	if (elf_ex->e_type != ET_EXEC && elf_ex->e_type != ET_DYN)
++	if (elf_ex->e_type != ET_DYN
++#ifdef CONFIG_BINFMT_ELF_NOMMU_FIXED
++	    && elf_ex->e_type != ET_EXEC
++#endif
++)
 +		return -ENOEXEC;
 +	if (!elf_check_arch(elf_ex))
 +		return -ENOEXEC;
@@ -458,7 +462,7 @@ binfmt handler.
 diff --git a/fs/Kconfig.binfmt b/fs/Kconfig.binfmt
 --- a/fs/Kconfig.binfmt
 +++ b/fs/Kconfig.binfmt
-@@ -119,6 +119,13 @@ config BINFMT_FLAT
+@@ -119,6 +119,22 @@ config BINFMT_FLAT
  	help
  	  Support uClinux FLAT format binaries.
  
@@ -467,7 +471,16 @@ diff --git a/fs/Kconfig.binfmt b/fs/Kconfig.binfmt
 +	depends on !MMU && 32BIT
 +	help
 +	  Minimal ELF binary format handler for NOMMU MIPS.  Supports
-+	  ET_EXEC (fixed-address) and ET_DYN (static-PIE) binaries.
++	  ET_DYN static-PIE binaries.  Fixed-address ET_EXEC support is
++	  available separately for compatibility and is disabled by default.
++
++config BINFMT_ELF_NOMMU_FIXED
++	bool "Fixed-address ET_EXEC compatibility"
++	depends on BINFMT_ELF_NOMMU
++	help
++	  Permit ET_EXEC binaries in the fixed SF2000 application window.
++	  This requires a matching reserved-memory region and wastes that RAM
++	  even when no fixed executable is running.  Prefer static PIE.
 +
  config BINFMT_FLAT_ARGVP_ENVP_ON_STACK
  	bool

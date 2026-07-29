@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Relocatable static-PIE first userspace process. */
 
 	.set noreorder
 	.set noat
@@ -6,7 +7,7 @@
 	.global _start
 	.ent _start
 _start:
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510410
 	sw	$9, 0($8)
 	sw	$29, 4($8)
@@ -23,7 +24,7 @@ _start:
 1:
 	move	$16, $31
 
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510421
 	sw	$9, 64($8)
 	addiu	$4, $16, path_kmsg - 1b
@@ -32,7 +33,7 @@ _start:
 	li	$2, 4005
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 68($8)
 	sw	$7, 72($8)
 
@@ -49,12 +50,12 @@ _start:
 	addiu	$5, $16, msg_alive - 1b
 	li	$6, msg_alive_end - msg_alive
 	li	$2, 4004
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510422
 	sw	$9, 76($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 80($8)
 	sw	$7, 84($8)
 
@@ -62,12 +63,12 @@ _start:
 	addiu	$5, $16, msg_nommu - 1b
 	li	$6, msg_nommu_end - msg_nommu
 	li	$2, 4004
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510423
 	sw	$9, 88($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 92($8)
 	sw	$7, 96($8)
 
@@ -88,12 +89,12 @@ _start:
 	move	$7, $0
 	sw	$0, 16($29)
 	li	$2, 4021
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510427
 	sw	$9, 256($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 260($8)
 	sw	$7, 264($8)
 
@@ -101,12 +102,12 @@ _start:
 	move	$5, $0
 	move	$6, $0
 	li	$2, 4005
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510428
 	sw	$9, 268($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 272($8)
 	sw	$7, 276($8)
 	bnez	$7, 8f
@@ -116,12 +117,12 @@ _start:
 	addiu	$5, $29, 32
 	li	$6, 96
 	li	$2, 4003
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510429
 	sw	$9, 280($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 284($8)
 	sw	$7, 288($8)
 	bnez	$7, 7f
@@ -142,7 +143,7 @@ _start:
 	b	panel_probe_scan
 	nop
 8:
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510429
 	sw	$9, 280($8)
 	sw	$0, 284($8)
@@ -153,7 +154,7 @@ panel_probe_scan:
 	li	$19, 1
 #else
 	li	$19, 0
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x5151042d
 	sw	$9, 328($8)
 	addiu	$4, $16, path_cmdline - 1b
@@ -202,7 +203,7 @@ panel_probe_scan:
 	nop
 13:
 	li	$19, 1
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x5151042e
 	sw	$9, 332($8)
 	move	$4, $17
@@ -215,7 +216,7 @@ panel_probe_done:
 #endif
 	/* fall through */
 10:
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x5151042b
 	sw	$9, 304($8)
 	li	$10, 0xb8818500
@@ -263,12 +264,12 @@ panel_probe_done:
 	move	$5, $29
 	addiu	$6, $29, 16
 	li	$2, 4011
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x5151042a
 	sw	$9, 292($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 296($8)
 	sw	$7, 300($8)
 
@@ -277,12 +278,12 @@ panel_probe_done:
 	li	$5, 672274793
 	li	$6, 0x01234567
 	li	$2, 4088
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510424
 	sw	$9, 100($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 104($8)
 	sw	$7, 108($8)
 	li	$9, 0x51510426
@@ -297,12 +298,12 @@ panel_probe_done:
 
 	li	$4, 0
 	li	$2, 4001
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	li	$9, 0x51510425
 	sw	$9, 112($8)
 	syscall
 	 nop
-	li	$8, 0xa1400000
+	li	$8, 0xa7a10000
 	sw	$2, 116($8)
 	sw	$7, 120($8)
 

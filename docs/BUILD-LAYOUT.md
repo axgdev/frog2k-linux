@@ -8,6 +8,8 @@ and tests. Generated files never belong in the source tree:
 - `.work/` is available for local scratch trees.
 - Buildroot and Linux work trees default to `/tmp/sf2000_linux-*`.
 - QEMU is a separate sibling checkout, selected with `QEMU_DIR`.
+- The browser/libretro application is the sibling `sf2000_linux_frontend`;
+  this repository packages its binaries but does not duplicate its sources.
 
 All four locations are disposable. Removing them cannot remove maintained
 source. The physical-device image is rebuilt with:
@@ -25,9 +27,9 @@ make QEMU_DIR=/path/to/sf2000_qemu smoke-linux-buildroot-display
 ## Why Buildroot still builds a toolchain
 
 The SF2000 has no MMU, so normal dynamically interpreted Linux ELF executables
-cannot be used. Its userspace consists of fixed static ELF for the first stage
-and static-PIE ELF for normal processes. Producing those requires all of the
-following as one compatible ABI set:
+cannot be used. Its default userspace is entirely static-PIE ELF. Optional
+fixed ELF compatibility is disabled unless requested. Producing those requires
+all of the following as one compatible ABI set:
 
 - a `mipsel-*-linux-uclibc` compiler which emits MIPS32r1 soft-float PIC;
 - the patched no-MMU uClibc static-PIE startup and syscall ABI;

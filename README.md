@@ -43,9 +43,9 @@ tiny reproducible soft-float root filesystems. Alpine/postmarketOS can be
 revisited after the kernel ABI and core devices are proven.
 
 The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, GCC 16.1.0,
-binutils 2.46.1, uClibc-ng 1.0.58, and BusyBox 1.38.0. Userspace is ELF-only:
-fixed-address static `ET_EXEC` is reserved for the first-stage init and
-isolated probes, while normal programs use static-PIE `ET_DYN`.
+binutils 2.46.1, uClibc-ng 1.0.58, and BusyBox 1.38.0. Userspace is ELF-only
+and defaults entirely to static-PIE `ET_DYN`. Fixed-address static `ET_EXEC`
+is optional compatibility support enabled explicitly with `FIXED_ET_EXEC=1`.
 `make ROOTFS=buildroot toolchain` downloads and compiles the complete cross
 toolchain into the disposable Buildroot output tree.
 

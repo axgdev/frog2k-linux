@@ -26,8 +26,9 @@ register layouts, and display assumptions are not authoritative for SF2000.
 The original firmware and MuFrog/Unifrog are the physical HC15xx oracles.
 
 Linux is built without an MMU and executes only static MIPS ELF binaries.
-Fixed-address `ET_EXEC` is available for the first-stage program and controlled
-probes; ordinary applications are static-PIE `ET_DYN`. Dynamic interpreters,
+All default programs, including init, are static-PIE `ET_DYN`. Fixed-address
+`ET_EXEC` remains opt-in compatibility for controlled probes and reserves no
+RAM unless `FIXED_ET_EXEC=1`. Dynamic interpreters,
 shared objects, and bFLT are deliberately unsupported. “Normal Linux programs”
 therefore means source-portable programs that do not require:
 
@@ -82,16 +83,17 @@ code to be useful, but the SF2000 execution environment is not a conventional
 - avoiding unsafe EBase write-gate and watch-register probes;
 - adopting the ROM-locked exception-vector state;
 - constraining or removing early R4K TLB operations that trap on this target;
-- entering the fixed-address first-stage ELF through the physical/KSEG handoff
-  used by the boot environment;
-- loading fixed `ET_EXEC` and relocating static-PIE `ET_DYN` without an MMU;
+- entering the relocatable static-PIE first-stage ELF through the physical/KSEG
+  handoff used by the boot environment;
+- relocating static-PIE `ET_DYN` without an MMU, with fixed `ET_EXEC` retained
+  only as an opt-in compatibility mode;
 - restoring interrupts in the NOMMU syscall path;
 - rearming a CP0 Compare value that was already pending at the first interrupt
   enable;
 - flushing warm-boot kernel aliases before transferring control.
 
 These changes are represented as ordered patches under
-`patches/linux-5.12.4/`. Many retained markers are intentionally still present:
+`patches/linux-7.1.4/`. Many retained markers are intentionally still present:
 they are low-cost crash evidence on hardware without a dependable serial
 console. Dead userspace storage and display experiments, however, should not be
 kept in production control flow.
@@ -102,24 +104,26 @@ The device tree reserves the areas that cannot be handed to the page allocator:
 
 | Physical range | Purpose |
 | --- | --- |
-| `0x00400000..0x007fffff` | first-process identity/NOMMU execution window |
 | `0x00f00000..0x00ffffff` | GMA descriptors and graphics DMA arena |
 | `0x00f10000..0x00f357ff` | 320x240 RGB565 GMA scanout / `/dev/fb0` |
 | `0x00fa8000..0x00fcffff` | RGB565 render surface used by the console |
-| `0x01000000..0x01ffffff` | ROM/loader/retained diagnostic scratch |
-| `0x02000000..0x03ffffff` | contiguous 32 MiB emulator ROM buffer |
+| `0x07a00000..0x07ffffff` | retained logs, recovery handoff, and future recovery state |
 
 The graphics arena is accessed through an uncached alias for DMA ownership.
 Cache maintenance is still required whenever ownership changes between the CPU
 and GE. The simple framebuffer validates mappings against the physical scanout
 range while preserving the usable uncached NOMMU alias.
 
-The upper half of the old boot-ROM reservation is not touched after Linux has
-started. `CONFIG_SF2000_ROM_BUFFER` exposes only that fixed range through
-`/dev/sf2000-rombuf`; it does not grant arbitrary physical-memory access.
-Maximum-size GBA cartridges can consequently remain resident without asking
-the fragmented NOMMU page allocator for a 32 MiB high-order allocation. The
-mapping is cached because it is ordinary CPU data, not DMA memory.
+The old 48 MiB boot/ROM reservation is gone. gpSP acquires its 32 KiB ROM pages
+only after it starts and the kernel releases all of them when it exits. This
+keeps the full RAM available to every other process and avoids a fragile 32 MiB
+high-order allocation. The browser reports insufficient memory before launch.
+
+The cached recovery address range is `0x87a00000..0x88000000`; early code uses
+its uncached `0xa7a00000` alias. The first 64 KiB holds the retained journal,
+the next 64 KiB is early diagnostic scratch, and the live loader handoff is at
+physical `0x07a2f000`. The remainder is deliberately reserved for recovery
+features such as a future emergency save-state.
 
 ## Display pipeline
 

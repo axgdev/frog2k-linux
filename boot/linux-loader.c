@@ -61,9 +61,9 @@ typedef unsigned long uintptr;
 #define LOG_SECTOR_SIZE 512u
 #define LOG_LIMIT 262144u
 #define FA_READ 0x01u
-#define PROGRESS_ADDR 0xa13f0000u
-#define RAW_DIAG_ADDR 0xa1400000u
-#define LIVE_HANDOFF_ADDR 0xa140f000u
+#define PROGRESS_ADDR 0xa7a00000u
+#define RAW_DIAG_ADDR 0xa7a10000u
+#define LIVE_HANDOFF_ADDR 0xa7a2f000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u

@@ -8,7 +8,8 @@
 	.globl _start
 	.ent _start
 _start:
-	li	$sp, 0x87f00000
+	/* Keep the transient loader stack below the persistent recovery range. */
+	li	$sp, 0x879f0000
 	jal	linux_loader_main
 	nop
 

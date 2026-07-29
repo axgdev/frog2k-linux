@@ -43,7 +43,7 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 #define CONSOLE_LINE_LEN (CONSOLE_COLS + 1u)
 #define CONSOLE_SCROLLBACK_LINES 512u
 
-#define PROGRESS_PHYS 0x013f0000u
+#define PROGRESS_PHYS 0x07a00000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u

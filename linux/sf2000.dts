@@ -88,10 +88,11 @@
 		identity_exec: identity-exec@5000000 {
 			reg = <0x05000000 0x00400000>;
 			no-map;
+			status = "disabled";
 		};
 
-		bootrom_scratch: bootrom-scratch@1000000 {
-			reg = <0x01000000 0x03000000>;
+		recovery: recovery@7a00000 {
+			reg = <0x07a00000 0x00600000>;
 			no-map;
 		};
 	};

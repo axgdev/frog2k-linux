@@ -47,8 +47,8 @@ run from the default image or a broad smoke suite.
 
 The SF2000 has no MMU, so executable layout is a resource-ownership problem:
 
-- fixed static `ET_EXEC` uses the reserved physical window at `0x05000000`
-  (the kernel alias is `0x85000000`);
+- fixed static `ET_EXEC` optionally uses the physical window at `0x05000000`
+  (kernel alias `0x85000000`); it is disabled and unreserved by default;
 - static-PIE `ET_DYN` receives a distinct contiguous allocation per process;
 - dynamically interpreted ELF is unsupported.
 
@@ -72,11 +72,12 @@ Implement and verify in this order:
    frontend. Remove the old format only after the rootfs audit proves that no
    old executable remains.
 
-Never suppress linker diagnostics with `--noinhibit-exec`. Normal applications
-and services are fully static PIE: they use ELF type `ET_DYN`, have no
+Never suppress linker diagnostics with `--noinhibit-exec`. Normal applications,
+the first-stage init, and services are fully static PIE: they use ELF type
+`ET_DYN`, have no
 `PT_INTERP`, and contain only relocations supported by the kernel loader. Fixed
-static `ET_EXEC` is reserved for the first-stage init and similarly controlled
-early programs, which must fit the reserved window.
+static `ET_EXEC` is compatibility-only and requires `FIXED_ET_EXEC=1`, which
+also enables its device-tree reservation.
 
 MIPS dynarecs need one additional ABI audit. Generated code may use `$gp` as a
 guest register, but every transition from generated code to a PIC C function
@@ -86,6 +87,13 @@ only a project-local `PIC` macro. Calls through a register-state function table
 must restore the application `$gp` before entering C. Verify the final
 instructions and exercise at least one generated memory/I/O helper under QEMU;
 merely reaching a dynarec entry point does not cover this boundary.
+
+On NOMMU SF2000, valid executable VMAs use cached KSEG0 addresses. Generic
+MIPS `access_ok()` rejects those values, so the `cacheflush` syscall must
+validate the requested range against a VMA owned by `current->mm`. Never accept
+KSEG0 broadly. QEMU TCG can execute stale-cache bugs successfully, therefore a
+dynarec smoke must also assert a nonzero cache-sync call count and zero syscall
+failures.
 
 ## 4. Integrate Hardware Safely
 

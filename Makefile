@@ -64,6 +64,7 @@ BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_POWERD_SRC := buildroot/sf2000-powerd.c
 BUILDROOT_POWERD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
 ENABLE_EXPERIMENTAL_DEVTESTS ?= 0
+FIXED_ET_EXEC ?= 0
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
 BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
 BUILDROOT_GAMBATTE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gambatte
@@ -144,6 +145,7 @@ endif
 LINUX_VMLINUX := $(LINUX_OUT)/vmlinux
 LINUX_CONFIG_STAMP := $(LINUX_OUT)/.stamp-config
 LINUX_CMDLINE_STAMP := $(LINUX_OUT)/.stamp-cmdline
+LINUX_MODE_STAMP := $(LINUX_OUT)/.stamp-mode
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
@@ -233,7 +235,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all help check memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -300,7 +302,8 @@ help:
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU'
 
-check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node
+check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
+	memory-layout-audit
 
 check-vendor: check test-ge-utils test-ge-matrix test-ge-queue
 
@@ -580,14 +583,14 @@ buildroot-reconfigure:
 	rm -f '$(BUILDROOT_OUT)/.config'
 	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
 
-$(INIT_BIN): init/sf2000-fixed-init.S $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(INIT_BIN): init/sf2000-init.S $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
-		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
-		-fno-pic -fno-pie -no-pie -mno-gpopt -G 0 \
-		-Wl,-Ttext-segment=0x85000000 -Wl,-e,_start \
+		-march=mips32 -mabi=32 -msoft-float -mabicalls \
+		-fPIE -pie -mno-gpopt -G 0 \
+		-Wl,--no-dynamic-linker -Wl,-e,_start \
 		-Wl,--gc-sections -Wl,-z,noexecstack \
-		-Wl,--no-check-sections -o '$@' '$<'
+		-o '$@' '$<'
 
 $(GEN_INIT_CPIO): $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -695,17 +698,13 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_FRONTEND): player/browser.c $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_FRONTEND): $(FRONTEND_PROJECT)/src/browser.c \
+		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
+		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	$(MAKE) -C '$(FRONTEND_PROJECT)' browser \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
-		-march=mips32 -mabi=32 -msoft-float -fPIC -mabicalls \
-		-ffunction-sections -fdata-sections \
-		$(BUILDROOT_PIE_LDFLAGS) \
-		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		player/browser.c \
-		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
 $(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' gambatte \
@@ -851,7 +850,8 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		if test "$$magic" = 7f454c46; then \
 			type=$$('$(READELF_MIPS)' -h "$$executable" | \
 				awk '/Type:/ { print $$2; exit }'); \
-			test "$$type" = EXEC || test "$$type" = DYN || { \
+			test "$$type" = DYN || \
+			{ test '$(FIXED_ET_EXEC)' = 1 && test "$$type" = EXEC; } || { \
 				printf 'unsupported ELF type %s: %s\n' \
 					"$$type" "$$executable" >&2; \
 				exit 1; \
@@ -901,7 +901,6 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
-		printf 'nod /dev/sf2000-rombuf 0600 0 0 c 10 242\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
 		printf 'nod /dev/snd/pcmC0D0p 0660 0 0 c 116 16\n'; \
 		printf 'nod /dev/input/event0 0660 0 0 c 13 64\n'; \
@@ -946,9 +945,19 @@ $(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
 	done
 	touch '$@'
 
-$(SF2000_DTB): linux/sf2000.dts
+$(SF2000_DTB): linux/sf2000.dts Makefile FORCE
 	mkdir -p '$(dir $@)'
 	dtc -I dts -O dtb -o '$@' '$<'
+	if test '$(FIXED_ET_EXEC)' = 1; then \
+		fdtput -t s '$@' /reserved-memory/identity-exec@5000000 status okay; \
+	fi
+
+memory-layout-audit: $(SF2000_DTB)
+	test "$$(fdtget -t x '$<' /reserved-memory/recovery@7a00000 reg)" = \
+		"7a00000 600000"
+	test "$$(fdtget -t s '$<' /reserved-memory/identity-exec@5000000 status)" = \
+		"$(if $(filter 1,$(FIXED_ET_EXEC)),okay,disabled)"
+	! fdtget '$<' /reserved-memory/bootrom-scratch@1000000 reg >/dev/null 2>&1
 
 FORCE:
 
@@ -1191,8 +1200,13 @@ $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	printf '%s\n' '$(LINUX_CMDLINE)' > '$@.tmp'
 	if ! cmp -s '$@.tmp' '$@' 2>/dev/null; then mv '$@.tmp' '$@'; else rm -f '$@.tmp'; fi
 
+$(LINUX_MODE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
+	mkdir -p '$(dir $@)'
+	printf 'FIXED_ET_EXEC=%s\n' '$(FIXED_ET_EXEC)' > '$@.tmp'
+	if ! cmp -s '$@.tmp' '$@' 2>/dev/null; then mv '$@.tmp' '$@'; else rm -f '$@.tmp'; fi
+
 $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
-		Makefile $(LINUX_CMDLINE_STAMP) | $(LINUX_SRC)/.patched
+		Makefile $(LINUX_CMDLINE_STAMP) $(LINUX_MODE_STAMP) | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
@@ -1206,6 +1220,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable COMPAT_BINFMT_ELF \
 		--disable BINFMT_FLAT \
 		--enable BINFMT_ELF_NOMMU \
+		$(if $(filter 1,$(FIXED_ET_EXEC)),--enable,--disable) BINFMT_ELF_NOMMU_FIXED \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
 		--disable DEVMEM \
@@ -1406,7 +1421,6 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable SND_DRIVERS \
 		--enable SND_SF2000 \
 		--enable SF2000_GE \
-		--enable SF2000_ROM_BUFFER \
 		--disable SF2000_PANEL_SYNC \
 		--disable SND_SEQUENCER \
 		--disable SND_MIXER_OSS \
@@ -1536,7 +1550,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Preallocated early boot log. Keep this fixed-size file in the SD root.\n'; \
 		printf '  The ROM has disk_write but no f_write, so Linux overwrites this file in place.\n\n'; \
 		printf 'RAM progress recorder:\n'; \
-		printf '  Early Linux records named progress entries at uncached 0xa13f0000.\n'; \
+		printf '  Early Linux records named progress entries at uncached 0xa7a00000.\n'; \
 		printf '  On the next boot, the loader dumps the previous run to log.txt before clearing it.\n'; \
 		printf '  This helps replace manual blink counting when RAM survives reset/reboot.\n\n'; \
 		printf 'Early watchdog:\n'; \
@@ -1801,14 +1815,15 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	@rom_size="$$(wc -c < '$(GPSP_REAL_ROM)')"; \
-	direct=0; test "$$rom_size" -ne 33554432 || direct=1; \
-	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=32 swapped=0 direct=$$direct" \
+	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=32 swapped=0 direct=0" \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q '\[gpSP ROM\] runtime_page_loads=0 runtime_page_bytes=0' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq '\[gpSP JIT\] rom_peak=[0-9]+ rom_capacity=[0-9]+ rom_flushes=[0-9]+ ram_peak=[0-9]+ ram_capacity=[0-9]+ ram_flushes=[0-9]+' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq '\[gpSP JIT reason\] capacity=[0-9]+ store=[0-9]+ dma=[0-9]+' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -Eq '\[gpSP JIT cache\] calls=[1-9][0-9]* failures=0' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
@@ -1844,10 +1859,10 @@ run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
-		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey ret-q 500\n'; sleep 3; \
 		printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
 		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
@@ -1864,6 +1879,8 @@ smoke-linux-frontend-lifecycle: run-linux-frontend-lifecycle
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
 	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' \
+		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
+	grep -Eq '\[gpSP JIT cache\] calls=[1-9][0-9]* failures=0' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
 	test "$$(grep -c 'sf2000-frontend: returned cleanly' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log)" -eq 2
