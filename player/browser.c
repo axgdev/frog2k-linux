@@ -322,7 +322,7 @@ static void launch_selected(void)
 
 		snprintf(message, sizeof(message), "launch %s %s", name, path);
 		log_message(message);
-		/* exec of a large bFLT includes relocation and BSS setup on the weak
+		/* exec of a large static PIE includes relocation and BSS setup on the weak
 		 * CPU.  Replace the browser before entering the kernel loader so this
 		 * unavoidable work never looks like a frozen selection screen. */
 		memset(framebuffer, 0, (size_t)height * stride * sizeof(*framebuffer));

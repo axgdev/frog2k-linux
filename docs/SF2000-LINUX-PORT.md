@@ -25,8 +25,11 @@ HC16xx HCLinux is useful as a structural reference, but its clock gates,
 register layouts, and display assumptions are not authoritative for SF2000.
 The original firmware and MuFrog/Unifrog are the physical HC15xx oracles.
 
-Linux is built without an MMU and executes static MIPS bFLT binaries. “Normal
-Linux programs” therefore means source-portable programs that do not require:
+Linux is built without an MMU and executes only static MIPS ELF binaries.
+Fixed-address `ET_EXEC` is available for the first-stage program and controlled
+probes; ordinary applications are static-PIE `ET_DYN`. Dynamic interpreters,
+shared objects, and bFLT are deliberately unsupported. “Normal Linux programs”
+therefore means source-portable programs that do not require:
 
 - `fork()` with copy-on-write semantics;
 - ELF dynamic linking, `dlopen()`, or shared objects;
@@ -36,19 +39,11 @@ Linux programs” therefore means source-portable programs that do not require:
 
 Programs using `vfork()`/`exec()`, threads supported by the selected uClibc
 configuration, ordinary files, evdev, ALSA, and fbdev can be ported. Keep
-executables small: on NOMMU each program is allocated and relocated as a whole,
+executables small: on NOMMU each program is allocated as a contiguous image,
 so a tiny dedicated helper starts much faster than a large multi-call binary.
-
-One late QEMU failure exposed a particularly subtle bFLT rule. Taking the
-address of a large static BSS object in a non-PIC MIPS FLAT executable can
-leave the link-time low address in generated code even though the process
-itself entered through its KSEG0 alias. The GE context was therefore reported
-as `0x00027768` instead of an address in the process mapping and faulted on its
-first initialization store. Long-lived caller-owned objects that must be
-passed by address are now kept in the persistent `main()` stack frame (or
-allocated by a proven allocator), and retained address markers make this
-failure visible. The valid QEMU address is in the process KSEG0 range. This was
-not a GE register or `memset()` problem.
+Static PIE relocation is performed by the kernel before entry. The loader
+accepts only symbol-free MIPS `R_MIPS_REL32` relocations and rejects
+`PT_INTERP`, malformed ranges, and unsupported relocation kinds.
 
 ## Boot artifacts and loader handoff
 
@@ -87,9 +82,9 @@ code to be useful, but the SF2000 execution environment is not a conventional
 - avoiding unsafe EBase write-gate and watch-register probes;
 - adopting the ROM-locked exception-vector state;
 - constraining or removing early R4K TLB operations that trap on this target;
-- entering the first bFLT process through the physical/KSEG handoff used by
-  the boot environment;
-- completing MIPS bFLT HI16/LO16 and R32 relocations correctly;
+- entering the fixed-address first-stage ELF through the physical/KSEG handoff
+  used by the boot environment;
+- loading fixed `ET_EXEC` and relocating static-PIE `ET_DYN` without an MMU;
 - restoring interrupts in the NOMMU syscall path;
 - rearming a CP0 Compare value that was already pending at the first interrupt
   enable;
@@ -259,7 +254,7 @@ Releasing a write mapping on command completion rather than data completion was
 the catastrophic corruption bug: the controller could still DMA after Linux
 had reused the buffer, damaging unrelated FAT sectors and the superblock.
 
-The production mount service is a small static bFLT at
+The production mount service is a small static-PIE ELF at
 `/usr/sbin/sf2000-mount`. It replaces a large BusyBox shell exec in the boot
 hot path, retries the first two partitions and raw card, mounts VFAT with
 `noatime`, and publishes `/run/sf2000-storage-mounted`. `sf2000-logd` buffers
@@ -439,7 +434,7 @@ The gpSP gates deliberately observe the platform boundary: browser launch,
 frontend ROM-load begin/completion, the first hashed 240x160 frame, GE scanout,
 and clean process return. They do not depend on progress callbacks inserted
 inside a core. QEMU still rejects instruction/data bus errors, frontend
-signals, bFLT relocation failures, GE queue misuse, and kernel panics, so a
+signals, ELF load/relocation failures, GE queue misuse, and kernel panics, so a
 core can be replaced or updated without weakening the regression oracle.
 
 The ROM is copied only into an ignored temporary FAT image. It is never added
@@ -448,12 +443,12 @@ successful ROM loading, a 240x160 first frame, and a clean frontend return; it
 also rejects MIPS bus faults and flat-loader relocation failures.
 
 gpSP's MIPS translator has an important NOMMU build invariant. GCC switch jump
-tables contain absolute targets which cannot safely follow the translator
-through the bFLT layout/relocation path. `cpu_threaded.c` is therefore compiled
-with jump-table lowering disabled, and its build checks that
+tables contain absolute targets which must remain valid in the relocated static
+PIE image. `cpu_threaded.c` is therefore compiled with jump-table lowering
+disabled, and its build checks that
 `translate_block_arm` contains no computed switch jump. The translator's
 non-reentrant scratch area lives after the executable mmap-backed JIT caches:
-this avoids both bFLT BSS relocations and the recursive 8 KiB stack allocation
+this avoids executable-image coupling and the recursive 8 KiB stack allocation
 which previously made startup depend on incidental binary layout.
 
 ## Performance findings
@@ -473,7 +468,7 @@ than by the steady console. The main practical rules are:
 The log-78 timings also show where optimization is worthwhile: panel bring-up
 and the GE/VOU handoff complete early, while starting a large shell-based
 storage path dominated later boot time. Replacing it with the small
-`sf2000-mount` bFLT removes that avoidable exec/relocation cost. Further boot
+`sf2000-mount` static PIE removes that avoidable shell exec cost. Further boot
 work should be measured from retained ticks or `loglinux.txt`, not inferred
 from the visual counter, because QEMU wall time and the CP0 guest clock are not
 the same quantity.
@@ -515,7 +510,7 @@ performance journal has not yet been copied to FAT.
 
 Proven now:
 
-- stable NOMMU kernel and multi-process bFLT userspace;
+- stable NOMMU kernel and multi-process static ELF userspace;
 - accelerated 320x240 RGB565 display and standard `/dev/fb0`;
 - retained crash logs and persistent `loglinux.txt`;
 - built-in evdev input;

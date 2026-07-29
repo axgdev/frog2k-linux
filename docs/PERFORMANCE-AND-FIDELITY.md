@@ -49,9 +49,10 @@ initialization, the first panel push, RGB readiness, and service readiness at
 
 The fidelity mode uses QEMU icount shift 1.  It reports 497.66 BogoMIPS versus
 611.32 on hardware (ratio 0.814) and panel initialization of 1933.494 ms versus
-2059.253 ms (ratio 0.939).  QEMU still executes the bFLT spawn path in 732.618
-ms versus 1519.435 ms physically, which identifies cache/MMIO/memory latency as
-the next emulator fidelity gap rather than panel timing.
+2059.253 ms (ratio 0.939). The historical process-spawn baseline was measured
+with the retired bFLT userspace; new comparisons must record fixed-address ELF
+and static-PIE ELF separately. Cache/MMIO/memory latency remains the next
+emulator fidelity gap rather than panel timing.
 
 QEMU Linux uses an entire host core when the guest is idle: 15.01 seconds user
 CPU in a 15.00 second window (100%), with roughly 62.6 MiB RSS.  Live GDB

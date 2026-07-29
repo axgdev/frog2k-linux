@@ -43,7 +43,9 @@ tiny reproducible soft-float root filesystems. Alpine/postmarketOS can be
 revisited after the kernel ABI and core devices are proven.
 
 The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, GCC 16.1.0,
-binutils 2.46.1, uClibc-ng 1.0.58, BusyBox 1.38.0, and elf2flt 2024.05.
+binutils 2.46.1, uClibc-ng 1.0.58, and BusyBox 1.38.0. Userspace is ELF-only:
+fixed-address static `ET_EXEC` is reserved for the first-stage init and
+isolated probes, while normal programs use static-PIE `ET_DYN`.
 `make ROOTFS=buildroot toolchain` downloads and compiles the complete cross
 toolchain into the disposable Buildroot output tree.
 
@@ -53,18 +55,24 @@ support matrix, and application-porting constraints are documented in
 The log78/log89 stale-display-artifact incident and its reproducibility rules
 are documented in
 [`docs/DISPLAY-INCIDENT-LOG78-LOG89.md`](docs/DISPLAY-INCIDENT-LOG78-LOG89.md).
-The disposable build layout and the reason the uClinux Buildroot toolchain is
-still required are documented in
+The disposable build layout and the reason the no-MMU static-ELF Buildroot
+toolchain is required are documented in
 [`docs/BUILD-LAYOUT.md`](docs/BUILD-LAYOUT.md).
 The vendor archive classification, measured acceleration priorities, and
 module rules are documented in
 [`docs/HARDWARE-ACCELERATION.md`](docs/HARDWARE-ACCELERATION.md).
+The review and integration process for loader changes and vendor-library
+replacements is in
+[`docs/CONTRIBUTING-HARDWARE-PORTS.md`](docs/CONTRIBUTING-HARDWARE-PORTS.md).
 
 ## Commands
 
 ```sh
+make help
+make check
 make qemu
 make ROOTFS=buildroot sdcard-linux
+make ROOTFS=buildroot elf-audit
 make ROOTFS=buildroot smoke-linux-buildroot-asd
 make ROOTFS=buildroot smoke-linux-buildroot-rom
 make smoke-qemu-board-contract
@@ -188,7 +196,7 @@ The expected final screen is a sharp test card with a green top edge, yellow
 bottom edge, blue left field, red right field, RGB labels, and diagonals. The
 `smoke-linux-buildroot-fb-test` alias runs the full display smoke and checks
 representative pixels in QEMU's continuously refreshed scanout. This covers a
-real independently maintained Linux bFLT program, signal/child handling, all
+real independently maintained static Linux ELF program, signal/child handling, all
 eight o32 syscall argument slots, fbdev ioctls, framebuffer `mmap`, and CPU
 writes becoming visible through the same GMA scanout used by the device. Add
 `SF2000_FB_TEST=1` explicitly because the production default leaves the

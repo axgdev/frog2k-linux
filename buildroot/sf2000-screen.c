@@ -3548,7 +3548,7 @@ static void run_graphics_benchmark(unsigned *frame)
 		benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS,
 			half_bytes);
 	} else {
-		console_add_line("BENCH cpu-cached: unsupported on NOMMU bFLT");
+		console_add_line("BENCH cpu-cached: unsupported on NOMMU");
 		log_line("sf2000-bench: test=cpu-cached status=unsupported reason=no-safe-cached-allocation\n");
 	}
 

@@ -29,7 +29,9 @@
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
 #define DEVTEST_PATH "/usr/sbin/sf2000-devtest"
+#endif
 #define SCREEN_PID_PATH "/run/sf2000-screen.pid"
 #define SCREEN_PAUSED_MARKER "/run/sf2000-screen-paused"
 #define BATTERY_RATE_MIN_MS 300000u
@@ -326,6 +328,7 @@ static void run_frontend(void)
 	log_line("sf2000-powerd: frontend returned to console\n");
 }
 
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
 static void run_device_tests(void)
 {
 	static char *const argv[] = { (char *)DEVTEST_PATH, NULL };
@@ -360,6 +363,7 @@ static void run_device_tests(void)
 	sleep_ms(50);
 	backlight_set(1);
 }
+#endif
 
 static void drain_input(int fd)
 {
@@ -381,8 +385,11 @@ static void drain_input(int fd)
 int main(void)
 {
 	int memfd, input = -1;
-	int start = 0, y = 0, r = 0, a = 0, standby = 0, released = 1;
-	int launch_released = 1, test_released = 1;
+	int start = 0, y = 0, r = 0, standby = 0, released = 1;
+	int launch_released = 1;
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
+	int a = 0, test_released = 1;
+#endif
 	struct input_event event;
 
 	memfd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
@@ -401,7 +408,7 @@ int main(void)
 		if (input < 0)
 			sleep_ms(100);
 	}
-	log_line("sf2000-powerd: ready START+Y standby START+R browser START+A tests\n");
+	log_line("sf2000-powerd: ready START+Y standby START+R browser\n");
 	for (;;) {
 		struct pollfd wait = { .fd = input, .events = POLLIN };
 		int ready = poll(&wait, 1, BATTERY_SAMPLE_MS);
@@ -425,14 +432,18 @@ int main(void)
 			y = event.value != 0;
 		if (event.code == BTN_TR)
 			r = event.value != 0;
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
 		if (event.code == BTN_EAST)
 			a = event.value != 0;
+#endif
 		if (!start && !y)
 			released = 1;
 		if (!start && !r)
 			launch_released = 1;
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
 		if (!start && !a)
 			test_released = 1;
+#endif
 		if (!standby && released && start && y) {
 			released = 0;
 			standby = 1;
@@ -445,14 +456,18 @@ int main(void)
 			launch_released = 0;
 			run_frontend();
 			drain_input(input);
-			start = y = r = a = 0;
-			released = launch_released = test_released = 1;
+			start = y = r = 0;
+			released = launch_released = 1;
+#ifdef SF2000_EXPERIMENTAL_DEVTESTS
+			a = 0;
+			test_released = 1;
 		} else if (!standby && test_released && start && a) {
 			test_released = 0;
 			run_device_tests();
 			drain_input(input);
 			start = y = r = a = 0;
 			released = launch_released = test_released = 1;
+#endif
 		}
 	}
 	if (standby)

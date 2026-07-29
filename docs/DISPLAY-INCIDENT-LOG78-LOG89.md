@@ -1,5 +1,9 @@
 # Display incident: log78 through log89
 
+> Historical note: this incident occurred with the retired bFLT userspace.
+> The current tree ships only fixed-address and static-PIE ELF executables.
+> Its stale-artifact and display-ownership lessons still apply.
+
 ## What failed
 
 The build identified as commit `78cb6a0` was reported working on the physical

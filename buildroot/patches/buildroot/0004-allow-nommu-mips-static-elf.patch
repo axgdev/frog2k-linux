@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] buildroot: allow static ELF on no-MMU MIPS
+
+The SF2000 kernel has a dedicated no-MMU loader for fixed ET_EXEC and
+static-PIE ET_DYN images.  Permit the MIPS target to select ELF without an
+MMU and select uClibc's ELF/static-PIE format for that combination.
+
+--- a/arch/Config.in
++++ b/arch/Config.in
+@@ -471,7 +471,7 @@ choice
+ 
+ config BR2_BINFMT_ELF
+ 	bool "ELF"
+-	depends on BR2_USE_MMU
++	depends on BR2_USE_MMU || BR2_mipsel
+ 	select BR2_BINFMT_SUPPORTS_SHARED
+ 	help
+ 	  ELF (Executable and Linkable Format) is a format for libraries
+--- a/package/uclibc/uclibc.mk
++++ b/package/uclibc/uclibc.mk
+@@ -55,6 +55,15 @@ else
+ 		$(firstword $(subst .,$(space),$(locale))))
+ endif
+ 
++ifeq ($(BR2_BINFMT_ELF)$(BR2_USE_MMU),y)
++define UCLIBC_BINFMT_CONFIG
++	$(call KCONFIG_ENABLE_OPT,UCLIBC_FORMAT_ELF)
++	$(call KCONFIG_DISABLE_OPT,UCLIBC_FORMAT_FLAT)
++	$(call KCONFIG_DISABLE_OPT,UCLIBC_FORMAT_FLAT_SEP_DATA)
++	$(call KCONFIG_DISABLE_OPT,UCLIBC_FORMAT_FDPIC_ELF)
++endef
++endif
++
+ # noMMU binary formats
+ ifeq ($(BR2_BINFMT_FDPIC),y)
+ define UCLIBC_BINFMT_CONFIG

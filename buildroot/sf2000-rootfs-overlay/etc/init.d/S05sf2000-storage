@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# BusyBox-init compatibility; the normal NOMMU init executes this bFLT
+# BusyBox-init compatibility; the normal NOMMU init executes this static ELF
 # directly to avoid relocating the much larger shell during boot.
 [ "$1" = start ] || exit 0
 exec /usr/sbin/sf2000-mount

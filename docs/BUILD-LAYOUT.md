@@ -24,21 +24,23 @@ make QEMU_DIR=/path/to/sf2000_qemu smoke-linux-buildroot-display
 
 ## Why Buildroot still builds a toolchain
 
-The SF2000 has no MMU, so normal Linux ELF executables cannot be used. Its
-userspace consists of statically linked uClinux FLAT binaries. Producing those
-requires all of the following as one compatible ABI set:
+The SF2000 has no MMU, so normal dynamically interpreted Linux ELF executables
+cannot be used. Its userspace consists of fixed static ELF for the first stage
+and static-PIE ELF for normal processes. Producing those requires all of the
+following as one compatible ABI set:
 
-- a `mipsel-*-uclinux-uclibc` compiler;
-- the patched no-MMU uClibc startup and syscall ABI;
-- MIPS support in `elf2flt`;
-- `flthdr` for setting each executable's runtime stack size.
+- a `mipsel-*-linux-uclibc` compiler which emits MIPS32r1 soft-float PIC;
+- the patched no-MMU uClibc static-PIE startup and syscall ABI;
+- the SF2000 kernel's fixed/static-PIE ELF loader;
+- linker and rootfs audits which reject interpreters and unsupported
+  relocations.
 
 The frog toolchain release is a bare-metal `mipsel-*-elf` toolchain using
 newlib. It remains suitable for the freestanding loader and for compiling the
 Linux kernel, but newlib is not the Linux/uClibc userspace ABI and the release
-does not provide the required FLAT conversion tools. Substituting it for the
-Buildroot toolchain would create binaries that the current no-MMU kernel cannot
-execute.
+does not provide the Linux/uClibc runtime. Substituting it for the Buildroot
+toolchain would create binaries that the no-MMU kernel cannot use as normal
+Linux processes.
 
 Buildroot is therefore retained for the root filesystem and applications. Its
 output is kept outside this repository and reused across builds; it is not

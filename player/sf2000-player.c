@@ -3,7 +3,7 @@
  * sf2000-player - WAV audio player for SF2000.
  *
  * Self-contained RIFF/WAV parser with linear resampling to 32kHz mono S16.
- * No external libraries — keeps the binary small enough for bFLT relocations
+ * No external libraries: keep the static-PIE image and startup cost small.
  * to work reliably on this NOMMU platform.
  */
 #define _GNU_SOURCE

@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] build: keep final PIE option out of relocatable links
+
+Buildroot supplies -static-pie in EXTRA_LDFLAGS for the final BusyBox
+executable.  BusyBox also passes EXTRA_LDFLAGS directly to ld while combining
+each directory into a relocatable built-in.o.  GNU ld correctly rejects
+-r together with -pie.
+
+Keep -static-pie out of these internal ld -r invocations.  The top-level
+trylink still receives the unfiltered EXTRA_LDFLAGS and therefore emits the
+required static ET_DYN executable.
+
+--- a/scripts/Makefile.lib
++++ b/scripts/Makefile.lib
+@@ -122,7 +122,8 @@
+ # yet ld_flags is fed to ld.
+ #ld_flags       = $(LDFLAGS) $(EXTRA_LDFLAGS)
+ # Remove the -Wl, prefix from linker options normally passed through gcc
+-ld_flags       = $(filter-out -Wl$(comma)%,$(LDFLAGS) $(EXTRA_LDFLAGS))
++ld_flags       = $(filter-out -static-pie -Wl$(comma)%,\
++			$(LDFLAGS) $(EXTRA_LDFLAGS))
+ 
+ 
+ # Finds the multi-part object the current object will be linked into
+@@ -155,7 +156,8 @@
+ # TODO: LDFLAGS usually is supposed to contain gcc's flags, not ld's.
+ # but here we feed them to ld!
+ quiet_cmd_ld = LD      $@
+-cmd_ld = $(LD) $(LDFLAGS) $(EXTRA_LDFLAGS) $(LDFLAGS_$(@F)) \
++cmd_ld = $(LD) $(filter-out -static-pie,$(LDFLAGS) $(EXTRA_LDFLAGS)) \
++	       $(LDFLAGS_$(@F)) \
+ 	       $(filter-out FORCE,$^) -o $@
+ 
+ # Objcopy

@@ -8,8 +8,8 @@ MIPS (SF2000).  Supports two loading modes:
   copied to their link-time p_vaddr.  Zero runtime relocations.
 
   ET_DYN: static-PIE loading at a dynamically allocated address via
-  vm_mmap.  A bias is computed and applied to all segment addresses.
-  Userspace rcrt1.o performs one-time self-relocation before main().
+  vm_mmap.  A bias is computed and applied to all segment addresses,
+  symbol-free REL32 relocations, and MIPS local GOT entries.
 
 Both modes build the initial stack (argc/argv/envp/auxv) and hand off
 to userspace via start_thread with CPHYSADDR conversion.
@@ -19,15 +19,14 @@ binfmt handler.
 
 --- /dev/null
 +++ b/fs/binfmt_elf_nommu.c
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,418 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * binfmt_elf_nommu.c - Load static ELF binaries on NOMMU MIPS (SF2000).
 + *
 + * Supports two modes:
 + *   ET_EXEC: linked at fixed KSEG0 0x85000000, zero runtime relocations.
-+ *   ET_DYN:  static-PIE, loaded at a dynamically allocated address.
-+ *            Self-relocation is performed by userspace (rcrt1.o).
++ *   ET_DYN:  static-PIE, loaded and relocated at an allocated address.
 + */
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
@@ -48,8 +47,9 @@ binfmt handler.
 +#include <asm/page.h>
 +
 +#define ELF_NOMMU_VADDR_START	0x85000000UL
-+#define ELF_NOMMU_REGION_SIZE	0x00400000UL	/* 4 MiB */
++#define ELF_NOMMU_REGION_SIZE	0x00400000UL	/* fixed ET_EXEC window */
 +#define ELF_NOMMU_VADDR_END	(ELF_NOMMU_VADDR_START + ELF_NOMMU_REGION_SIZE)
++#define ELF_NOMMU_PIE_MAX_SIZE	0x02000000UL	/* 32 MiB image */
 +#define ELF_NOMMU_STACK_SIZE	0x20000UL	/* 128 KiB at top */
 +#define ELF_NOMMU_STACK_ALIGN	16
 +
@@ -59,6 +59,118 @@ binfmt handler.
 +
 +	if (unlikely(rv != (ssize_t)len))
 +		return rv < 0 ? (int)rv : -EIO;
++	return 0;
++}
++
++static bool elf_nommu_range_in_load(const struct elf_phdr *phdr,
++		unsigned int phnum, unsigned long addr, size_t len)
++{
++	unsigned int i;
++
++	if (addr + len < addr)
++		return false;
++	for (i = 0; i < phnum; i++) {
++		const struct elf_phdr *p = &phdr[i];
++
++		if (p->p_type != PT_LOAD)
++			continue;
++		if (addr >= p->p_vaddr &&
++		    addr + len <= p->p_vaddr + p->p_memsz)
++			return true;
++	}
++	return false;
++}
++
++/*
++ * uClibc's generic static-PIE relocator cannot enter safely on MIPS before
++ * the GOT itself has been relocated.  Perform the small, deterministic
++ * relocation set in the loader.  Fully static PIC links must contain only
++ * symbol-free R_MIPS_REL32 entries.
++ */
++static int elf_nommu_relocate_pie(const struct elf_phdr *phdr,
++		unsigned int phnum, unsigned long bias)
++{
++	Elf32_Dyn *dynamic = NULL;
++	Elf32_Rel *rel;
++	unsigned long rel_addr = 0, rel_size = 0, rel_ent = sizeof(*rel);
++	unsigned long got_addr = 0, local_gotno = 0;
++	unsigned long symtabno = 0, gotsym = 0;
++	unsigned int dynamic_count = 0, i;
++
++	for (i = 0; i < phnum; i++) {
++		if (phdr[i].p_type != PT_DYNAMIC)
++			continue;
++		dynamic = (Elf32_Dyn *)(phdr[i].p_vaddr + bias);
++		dynamic_count = phdr[i].p_memsz / sizeof(*dynamic);
++		break;
++	}
++	if (!dynamic || !dynamic_count)
++		return -ENOEXEC;
++
++	for (i = 0; i < dynamic_count && dynamic[i].d_tag != DT_NULL; i++) {
++		switch (dynamic[i].d_tag) {
++		case DT_REL:
++			rel_addr = dynamic[i].d_un.d_ptr;
++			break;
++		case DT_RELSZ:
++			rel_size = dynamic[i].d_un.d_val;
++			break;
++		case DT_RELENT:
++			rel_ent = dynamic[i].d_un.d_val;
++			break;
++		case DT_PLTGOT:
++			got_addr = dynamic[i].d_un.d_ptr;
++			break;
++		case DT_MIPS_LOCAL_GOTNO:
++			local_gotno = dynamic[i].d_un.d_val;
++			break;
++		case DT_MIPS_SYMTABNO:
++			symtabno = dynamic[i].d_un.d_val;
++			break;
++		case DT_MIPS_GOTSYM:
++			gotsym = dynamic[i].d_un.d_val;
++			break;
++		case DT_RELA:
++		case DT_RELASZ:
++			return -ENOEXEC;
++		}
++	}
++	if (!rel_addr || !rel_size || rel_ent != sizeof(*rel) ||
++	    rel_size % sizeof(*rel))
++		return -ENOEXEC;
++	if (!elf_nommu_range_in_load(phdr, phnum, rel_addr, rel_size))
++		return -ENOEXEC;
++
++	/*
++	 * MIPS keeps local addresses in a GOT which has no individual dynamic
++	 * relocations.  Entries zero and one are ABI-reserved; every remaining
++	 * local entry needs the load bias.  Fully static links must have no
++	 * global GOT entries, otherwise symbol lookup would require an rtld.
++	 */
++	if (!got_addr || local_gotno < 2 || symtabno != gotsym)
++		return -ENOEXEC;
++	if (local_gotno > ELF_NOMMU_PIE_MAX_SIZE / sizeof(unsigned long) ||
++	    !elf_nommu_range_in_load(phdr, phnum, got_addr,
++				      local_gotno * sizeof(unsigned long)))
++		return -ENOEXEC;
++	for (i = 2; i < local_gotno; i++)
++		((unsigned long *)(got_addr + bias))[i] += bias;
++
++	rel = (Elf32_Rel *)(rel_addr + bias);
++	for (i = 0; i < rel_size / sizeof(*rel); i++) {
++		unsigned int type = ELF32_R_TYPE(rel[i].r_info);
++		unsigned long *target;
++
++		if (type == R_MIPS_NONE)
++			continue;
++		if (type != R_MIPS_REL32 || ELF32_R_SYM(rel[i].r_info) != 0)
++			return -ENOEXEC;
++		if (!elf_nommu_range_in_load(phdr, phnum, rel[i].r_offset,
++					      sizeof(*target)))
++			return -ENOEXEC;
++		target = (unsigned long *)(rel[i].r_offset + bias);
++		*target += bias;
++	}
 +	return 0;
 +}
 +
@@ -138,7 +250,7 @@ binfmt handler.
 +	struct elf_phdr *phdr = NULL;
 +	struct pt_regs *regs = current_pt_regs();
 +	unsigned long lo, hi, phdr_addr, entry, stack_top, bias;
-+	unsigned long alloc_size, maddr;
++	unsigned long alloc_size = 0, maddr = 0;
 +	unsigned int phsize, i;
 +	int is_pie;
 +	int retval;
@@ -165,6 +277,13 @@ binfmt handler.
 +	if (retval)
 +		goto out;
 +
++	/*
++	 * Every structural rejection below must report an exec error.  Leaving
++	 * retval at zero makes execve() appear to succeed while the old image
++	 * keeps running.
++	 */
++	retval = -ENOEXEC;
++
 +	/* Find the segment extent. */
 +	lo = ULONG_MAX;
 +	hi = 0;
@@ -172,6 +291,8 @@ binfmt handler.
 +		struct elf_phdr *p = &phdr[i];
 +		unsigned long s, e;
 +
++		if (p->p_type == PT_INTERP)
++			goto out;
 +		if (p->p_type != PT_LOAD)
 +			continue;
 +		if (p->p_memsz < p->p_filesz)
@@ -190,7 +311,7 @@ binfmt handler.
 +
 +	if (is_pie) {
 +		/* Sanity: PIE image must be reasonable in size. */
-+		if (hi - lo > ELF_NOMMU_REGION_SIZE)
++		if (hi - lo > ELF_NOMMU_PIE_MAX_SIZE)
 +			goto out;
 +	} else {
 +		/* ET_EXEC: segments must fall in the reserved window. */
@@ -199,21 +320,9 @@ binfmt handler.
 +			goto out;
 +	}
 +
-+	if (is_pie) {
++	if (is_pie)
 +		alloc_size = PAGE_ALIGN(hi - lo) + ELF_NOMMU_STACK_SIZE;
-+		maddr = vm_mmap(NULL, 0, alloc_size,
-+				PROT_READ | PROT_WRITE | PROT_EXEC,
-+				MAP_PRIVATE | MAP_ANONYMOUS, 0);
-+		if (IS_ERR_VALUE(maddr)) {
-+			retval = (int)maddr;
-+			goto out;
-+		}
-+		bias = maddr - lo;
-+	} else {
-+		bias = 0;
-+		maddr = 0;
-+		alloc_size = 0;
-+	}
++	bias = 0;
 +
 +	/* Point of no return. */
 +	retval = begin_new_exec(bprm);
@@ -222,6 +331,22 @@ binfmt handler.
 +
 +	set_personality(PER_LINUX_32BIT);
 +	setup_new_exec(bprm);
++
++	/*
++	 * Allocate from the new mm, never from the process being replaced.
++	 * begin_new_exec() installs bprm->mm and releases every mapping which
++	 * belonged to the old image.
++	 */
++	if (is_pie) {
++		maddr = vm_mmap(NULL, 0, alloc_size,
++				PROT_READ | PROT_WRITE | PROT_EXEC,
++				MAP_PRIVATE | MAP_ANONYMOUS, 0);
++		if (!maddr || IS_ERR_VALUE(maddr)) {
++			retval = maddr ? (int)maddr : -ENOMEM;
++			goto out_fatal;
++		}
++		bias = maddr - lo;
++	}
 +
 +	/* Load segments to their final addresses. */
 +	for (i = 0; i < elf_ex->e_phnum; i++) {
@@ -243,6 +368,13 @@ binfmt handler.
 +			memset((void *)(addr + p->p_filesz), 0,
 +			       p->p_memsz - p->p_filesz);
 +	}
++
++	if (is_pie) {
++		retval = elf_nommu_relocate_pie(phdr, elf_ex->e_phnum, bias);
++		if (retval)
++			goto out_fatal;
++	}
++	flush_icache_user_range(lo + bias, hi + bias);
 +
 +	/* Place program headers after the image for AT_PHDR. */
 +	phdr_addr = ((hi + bias) + 15) & ~15UL;
