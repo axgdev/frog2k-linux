@@ -19,7 +19,7 @@ binfmt handler.
 
 --- /dev/null
 +++ b/fs/binfmt_elf_nommu.c
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,435 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * binfmt_elf_nommu.c - Load static ELF binaries on NOMMU MIPS (SF2000).
@@ -44,6 +44,7 @@ binfmt handler.
 +#include <linux/auxvec.h>
 +#include <asm/addrspace.h>
 +#include <asm/cacheflush.h>
++#include <asm/elf.h>
 +#include <asm/page.h>
 +
 +#define ELF_NOMMU_VADDR_START	0x85000000UL
@@ -248,6 +249,7 @@ binfmt handler.
 +{
 +	struct elfhdr *elf_ex = (struct elfhdr *)bprm->buf;
 +	struct elf_phdr *phdr = NULL;
++	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
 +	struct pt_regs *regs = current_pt_regs();
 +	unsigned long lo, hi, phdr_addr, entry, stack_top, bias;
 +	unsigned long alloc_size = 0, maddr = 0;
@@ -291,6 +293,12 @@ binfmt handler.
 +		struct elf_phdr *p = &phdr[i];
 +		unsigned long s, e;
 +
++		if (p->p_type >= PT_LOPROC && p->p_type <= PT_HIPROC) {
++			retval = arch_elf_pt_proc(elf_ex, p, bprm->file, false,
++						  &arch_state);
++			if (retval)
++				goto out;
++		}
 +		if (p->p_type == PT_INTERP)
 +			goto out;
 +		if (p->p_type != PT_LOAD)
@@ -307,6 +315,10 @@ binfmt handler.
 +			hi = e;
 +	}
 +	if (hi <= lo)
++		goto out;
++
++	retval = arch_check_elf(elf_ex, false, NULL, &arch_state);
++	if (retval)
 +		goto out;
 +
 +	if (is_pie) {
@@ -329,7 +341,12 @@ binfmt handler.
 +	if (retval)
 +		goto out;
 +
-+	set_personality(PER_LINUX_32BIT);
++	/*
++	 * This is architectural process state, not merely an ELF personality
++	 * label.  In particular, MIPS signal delivery dereferences
++	 * current->thread.abi to select its signal frame and trampoline.
++	 */
++	SET_PERSONALITY2(*elf_ex, &arch_state);
 +	setup_new_exec(bprm);
 +
 +	/*

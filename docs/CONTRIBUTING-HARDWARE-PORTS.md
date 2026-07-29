@@ -58,7 +58,9 @@ Implement and verify in this order:
 2. Build tiny fixed and PIE fixtures and inspect them with `readelf`.
 3. Reject `PT_INTERP`, unsupported relocations, malformed extents, overflows,
    and segments outside their allocation.
-4. Allocate only after `begin_new_exec()` installs the new memory map.
+4. Allocate only after `begin_new_exec()` installs the new memory map. Invoke
+   `SET_PERSONALITY2` with the validated architecture ELF state so MIPS signal
+   delivery, floating-point ABI selection, and thread ABI state are initialized.
 5. Apply symbol-free `R_MIPS_REL32` relocations, then relocate the MIPS local
    GOT described by `DT_PLTGOT` and `DT_MIPS_LOCAL_GOTNO`. Reject a binary
    unless `DT_MIPS_SYMTABNO == DT_MIPS_GOTSYM`; that equality proves there are
