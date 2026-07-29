@@ -4,10 +4,6 @@ Keep this repository small and direct.
 Use lightweight build tools.
 Compiling should be fast.
 Don't hack things to work, do it properly.
-
-## Editing Rules
-
-- Prefer Makefile changes over shell scripts.
-- Avoid Python, CMake, Autotools, and generated configure layers.
-- Keep dependencies to a host C compiler, the MIPS cross toolchain, `make`,
-  `dtc`, the SDK, fetched dependencies, and normal Unix utilities.
+Commit at every checkpoint. Use a short, descriptive title and a detailed body that fully specifies the change so it could be recreated from scratch.
+Prefer Makefile changes over shell scripts.
+Verify your work, use the make targets, if there isn't one, create it or compose them.
