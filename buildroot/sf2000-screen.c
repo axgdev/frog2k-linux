@@ -278,6 +278,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONDITIONING_FRAME_DWELL_MS 80u
 #define CONDITIONING_TE_EDGES 4u
 #define CONDITIONING_TIMEOUT_MS 1000u
+#define SCREEN_PAUSE_REQUEST "/run/sf2000-screen-pause-request"
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -317,6 +318,7 @@ static int ge_fill_render(uint16_t color);
 static hcge_context display_ge_storage;
 static unsigned display_ge_frames;
 static unsigned display_ge_attempts;
+static unsigned display_ge_failures;
 static unsigned gma_desc_slot;
 static uint32_t gma_desc_phys = GMA_DESC_PHYS;
 static uint32_t gma_desc_off = GMA_DESC_OFF;
@@ -1668,13 +1670,34 @@ static void application_pause_signal(int signal_number)
 static void application_pause_service(void)
 {
 	struct timespec delay = { 0, 10000000L };
+	int sync_ret = 0;
 
-	if (!application_paused)
+	if (!application_paused &&
+	    access(SCREEN_PAUSE_REQUEST, F_OK) != 0)
 		return;
+	application_paused = 1;
 	runtime_watchdog_disable();
+	/*
+	 * A legacy SIGUSR1 request can interrupt HCGE_SYNC_TIMEOUT.  In either
+	 * request mode, drain the final command before acknowledging that scanout
+	 * ownership is available to the frontend.
+	 */
+	if (display_ge)
+		sync_ret = hcge_engine_sync(display_ge);
+	if (sync_ret < 0) {
+		char line[80];
+
+		snprintf(line, sizeof(line),
+			"sf2000-screen: GE ownership drain failed ret=%d\n",
+			sync_ret);
+		log_line(line);
+		runtime_watchdog_arm();
+		return;
+	}
 	(void)publish_marker("/run/sf2000-screen-paused", "paused\n");
-	while (application_paused)
+	while (access(SCREEN_PAUSE_REQUEST, F_OK) == 0)
 		(void)nanosleep(&delay, NULL);
+	application_paused = 0;
 	(void)unlink("/run/sf2000-screen-paused");
 	runtime_watchdog_arm();
 }
@@ -3329,7 +3352,7 @@ static void ge_copy_render_to_scanout(void)
 	uint32_t render_phys = cached_render_enabled ?
 		hcge_linux_cached_phys(cached_render_frame) : GMA_RENDER_PHYS;
 	HCGERectangle source = { 0, 0, WIDTH, HEIGHT };
-	bool submitted;
+	bool submitted = false;
 	int sync_ret = -1;
 	int verified = 1;
 	uint32_t verify_detail = 0;
@@ -3427,12 +3450,33 @@ static void ge_copy_render_to_scanout(void)
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
+		if (sync_ret == -EINTR && application_paused)
+			return;
 	cpu_fallback:
-		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
-		log_line(verified ?
-			"sf2000-screen: GE present failed, copied on CPU\n" :
-			"sf2000-screen: GE copy mismatch, copied on CPU and retained GE\n");
-		progress_mark("screen-ge-present-fail", 0x3fu, SCREEN_TAG);
+		{
+			char line[144];
+
+			memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
+			display_ge_failures++;
+			/*
+			 * Logging every fallback feeds our own /dev/kmsg reader and
+			 * creates an unbounded render/fail loop.  Preserve the first
+			 * failure and exponentially spaced diagnostics without turning
+			 * an accelerator fault into a display-ownership failure.
+			 */
+			if (display_ge_failures == 1u ||
+			    !(display_ge_failures & (display_ge_failures - 1u))) {
+				snprintf(line, sizeof(line),
+					"sf2000-screen: GE present failed count=%u submit=%u sync=%d verify=%d detail=%08x, copied on CPU\n",
+					display_ge_failures, submitted ? 1u : 0u,
+					sync_ret, verified, verify_detail);
+				log_line(line);
+				progress_mark("screen-ge-present-fail", 0x3fu,
+					((uint32_t)(-sync_ret) & 0xffffu) |
+					(submitted ? 1u << 16 : 0u) |
+					(verified ? 1u << 17 : 0u));
+			}
+		}
 	} else {
 		display_ge_frames++;
 		if (display_ge_frames == 1u) {

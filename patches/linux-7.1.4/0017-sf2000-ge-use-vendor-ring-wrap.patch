@@ -1,0 +1,272 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] misc: follow the HC15xx GE circular queue wrap contract
+
+The physical GE producer pointer uses bit zero as a wrap marker.  Preserve that
+marker and point_wrap_addr exactly as the vendor hcRTOS and HC Linux drivers do,
+then let the completion IRQ finish the old tail before moving HQ_FIRST back to
+the start.  Rewinding an unmarked physical producer works in the simplified
+QEMU model but permanently stalls real HC15xx hardware when the queue fills.
+
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -30,6 +30,10 @@
+ #define SF2000_GE_START_HQ	BIT(1)
+ #define SF2000_GE_STATUS_BUSY	BIT(31)
+ 
++#define SF2000_GE_NODE_ADDR(value)	((value) & ~1u)
++#define SF2000_GE_NODE_WRAP(value)	((value) & 1u)
++#define SF2000_GE_QUEUE_GUARD		8u
++
+ #define SF2000_SYS_GATE1	0x64
+ #define SF2000_SYS_CLK		0x7c
+ #define SF2000_SYS_RESET		0x80
+@@ -113,10 +117,6 @@
+ 	struct miscdevice misc;
+ 	struct mutex submit_lock;
+ 	spinlock_t queue_lock;
+-	u32 queue_next;
+-	u32 pending_first;
+-	u32 pending_last;
+-	bool queue_started;
+ 	int irq;
+ 	u32 irq_users;
+ 	struct sf2000_ge_buffer buffers[HCGE_BUFFER_SLOTS];
+@@ -173,36 +173,70 @@
+ 	writel(value & ~SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
+ }
+ 
++/*
++ * Start the unconsumed portion of the vendor circular command queue.
++ * queue_lock must be held.  The low producer bit records that userspace has
++ * wrapped to phy_addr_min while hardware may still be consuming the tail.
++ */
++static bool sf2000_ge_start_available(struct sf2000_ge *ge)
++{
++	struct hcge_cmdq_node_ctx *ctx = ge->queue;
++	u32 producer = ctx->phy_addr_start;
++	u32 first;
++	u32 value;
++
++	if (ctx->is_reset) {
++		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_FIRST);
++		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_LAST);
++		ctx->is_reset = 0;
++	}
++	first = readl(ge->regs + SF2000_GE_HQ_FIRST);
++	if (SF2000_GE_NODE_ADDR(producer) == first) {
++		ctx->is_finish = 1;
++		complete(&ge->done);
++		return false;
++	}
++
++	if (SF2000_GE_NODE_WRAP(producer)) {
++		if (first == ctx->point_wrap_addr) {
++			ctx->phy_addr_start &= ~1u;
++			producer = ctx->phy_addr_start;
++			writel(ctx->phy_addr_min,
++			       ge->regs + SF2000_GE_HQ_FIRST);
++			writel(SF2000_GE_NODE_ADDR(producer) - sizeof(u32),
++			       ge->regs + SF2000_GE_HQ_LAST);
++		} else {
++			writel(ctx->point_wrap_addr - sizeof(u32),
++			       ge->regs + SF2000_GE_HQ_LAST);
++		}
++	} else {
++		writel(SF2000_GE_NODE_ADDR(producer) - sizeof(u32),
++		       ge->regs + SF2000_GE_HQ_LAST);
++	}
++
++	value = readl(ge->regs + SF2000_GE_CTRL);
++	value |= SF2000_GE_CTRL_SW_MEMORY | SF2000_GE_CTRL_HQ_IRQ;
++	writel(value, ge->regs + SF2000_GE_CTRL);
++	value = readl(ge->regs + SF2000_GE_START);
++	writel((value & ~3u) | SF2000_GE_START_HQ,
++	       ge->regs + SF2000_GE_START);
++	return true;
++}
++
+ static irqreturn_t sf2000_ge_irq(int irq, void *data)
+ {
+ 	struct sf2000_ge *ge = data;
+ 	struct hcge_cmdq_node_ctx *ctx = ge->queue;
+ 	u32 status = readl(ge->regs + SF2000_GE_STATUS);
+ 	unsigned long flags;
+-	u32 value;
+ 
+ 	if (!status)
+ 		return IRQ_NONE;
+ 	writel(status, ge->regs + SF2000_GE_STATUS);
+-	ctx->serial_num++;
+ 	spin_lock_irqsave(&ge->queue_lock, flags);
+-	if (ge->pending_first) {
+-		writel(ge->pending_first, ge->regs + SF2000_GE_HQ_FIRST);
+-		writel(ge->pending_last, ge->regs + SF2000_GE_HQ_LAST);
+-		ge->pending_first = 0;
+-		ge->pending_last = 0;
+-		value = readl(ge->regs + SF2000_GE_START);
+-		writel((value & ~3u) | SF2000_GE_START_HQ,
+-		       ge->regs + SF2000_GE_START);
+-		spin_unlock_irqrestore(&ge->queue_lock, flags);
+-		return IRQ_HANDLED;
+-	}
++	ctx->serial_num++;
++	sf2000_ge_start_available(ge);
+ 	spin_unlock_irqrestore(&ge->queue_lock, flags);
+-	if (readl(ge->regs + SF2000_GE_HQ_FIRST) ==
+-	    (ctx->phy_addr_start & ~1u)) {
+-		ctx->is_finish = 1;
+-		complete(&ge->done);
+-	}
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -284,10 +318,8 @@
+ 		ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
+ 		ctx->phy_addr_start = ctx->phy_addr_min;
+ 		ctx->is_reset = 1;
+-		ge->queue_next = ctx->phy_addr_min;
+-		ge->pending_first = 0;
+-		ge->pending_last = 0;
+-		ge->queue_started = false;
++		ctx->is_finish = 1;
++		reinit_completion(&ge->done);
+ 		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_FIRST);
+ 		writel(ctx->phy_addr_min, ge->regs + SF2000_GE_HQ_LAST);
+ 		return 0;
+@@ -323,10 +355,12 @@
+ 			-EFAULT : 0;
+ 	case HCGE_SUBMIT: {
+ 		struct hcge_submit submit;
+-		u32 offset = sizeof(*ctx);
+-		u32 first;
+-		u32 last;
+-		u32 queue_end = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
++		u32 producer;
++		u32 consumer;
++		u32 destination;
++		u32 queue_offset;
++		bool was_wrapped;
++		bool start_wrap = false;
+ 		bool busy;
+ 		unsigned long flags;
+ 		long ret = 0;
+@@ -334,58 +368,73 @@
+ 		if (copy_from_user(&submit, (void __user *)arg, sizeof(submit)))
+ 			return -EFAULT;
+ 		if (!submit.data || (submit.length & 3u) || !submit.length ||
+-		    submit.length > SF2000_GE_QUEUE_SIZE - offset)
++		    submit.length > SF2000_GE_QUEUE_SIZE - sizeof(*ctx) -
++				    SF2000_GE_QUEUE_GUARD)
+ 			return -EINVAL;
+ 		mutex_lock(&ge->submit_lock);
+ 		/*
+-		 * HQ_FIRST is the queue consumer, not a reusable descriptor base.
+-		 * Hardware advances it after each node.  Keep the producer monotonic
+-		 * exactly like vendor hcge_feed_nodes()/hcge_start(); rewinding it on
+-		 * every submission leaves real HC15xx hardware with no new work.
++		 * Follow the vendor ring contract.  The producer's low bit records a
++		 * wrap, point_wrap_addr terminates the old tail, and the IRQ moves
++		 * HQ_FIRST back to phy_addr_min only after that tail is consumed.
+ 		 */
+-		busy = readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY;
+-		if (!ge->queue_next || ge->queue_next < (u32)ge->queue_dma + offset ||
+-		    ge->queue_next > queue_end)
+-			ge->queue_next = (u32)ge->queue_dma + offset;
+-		if (submit.length > queue_end - ge->queue_next) {
+-			if (busy || READ_ONCE(ge->pending_first)) {
+-				ret = -EBUSY;
+-				goto submit_out;
+-			}
+-			ge->queue_next = (u32)ge->queue_dma + offset;
++		spin_lock_irqsave(&ge->queue_lock, flags);
++		producer = SF2000_GE_NODE_ADDR(ctx->phy_addr_start);
++		was_wrapped = SF2000_GE_NODE_WRAP(ctx->phy_addr_start);
++		consumer = readl(ge->regs + SF2000_GE_HQ_FIRST);
++		if (!was_wrapped && submit.length <= ctx->phy_addr_max - producer) {
++			destination = producer;
++		} else if (!was_wrapped &&
++			   ctx->phy_addr_min + submit.length +
++			   SF2000_GE_QUEUE_GUARD < consumer) {
++			destination = ctx->phy_addr_min;
++			start_wrap = true;
++		} else if (was_wrapped &&
++			   producer + submit.length + SF2000_GE_QUEUE_GUARD <
++			   consumer) {
++			destination = producer;
++		} else {
++			spin_unlock_irqrestore(&ge->queue_lock, flags);
++			ret = -EBUSY;
++			goto submit_out;
+ 		}
+-		first = ge->queue_next;
+-		offset = first - (u32)ge->queue_dma;
+-		if (copy_from_user((u8 *)ge->queue + offset,
++		spin_unlock_irqrestore(&ge->queue_lock, flags);
++
++		queue_offset = destination - (u32)ge->queue_dma;
++		if (copy_from_user((u8 *)ge->queue + queue_offset,
+ 				   (void __user *)(unsigned long)submit.data,
+ 				   submit.length)) {
+ 			ret = -EFAULT;
+ 			goto submit_out;
+ 		}
+-		last = first + submit.length - sizeof(u32);
+-		ge->queue_next = first + submit.length;
+-		reinit_completion(&ge->done);
+-		ctx->is_finish = 0;
+-		ctx->is_reset = 0;
+-		ctx->phy_addr_start = ge->queue_next;
+ 		wmb();
+-		/* HC15xx latches HQ_LAST at start.  Accumulate a second segment while
+-		 * busy and launch it from the completion IRQ instead of polling here. */
++
+ 		spin_lock_irqsave(&ge->queue_lock, flags);
+-		busy = readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY;
+-		if (busy) {
+-			if (!ge->pending_first)
+-				ge->pending_first = first;
+-			ge->pending_last = last;
++		if (SF2000_GE_NODE_ADDR(ctx->phy_addr_start) != producer) {
++			/*
++			 * submit_lock excludes another producer.  Only a damaged
++			 * context can change the address while the IRQ may clear
++			 * the wrap bit.
++			 */
++			spin_unlock_irqrestore(&ge->queue_lock, flags);
++			ret = -EIO;
++			goto submit_out;
++		}
++		was_wrapped = SF2000_GE_NODE_WRAP(ctx->phy_addr_start);
++		if (start_wrap) {
++			ctx->point_wrap_addr = producer;
++			ctx->phy_addr_start =
++				(destination + submit.length) | 1u;
+ 		} else {
+-			writel(first, ge->regs + SF2000_GE_HQ_FIRST);
+-			writel(last, ge->regs + SF2000_GE_HQ_LAST);
+-			value = readl(ge->regs + SF2000_GE_START);
+-			writel((value & ~3u) | SF2000_GE_START_HQ,
+-			       ge->regs + SF2000_GE_START);
++			ctx->phy_addr_start = (destination + submit.length) |
++				(was_wrapped ? 1u : 0u);
+ 		}
++		reinit_completion(&ge->done);
++		ctx->is_finish = 0;
++		busy = readl(ge->regs + SF2000_GE_STATUS) &
++			SF2000_GE_STATUS_BUSY;
++		if (!busy)
++			sf2000_ge_start_available(ge);
+ 		spin_unlock_irqrestore(&ge->queue_lock, flags);
+-		ge->queue_started = true;
+ submit_out:
+ 		mutex_unlock(&ge->submit_lock);
+ 		return ret;
+@@ -534,7 +583,7 @@
+ 	ctx->phy_addr_max = (u32)ge->queue_dma + SF2000_GE_QUEUE_SIZE;
+ 	ctx->phy_addr_start = ctx->phy_addr_min;
+ 	ctx->is_finish = 1;
+-	ge->queue_next = ctx->phy_addr_min;
++	ctx->is_reset = 1;
+ 	init_completion(&ge->done);
+ 	mutex_init(&ge->submit_lock);
+ 	spin_lock_init(&ge->queue_lock);

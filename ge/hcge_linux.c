@@ -442,6 +442,11 @@ int hcge_engine_sync(hcge_context *ctx)
 {
 	if (hcge_context_fd(ctx) < 0)
 		return -EINVAL;
+	/*
+	 * Preserve EINTR so an application's signal handler can run.  Display
+	 * ownership code is responsible for draining the queue after handling the
+	 * signal and before publishing its handoff acknowledgement.
+	 */
 	return ioctl(ctx->ge_fd, HCGE_SYNC_TIMEOUT, 1000ul) < 0 ? -errno : 0;
 }
 

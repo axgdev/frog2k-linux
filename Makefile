@@ -1886,7 +1886,7 @@ smoke-linux-frontend-lifecycle: run-linux-frontend-lifecycle
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log)" -eq 2
 	grep -Eq 'source=frontend-metric audio metric .*sampled_present_us=[0-9]+ .*presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle-loglinux.txt
-	! grep -Eq 'unaligned instruction access|frontend signal=|fatal signal=|reloc outside program|Kernel panic' \
+	! grep -Eq 'GE present failed|screen (stop|resume) failed|GE invalid unmarked ring rewind|unaligned instruction access|frontend signal=|fatal signal=|reloc outside program|Kernel panic' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
 
 run-linux-reboot: qemu linux-rom-sd

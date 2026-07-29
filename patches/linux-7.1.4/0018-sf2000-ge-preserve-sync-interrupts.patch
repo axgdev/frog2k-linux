@@ -1,0 +1,33 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] misc: distinguish interrupted GE waits from timeouts
+
+wait_for_completion_interruptible_timeout() returns -ERESTARTSYS when a
+display-ownership signal arrives.  Do not collapse that result into
+-ETIMEDOUT.  Export it as the ioctl ABI's -EINTR explicitly (the SF2000 NOMMU
+syscall return path deliberately has no generic restart fixup), so userspace
+can restart the wait and drain the final command before handing the scanout
+surface to another process.
+
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -323,6 +323,7 @@ static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
+ 		return 0;
+ 	case HCGE_SYNC_TIMEOUT: {
+ 		unsigned long timeout = msecs_to_jiffies(arg ? arg : 1000);
++		long waited;
+ 		u32 first = readl(ge->regs + SF2000_GE_HQ_FIRST);
+ 
+ 		if (ctx->is_finish ||
+@@ -330,8 +331,11 @@ static long sf2000_ge_ioctl(struct file *file, unsigned int cmd,
+ 		     first == (ctx->phy_addr_start & ~1u)))
+ 			return 0;
+-		return wait_for_completion_interruptible_timeout(&ge->done, timeout) > 0 ?
+-			0 : -ETIMEDOUT;
++		waited = wait_for_completion_interruptible_timeout(&ge->done,
++								   timeout);
++		if (waited > 0)
++			return 0;
++		return waited < 0 ? -EINTR : -ETIMEDOUT;
+ 	}
+ 	case HCGE_GET_CMDQ_BUFINFO: {
+ 		struct hcge_cmdq_buf_info info = {

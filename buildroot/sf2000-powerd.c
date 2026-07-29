@@ -32,8 +32,8 @@
 #ifdef SF2000_EXPERIMENTAL_DEVTESTS
 #define DEVTEST_PATH "/usr/sbin/sf2000-devtest"
 #endif
-#define SCREEN_PID_PATH "/run/sf2000-screen.pid"
 #define SCREEN_PAUSED_MARKER "/run/sf2000-screen-paused"
+#define SCREEN_PAUSE_REQUEST "/run/sf2000-screen-pause-request"
 #define BATTERY_RATE_MIN_MS 300000u
 #define BATTERY_SAMPLE_MS 60000
 
@@ -151,58 +151,36 @@ static void backlight_set(int on)
 		*out |= bit;
 }
 
-static int signal_screen(int signal_number)
-{
-	char value[24], comm[32], path[64], *end;
-	long pid;
-	int fd = open(SCREEN_PID_PATH, O_RDONLY | O_CLOEXEC);
-	ssize_t got;
-
-	if (fd < 0)
-		return -1;
-	got = read(fd, value, sizeof(value) - 1u);
-	close(fd);
-	if (got <= 0)
-		return -1;
-	value[got] = 0;
-	pid = strtol(value, &end, 10);
-	if (end == value || pid <= 1 || pid == getpid())
-		return -1;
-	snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -1;
-	got = read(fd, comm, sizeof(comm) - 1u);
-	close(fd);
-	if (got <= 0)
-		return -1;
-	comm[got] = 0;
-	if (comm[got - 1] == '\n')
-		comm[got - 1] = 0;
-	if (strcmp(comm, "sf2000-screen"))
-		return -1;
-	return kill((pid_t)pid, signal_number);
-}
-
 static int pause_screen(void)
 {
+	int fd;
 	unsigned wait;
 
 	(void)unlink(SCREEN_PAUSED_MARKER);
-	if (signal_screen(SIGUSR1) < 0)
+	fd = open(SCREEN_PAUSE_REQUEST,
+		O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
 		return -1;
-	for (wait = 0; wait < 100u; wait++) {
+	close(fd);
+	/*
+	 * sf2000-screen may be draining a GE command and a full /dev/kmsg batch.
+	 * Ownership is correctness-critical, so allow the weak single CPU a full
+	 * second to acknowledge instead of launching a second scanout writer
+	 * after an arbitrary 100 ms deadline.
+	 */
+	for (wait = 0; wait < 1000u; wait++) {
 		if (access(SCREEN_PAUSED_MARKER, F_OK) == 0)
 			return 0;
 		sleep_ms(1);
 	}
+	(void)unlink(SCREEN_PAUSE_REQUEST);
 	errno = ETIMEDOUT;
 	return -1;
 }
 
 static int resume_screen(void)
 {
-	return signal_screen(SIGUSR2);
+	return unlink(SCREEN_PAUSE_REQUEST) < 0 && errno != ENOENT ? -1 : 0;
 }
 
 static void set_standby(int standby)
