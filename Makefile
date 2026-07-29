@@ -1800,7 +1800,9 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq '\[gpSP ROM\] size=33554432 buffer_mib=32 swapped=0 direct=1' \
+	@rom_size="$$(wc -c < '$(GPSP_REAL_ROM)')"; \
+	direct=0; test "$$rom_size" -ne 33554432 || direct=1; \
+	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=32 swapped=0 direct=$$direct" \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q '\[gpSP ROM\] runtime_page_loads=0 runtime_page_bytes=0' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
@@ -1819,7 +1821,7 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -Eq 'source=frontend-metric audio metric .*peak=[1-9][0-9]* .*frames=(300|600)' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	! grep -Eq 'Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|reloc outside program|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
 run-linux-gpsp-smc: gpsp-smc-test-roms

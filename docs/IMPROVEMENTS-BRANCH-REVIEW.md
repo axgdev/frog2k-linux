@@ -69,3 +69,11 @@ The complete QEMU ASD smoke now reaches the fixed first stage and the static
 PIE supervisor, initializes the GE/display path, and reports no address or bus
 exception. Physical-device validation remains the final acceptance gate for
 the synchronized `bisrv.asd` artifact.
+
+gpSP exposed a second architecture contract after the general loader was
+working. Its dynarec uses host `$gp` for emulated GBA r13, while MIPS static-PIE
+C code uses `$gp` for the GOT and requires the callee address in `$t9`.
+Both assembly-stub calls and runtime-emitted helper calls now select their PIC
+sequence from `PIC` or GCC's `__PIC__`. A build audit rejects the known-bad
+`$gp`-relative call, and the real-ROM QEMU smoke executes generated I/O helper
+calls before accepting the image.

@@ -78,6 +78,15 @@ and services are fully static PIE: they use ELF type `ET_DYN`, have no
 static `ET_EXEC` is reserved for the first-stage init and similarly controlled
 early programs, which must fit the reserved window.
 
+MIPS dynarecs need one additional ABI audit. Generated code may use `$gp` as a
+guest register, but every transition from generated code to a PIC C function
+must put the callee address in `$t9`; the callee derives its ELF GOT pointer
+from `$t9`. Assembly feature tests must accept GCC's `__PIC__` definition, not
+only a project-local `PIC` macro. Calls through a register-state function table
+must restore the application `$gp` before entering C. Verify the final
+instructions and exercise at least one generated memory/I/O helper under QEMU;
+merely reaching a dynarec entry point does not cover this boundary.
+
 ## 4. Integrate Hardware Safely
 
 One owner controls each register block. A userspace probe must not write a
