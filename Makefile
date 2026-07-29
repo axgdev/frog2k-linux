@@ -7,10 +7,8 @@ BUILD_DIR := build
 INITRAMFS := $(BUILD_DIR)/initramfs.cpio
 INITRAMFS_LIST := $(BUILD_DIR)/initramfs.list
 INIT_BIN := $(BUILD_DIR)/initramfs-init
-INIT_RAW := $(BUILD_DIR)/initramfs-init.raw
 GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
-BFLTPACK := $(BUILD_DIR)/bfltpack
 QEMU_BIN := /tmp/sf2000-qemu/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
 QEMU_CPU ?= 4Km
@@ -57,12 +55,10 @@ BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
 BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
 BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
-BUILDROOT_INIT_ENTRY := buildroot/sf2000-init-entry.S
 BUILDROOT_INIT_CLONE := buildroot/sf2000-init-clone.S
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
 BUILDROOT_SUPERVISOR := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-init
 BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
-BUILDROOT_PAD_ENTRY := buildroot/sf2000-pad-entry.S
 BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
 BUILDROOT_POWERD_SRC := buildroot/sf2000-powerd.c
 BUILDROOT_POWERD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
@@ -71,7 +67,6 @@ BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
 BUILDROOT_GAMBATTE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gambatte
 BUILDROOT_GPSP := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gpsp
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
-BUILDROOT_AUDIO_ENTRY := buildroot/sf2000-audio-entry.S
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
 BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
@@ -80,35 +75,21 @@ BUILDROOT_LOGD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-logd
 BUILDROOT_MOUNT_SRC := buildroot/sf2000-mount.c
 BUILDROOT_MOUNT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-mount
 BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
-BUILDROOT_SCREEN_ENTRY := buildroot/sf2000-screen-entry.S
 BUILDROOT_SCREEN_CFLAGS :=
 BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
 BUILDROOT_SCREEN_SOURCE_STAMP := $(BUILD_DIR)/.stamp-buildroot-screen-source
 BUILDROOT_PANEL_PROBE_LINK := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe
 BUILDROOT_PANEL_PROBE_TARGET ?= sf2000-screen
 BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
-BUILDROOT_PANEL_INIT_ENTRY := buildroot/sf2000-panel-init-entry.S
-BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-launcher.S
-BUILDROOT_PANEL_INIT_CFLAGS = $(BUILDROOT_HELPER_CFLAGS)
+BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-init.c
 BUILDROOT_PANEL_FASTPROBE_SRC := buildroot/sf2000-panel-fastprobe.c
-BUILDROOT_PANEL_FASTPROBE_ENTRY := buildroot/sf2000-panel-fastprobe-entry.S
 BUILDROOT_PANEL_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-fastprobe
-BUILDROOT_PANEL_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
 BUILDROOT_STORAGE_PROBE_SRC := buildroot/sf2000-storage-probe.c
-BUILDROOT_STORAGE_PROBE_ENTRY := buildroot/sf2000-storage-probe-entry.S
 BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
-BUILDROOT_STORAGE_PROBE_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
-	-mno-abicalls -fno-pic -mno-gpopt -ffunction-sections -fdata-sections
-BUILDROOT_STORAGE_PROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS) -Wl,--gc-sections
 BUILDROOT_STORAGE_FASTPROBE_SRC := buildroot/sf2000-storage-fastprobe.c
-BUILDROOT_STORAGE_FASTPROBE_ENTRY := buildroot/sf2000-storage-fastprobe-entry.S
 BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
-BUILDROOT_STORAGE_FASTPROBE_CFLAGS = $(BUILDROOT_HELPER_CFLAGS) -ffunction-sections -fdata-sections
-BUILDROOT_STORAGE_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS) -Wl,--gc-sections
 BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
-BUILDROOT_RESET_FASTPROBE_ENTRY := buildroot/sf2000-reset-fastprobe-entry.S
-	BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
-BUILDROOT_RESET_FASTPROBE_LDFLAGS = $(BUILDROOT_SCREEN_LDFLAGS)
+BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
 BUILDROOT_RESET_RESTORE_SCRIPT := scripts/qmp_restore_smoke.py
 BUILDROOT_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migration
 BUILDROOT_RESET_RESTORE_SOCKET := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe.qmp
@@ -125,24 +106,18 @@ BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
 BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
-BUILDROOT_FLTHDR := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-flthdr
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
-BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
-	-mno-abicalls -fno-pic -fno-pie -mno-gpopt
-BUILDROOT_FLAT_LDFLAGS := -static -Wl,-elf2flt=-r -Wl,--no-check-sections \
-	-Wl,--gc-sections
 BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x84000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
-BUILDROOT_HELPER_STACK_SIZE := 65536
-BUILDROOT_SCREEN_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
-BUILDROOT_SUPERVISOR_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
-BUILDROOT_SUPERVISOR_CFLAGS := $(BUILDROOT_HELPER_CFLAGS)
-BUILDROOT_SUPERVISOR_LDFLAGS := -nostdlib -static -no-pie -Wl,-elf2flt=-r \
-	-Wl,--section-start=.text=0 -Wl,-e,_start
+PIE_SYSROOT := $(BUILD_DIR)/uclibc-pie/lib
+PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
+BUILDROOT_PIE_CFLAGS := -Os -Wall -Wextra -march=mips32 -mabi=32 -msoft-float \
+	-fPIE -mabicalls -ffunction-sections -fdata-sections
+BUILDROOT_PIE_LDFLAGS := -nostartfiles -static -Wl,-pie -Wl,--noinhibit-exec \
+	-Wl,--no-check-sections -Wl,--gc-sections
+BUILDROOT_SUPERVISOR_CFLAGS := $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin
 BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
 INIT_CFLAGS ?=
-BUILDROOT_SCREEN_LDFLAGS := -nostartfiles -static -no-pie -Wl,-elf2flt=-r \
-	-Wl,--section-start=.text=0 -Wl,-e,_start
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))'
@@ -244,7 +219,7 @@ PLAYER_TEST_SD := $(BUILD_DIR)/player-test.sd.img
 PLAYER_TEST_WAV := $(BUILD_DIR)/test-tone.wav
 MKTESTWAV := $(BUILD_DIR)/mktestwav
 
-SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
+SMOKE_INIT_PATTERN ?= sf2000_linux: init alive
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
@@ -584,20 +559,14 @@ buildroot-reconfigure:
 	rm -f '$(BUILDROOT_OUT)/.config'
 	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
 
-$(BFLTPACK): tools/bfltpack.c Makefile
-	mkdir -p '$(dir $@)'
-	'$(HOSTCC)' -O2 -Wall -Wextra -o '$@' '$<'
-
-$(INIT_RAW): init/sf2000-flat-init.S Makefile
+$(INIT_BIN): init/sf2000-flat-init.S Makefile
 	mkdir -p '$(dir $@)'
 	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
-		-fno-pic -fno-pie -no-pie -mno-gpopt -G 0 -Wl,-Ttext=0 -Wl,-e,_start \
-		-Wl,--gc-sections -Wl,-z,noexecstack -o '$@.elf' '$<'
-	'$(OBJCOPY_MIPS)' -O binary -j .text '$@.elf' '$@'
-
-$(INIT_BIN): $(INIT_RAW) $(BFLTPACK)
-	'$(BFLTPACK)' '$(INIT_RAW)' '$@'
+		-fno-pic -fno-pie -no-pie -mno-gpopt -G 0 \
+		-Wl,-Ttext-segment=0x84000000 -Wl,-e,_start \
+		-Wl,--gc-sections -Wl,-z,noexecstack \
+		-Wl,--no-check-sections -o '$@' '$<'
 
 $(GEN_INIT_CPIO): $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -661,6 +630,28 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
+UCLIBC_SRC := $(BUILDROOT_OUT)/build/uclibc-1.0.58
+UCLIBC_PIE_PATCHES := $(wildcard patches/uclibc-pie/*.patch)
+
+$(PIE_STAMP): $(BUILDROOT_TOOLCHAIN_STAMP) $(UCLIBC_PIE_PATCHES) Makefile
+	for p in $(UCLIBC_PIE_PATCHES); do \
+		patch -d '$(UCLIBC_SRC)' -p1 -N -r /dev/null < "$$p" 2>/dev/null || true; \
+	done
+	mkdir -p '$(dir $@)'
+	cp '$(UCLIBC_SRC)'/.config '$(BUILD_DIR)'/uclibc-pie/.config
+	'$(UCLIBC_SRC)'/extra/config/conf --silentoldconfig \
+		-Kconfig '$(UCLIBC_SRC)' 2>/dev/null || true
+	sed -i 's/^# STATIC_PIE is not set/STATIC_PIE=y/' '$(BUILD_DIR)'/uclibc-pie/.config
+	sed -i 's/^STATIC_PIE=n/STATIC_PIE=y/' '$(BUILD_DIR)'/uclibc-pie/.config
+	grep -q '^STATIC_PIE=y' '$(BUILD_DIR)'/uclibc-pie/.config || \
+		echo 'STATIC_PIE=y' >> '$(BUILD_DIR)'/uclibc-pie/.config
+	$(MAKE) -C '$(UCLIBC_SRC)' \
+		O='$(abspath $(BUILD_DIR)/uclibc-pie)' \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))' \
+		UCLIBC_EXTRA_CFLAGS='' \
+		-j'$(JOBS)' lib/libc.a lib/rcrt1.o
+	touch '$@'
+
 
 # The panel-probe targets deliberately override BUILDROOT_INIT_SOURCE to run
 # sf2000-screen as /init.  A later normal build must restore the real init
@@ -673,33 +664,44 @@ $(BUILDROOT_INIT): FORCE $(BUILDROOT_INIT_SOURCE) Makefile
 		chmod 0755 '$@'; \
 	fi
 
-$(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_ENTRY) $(BUILDROOT_INIT_CLONE) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_CLONE) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_SUPERVISOR_CFLAGS) $(BUILDROOT_SUPERVISOR_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_INIT_ENTRY)' '$(BUILDROOT_INIT_CLONE)' '$(BUILDROOT_INIT_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SUPERVISOR_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_SUPERVISOR_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_INIT_CLONE)' '$(BUILDROOT_INIT_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(BUILDROOT_PAD_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_PAD_ENTRY)' '$(BUILDROOT_PAD_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_PAD_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$<' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_FRONTEND): player/browser.c $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_FRONTEND): player/browser.c $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' -Os -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
-		-march=mips32 -mabi=32 -msoft-float \
+		-march=mips32 -mabi=32 -msoft-float -fPIE -mabicalls \
 		-ffunction-sections -fdata-sections \
-		$(BUILDROOT_FLAT_LDFLAGS) -o '$@' player/browser.c
-	'$(BUILDROOT_FLTHDR)' -s 131072 '$@'
+		$(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		player/browser.c \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
 $(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' gambatte \
@@ -713,89 +715,112 @@ $(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-gpsp '$@'
 
-$(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(BUILDROOT_AUDIO_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_AUDIO_ENTRY)' '$(BUILDROOT_AUDIO_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_AUDIO_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$<' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$<' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$<' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
 $(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
-		$(BUILDROOT_SCREEN_ENTRY) ge/hcge_linux.c ge/hcge_node.c \
+		ge/hcge_linux.c ge/hcge_node.c \
 		ge/hcge_node.h ge/ge_api.h Makefile
 	mkdir -p '$(dir $@)'
-	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' '$(BUILDROOT_SCREEN_ENTRY)' \
+	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' \
 		ge/hcge_linux.c ge/hcge_node.c ge/hcge_node.h ge/ge_api.h; \
-		printf '%s\n' '$(BUILDROOT_HELPER_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
-			'$(BUILDROOT_SCREEN_LDFLAGS)' '$(BUILDROOT_SCREEN_STACK_SIZE)'; \
+		printf '%s\n' '$(BUILDROOT_PIE_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
+			'$(BUILDROOT_PIE_LDFLAGS)'; \
 	} > '$@.tmp'
 	if cmp -s '$@.tmp' '$@'; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 
-$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
+$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	SOURCE_DATE_EPOCH=0 '$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
-		-Ige $(BUILDROOT_SCREEN_LDFLAGS) -o '$@' \
-		'$(BUILDROOT_SCREEN_ENTRY)' '$(BUILDROOT_SCREEN_SRC)' \
-		ge/hcge_linux.c ge/hcge_node.c
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	SOURCE_DATE_EPOCH=0 '$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
+		-Ige $(BUILDROOT_PIE_LDFLAGS) -o '$@' \
+		'$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_SCREEN_SRC)' ge/hcge_linux.c ge/hcge_node.c \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
 buildroot-panel-probe-link: $(BUILDROOT_PANEL_FASTPROBE) Makefile
 	mkdir -p '$(dir $(BUILDROOT_PANEL_PROBE_LINK))'
 	ln -sf '$(BUILDROOT_PANEL_PROBE_TARGET)' '$(BUILDROOT_PANEL_PROBE_LINK)'
 
-$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(BUILDROOT_PANEL_INIT_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PANEL_INIT_CFLAGS) $(BUILDROOT_SCREEN_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_PANEL_INIT_ENTRY)' '$(BUILDROOT_PANEL_INIT_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_SCREEN_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_PANEL_INIT_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(BUILDROOT_PANEL_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_PANEL_FASTPROBE_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_PANEL_FASTPROBE_ENTRY)' '$(BUILDROOT_PANEL_FASTPROBE_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_PANEL_FASTPROBE_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(BUILDROOT_STORAGE_PROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_PROBE_CFLAGS) $(BUILDROOT_STORAGE_PROBE_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_STORAGE_PROBE_ENTRY)' '$(BUILDROOT_STORAGE_PROBE_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin \
+		$(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_STORAGE_PROBE_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(BUILDROOT_STORAGE_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_STORAGE_FASTPROBE_CFLAGS) $(BUILDROOT_STORAGE_FASTPROBE_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_STORAGE_FASTPROBE_ENTRY)' '$(BUILDROOT_STORAGE_FASTPROBE_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_STORAGE_FASTPROBE_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_RESET_FASTPROBE): $(BUILDROOT_RESET_FASTPROBE_SRC) $(BUILDROOT_RESET_FASTPROBE_ENTRY) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_RESET_FASTPROBE): $(BUILDROOT_RESET_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_RESET_FASTPROBE_LDFLAGS) \
-		-o '$@' '$(BUILDROOT_RESET_FASTPROBE_ENTRY)' '$(BUILDROOT_RESET_FASTPROBE_SRC)'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$(BUILDROOT_RESET_FASTPROBE_SRC)' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
 $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
@@ -1013,11 +1038,14 @@ ffmpeg: $(FFMPEG_STAMP)
 
 # --- Device test runner + overlay installs ---
 
-$(BUILDROOT_DEVTEST): $(BUILDROOT_DEVTEST_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(BUILDROOT_DEVTEST): $(BUILDROOT_DEVTEST_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
-	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
-	rm -f '$@.gdb'
+	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtbegin.o) \
+		'$<' \
+		-L'$(PIE_SYSROOT)' -lc -lgcc \
+		$$('$(BUILDROOT_CC)' -print-file-name=crtend.o) '$(PIE_SYSROOT)'/crtn.o
 
 $(BUILDROOT_EFUSE_DEVICE): $(BUILD_DIR)/test_efuse_device
 	mkdir -p '$(dir $@)'
@@ -1117,9 +1145,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable MMU \
 		--disable BINFMT_ELF \
 		--disable COMPAT_BINFMT_ELF \
-		--enable BINFMT_FLAT \
+		--disable BINFMT_FLAT \
 		--enable BINFMT_ELF_NOMMU \
-		--disable BINFMT_FLAT_ARGVP_ENVP_ON_STACK \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
 		--disable DEVMEM \
@@ -1638,7 +1665,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
-	! grep -q 'binfmt_flat: reloc outside program' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1793,7 +1820,7 @@ run-linux-reboot: qemu linux-rom-sd
 		> '$(BUILD_DIR)'/logs/linux-reboot.console 2>&1
 
 smoke-linux-reboot: run-linux-reboot
-	grep -q 'sf2000_linux: flat init alive' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000_linux: init alive' '$(BUILD_DIR)'/logs/linux-reboot.log
 	grep -q 'sf2000: watchdog restart' '$(BUILD_DIR)'/logs/linux-reboot.log
 	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 2
 
@@ -1814,11 +1841,11 @@ smoke-linux-rom: run-linux-rom
 
 run-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' run-linux-asd
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' run-linux-asd
 
 smoke-linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='binfmt_flat: SF2000 NOMMU FLAT entry' smoke-linux-asd
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-ge .*HC15xx GE queue at' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log

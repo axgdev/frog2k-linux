@@ -341,7 +341,7 @@ env_term:
 env_panel_probe:
 	.asciz	"SF2000_PANEL_PROBE=1"
 msg_alive:
-	.ascii	"<6>sf2000_linux: flat init alive\n"
+	.ascii	"<6>sf2000_linux: init alive\n"
 msg_alive_end:
 msg_nommu:
 	.ascii	"<6>sf2000_linux: nommu userspace reached\n"

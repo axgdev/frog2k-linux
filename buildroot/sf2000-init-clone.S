@@ -1,4 +1,5 @@
 	.set noreorder
+	.abicalls
 	.text
 	.globl sf2000_clone_service
 	.ent sf2000_clone_service
@@ -32,7 +33,7 @@ sf2000_clone_service_with_flags:
 	bnez	$2, 1f
 	nop
 	lw	$4, 0($29)
-	la	$25, service_child_exec
+	lw	$25, %call16(service_child_exec)($28)
 	jr	$25
 	nop
 1:

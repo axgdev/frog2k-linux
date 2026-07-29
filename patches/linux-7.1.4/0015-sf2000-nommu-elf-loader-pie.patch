@@ -1,0 +1,308 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] fs: add NOMMU ELF loader with ET_EXEC and ET_DYN support
+
+Add binfmt_elf_nommu.c: a minimal ELF binary format handler for NOMMU
+MIPS (SF2000).  Supports two loading modes:
+
+  ET_EXEC: fixed-address loading at KSEG0 0x84000000.  Segments are
+  copied to their link-time p_vaddr.  Zero runtime relocations.
+
+  ET_DYN: static-PIE loading at a dynamically allocated address via
+  vm_mmap.  A bias is computed and applied to all segment addresses.
+  Userspace rcrt1.o performs one-time self-relocation before main().
+
+Both modes build the initial stack (argc/argv/envp/auxv) and hand off
+to userspace via start_thread with CPHYSADDR conversion.
+
+Also updates fs/Makefile and fs/Kconfig.binfmt to register the new
+binfmt handler.
+
+--- /dev/null
++++ b/fs/binfmt_elf_nommu.c
+@@ -0,0 +1,286 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * binfmt_elf_nommu.c - Load static ELF binaries on NOMMU MIPS (SF2000).
++ *
++ * Supports two modes:
++ *   ET_EXEC: linked at fixed KSEG0 0x84000000, zero runtime relocations.
++ *   ET_DYN:  static-PIE, loaded at a dynamically allocated address.
++ *            Self-relocation is performed by userspace (rcrt1.o).
++ */
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/mm.h>
++#include <linux/errno.h>
++#include <linux/string.h>
++#include <linux/fs.h>
++#include <linux/slab.h>
++#include <linux/binfmts.h>
++#include <linux/personality.h>
++#include <linux/init.h>
++#include <linux/uaccess.h>
++#include <linux/mman.h>
++#include <linux/elf.h>
++#include <linux/auxvec.h>
++#include <asm/addrspace.h>
++#include <asm/cacheflush.h>
++#include <asm/page.h>
++
++#define ELF_NOMMU_VADDR_START	0x84000000UL
++#define ELF_NOMMU_REGION_SIZE	0x01000000UL	/* 16 MiB */
++#define ELF_NOMMU_VADDR_END	(ELF_NOMMU_VADDR_START + ELF_NOMMU_REGION_SIZE)
++#define ELF_NOMMU_STACK_SIZE	0x20000UL	/* 128 KiB at top */
++#define ELF_NOMMU_STACK_ALIGN	16
++
++static int elf_nommu_read(struct file *file, void *buf, size_t len, loff_t pos)
++{
++	ssize_t rv = kernel_read(file, buf, len, &pos);
++
++	if (unlikely(rv != (ssize_t)len))
++		return rv < 0 ? (int)rv : -EIO;
++	return 0;
++}
++
++static int create_elf_nommu_tables(struct linux_binprm *bprm,
++		unsigned long arg_start, unsigned long phdr_addr,
++		unsigned long entry_addr, unsigned int phnum)
++{
++	char __user *p = (char __user *)arg_start;
++	unsigned long __user *sp;
++	long i, len;
++
++	sp = (unsigned long __user *)current->mm->start_stack;
++
++	/* auxv: 10 entries * 2 words + AT_NULL * 2 = 22 words, round to 24 */
++	sp -= 24;
++	sp -= bprm->envc + 1;
++	sp -= bprm->argc + 1;
++	sp -= 1; /* argc */
++
++	current->mm->start_stack = (unsigned long)sp & -ELF_NOMMU_STACK_ALIGN;
++	sp = (unsigned long __user *)current->mm->start_stack;
++
++	if (put_user(bprm->argc, sp++))
++		return -EFAULT;
++
++	current->mm->arg_start = (unsigned long)p;
++	for (i = bprm->argc; i > 0; i--) {
++		if (put_user((unsigned long)p, sp++))
++			return -EFAULT;
++		len = strnlen_user(p, MAX_ARG_STRLEN);
++		if (!len || len > MAX_ARG_STRLEN)
++			return -EINVAL;
++		p += len;
++	}
++	if (put_user(0, sp++))
++		return -EFAULT;
++	current->mm->arg_end = (unsigned long)p;
++
++	current->mm->env_start = (unsigned long)p;
++	for (i = bprm->envc; i > 0; i--) {
++		if (put_user((unsigned long)p, sp++))
++			return -EFAULT;
++		len = strnlen_user(p, MAX_ARG_STRLEN);
++		if (!len || len > MAX_ARG_STRLEN)
++			return -EINVAL;
++		p += len;
++	}
++	if (put_user(0, sp++))
++		return -EFAULT;
++	current->mm->env_end = (unsigned long)p;
++
++#define AUX_ENT(id, val) do { \
++	if (put_user((unsigned long)(id), sp++) || \
++	    put_user((unsigned long)(val), sp++)) \
++		return -EFAULT; \
++} while (0)
++	AUX_ENT(AT_PHDR,   phdr_addr);
++	AUX_ENT(AT_PHENT,  sizeof(struct elf_phdr));
++	AUX_ENT(AT_PHNUM,  phnum);
++	AUX_ENT(AT_PAGESZ, PAGE_SIZE);
++	AUX_ENT(AT_ENTRY,  entry_addr);
++	AUX_ENT(AT_UID,    from_kuid(&init_user_ns, current_uid()));
++	AUX_ENT(AT_EUID,   from_kuid(&init_user_ns, current_euid()));
++	AUX_ENT(AT_GID,    from_kgid(&init_user_ns, current_gid()));
++	AUX_ENT(AT_EGID,   from_kgid(&init_user_ns, current_egid()));
++	AUX_ENT(AT_NULL,   0);
++#undef AUX_ENT
++
++	return 0;
++}
++
++static struct linux_binfmt elf_nommu_format;
++
++static int load_elf_nommu_binary(struct linux_binprm *bprm)
++{
++	struct elfhdr *elf_ex = (struct elfhdr *)bprm->buf;
++	struct elf_phdr *phdr = NULL;
++	struct pt_regs *regs = current_pt_regs();
++	unsigned long lo, hi, phdr_addr, entry, stack_top, bias;
++	unsigned long alloc_size, maddr;
++	unsigned int phsize, i;
++	int is_pie;
++	int retval;
++
++	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
++		return -ENOEXEC;
++	if (elf_ex->e_type != ET_EXEC && elf_ex->e_type != ET_DYN)
++		return -ENOEXEC;
++	if (!elf_check_arch(elf_ex))
++		return -ENOEXEC;
++	if (elf_ex->e_phentsize != sizeof(struct elf_phdr))
++		return -ENOEXEC;
++	if (elf_ex->e_phnum == 0 || elf_ex->e_phnum > 64)
++		return -ENOEXEC;
++
++	is_pie = (elf_ex->e_type == ET_DYN);
++
++	phsize = elf_ex->e_phnum * sizeof(struct elf_phdr);
++	phdr = kmalloc(phsize, GFP_KERNEL);
++	if (!phdr)
++		return -ENOMEM;
++
++	retval = elf_nommu_read(bprm->file, phdr, phsize, elf_ex->e_phoff);
++	if (retval)
++		goto out;
++
++	/* Find the segment extent. */
++	lo = ULONG_MAX;
++	hi = 0;
++	for (i = 0; i < elf_ex->e_phnum; i++) {
++		struct elf_phdr *p = &phdr[i];
++		unsigned long s, e;
++
++		if (p->p_type != PT_LOAD)
++			continue;
++		if (p->p_memsz < p->p_filesz)
++			goto out;
++		s = p->p_vaddr;
++		e = p->p_vaddr + p->p_memsz;
++		if (e < s)
++			goto out;
++		if (s < lo)
++			lo = s;
++		if (e > hi)
++			hi = e;
++	}
++	if (hi <= lo)
++		goto out;
++
++	if (is_pie) {
++		/* Sanity: PIE image must be reasonable in size. */
++		if (hi - lo > ELF_NOMMU_REGION_SIZE)
++			goto out;
++	} else {
++		/* ET_EXEC: segments must fall in the reserved window. */
++		if (lo < ELF_NOMMU_VADDR_START ||
++		    hi > ELF_NOMMU_VADDR_END - ELF_NOMMU_STACK_SIZE)
++			goto out;
++	}
++
++	if (is_pie) {
++		alloc_size = PAGE_ALIGN(hi - lo) + ELF_NOMMU_STACK_SIZE;
++		maddr = vm_mmap(NULL, 0, alloc_size,
++				PROT_READ | PROT_WRITE | PROT_EXEC,
++				MAP_PRIVATE | MAP_ANONYMOUS, 0);
++		if (IS_ERR_VALUE(maddr)) {
++			retval = (int)maddr;
++			goto out;
++		}
++		bias = maddr - lo;
++	} else {
++		bias = 0;
++		maddr = 0;
++		alloc_size = 0;
++	}
++
++	/* Point of no return. */
++	retval = begin_new_exec(bprm);
++	if (retval)
++		goto out;
++
++	set_personality(PER_LINUX_32BIT);
++	setup_new_exec(bprm);
++
++	/* Load segments to their final addresses. */
++	for (i = 0; i < elf_ex->e_phnum; i++) {
++		struct elf_phdr *p = &phdr[i];
++		unsigned long addr;
++
++		if (p->p_type != PT_LOAD)
++			continue;
++		addr = p->p_vaddr + bias;
++		if (p->p_filesz) {
++			ssize_t n = read_code(bprm->file, addr,
++					      p->p_offset, p->p_filesz);
++			if (n != (ssize_t)p->p_filesz) {
++				retval = n < 0 ? (int)n : -EIO;
++				goto out_fatal;
++			}
++		}
++		if (p->p_memsz > p->p_filesz)
++			memset((void *)(addr + p->p_filesz), 0,
++			       p->p_memsz - p->p_filesz);
++	}
++
++	/* Place program headers after the image for AT_PHDR. */
++	phdr_addr = ((hi + bias) + 15) & ~15UL;
++	memcpy((void *)phdr_addr, phdr, phsize);
++	flush_icache_user_range(phdr_addr, phdr_addr + phsize);
++
++	/* Describe the image to the mm. */
++	current->mm->start_code = lo + bias;
++	current->mm->end_code = hi + bias;
++	current->mm->start_data = lo + bias;
++	current->mm->end_data = hi + bias;
++	current->mm->start_brk = hi + bias;
++	current->mm->brk = ((hi + bias) + 3) & ~3UL;
++	current->mm->context.end_brk = hi + bias;
++
++	set_binfmt(&elf_nommu_format);
++
++	/* Build the initial stack. */
++	if (is_pie)
++		stack_top = maddr + alloc_size - ELF_NOMMU_STACK_ALIGN;
++	else
++		stack_top = ELF_NOMMU_VADDR_END - ELF_NOMMU_STACK_ALIGN;
++
++	current->mm->start_stack = stack_top;
++	retval = transfer_args_to_stack(bprm, &current->mm->start_stack);
++	if (retval)
++		goto out_fatal;
++
++	entry = elf_ex->e_entry + bias;
++	retval = create_elf_nommu_tables(bprm, current->mm->start_stack,
++					 phdr_addr, entry, elf_ex->e_phnum);
++	if (retval)
++		goto out_fatal;
++
++	entry = CPHYSADDR(entry);
++	current->mm->start_stack = CPHYSADDR(current->mm->start_stack);
++
++#ifdef ELF_PLAT_INIT
++	ELF_PLAT_INIT(regs, 0);
++#endif
++	finalize_exec(bprm);
++	start_thread(regs, entry, current->mm->start_stack);
++	kfree(phdr);
++	return 0;
++
++out_fatal:
++	force_sig(SIGSEGV);
++out:
++	kfree(phdr);
++	return retval;
++}
++
++static struct linux_binfmt elf_nommu_format = {
++	.module		= THIS_MODULE,
++	.load_binary	= load_elf_nommu_binary,
++};
++
++static int __init init_elf_nommu_binfmt(void)
++{
++	register_binfmt(&elf_nommu_format);
++	return 0;
++}
++core_initcall(init_elf_nommu_binfmt);
