@@ -64,11 +64,9 @@ different requirements. Every wait needs a timeout and recovery path.
 
 Read-only evidence:
 
-- `../mufrog-commandc`: known-working HCRTOS application and vendor API use;
-- `../mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor`: vendor archives;
-- `../../orig_firmware`: shipping ASD and bootloader;
+- `../unifrog-hcrtos-sdk/lib/vendor`: vendor archives;
 - `../../sf2000_chipset_documentation`: board/panel/general HC15xx documents;
-- `../../latest_log/sf2000_linux`: physical logs.
+- `../latest_log`: physical logs.
 
 ## 3. Build and verification
 
@@ -114,9 +112,9 @@ make smoke-linux-player
 Read logs safely and summarize performance:
 
 ```sh
-strings -a ../../latest_log/sf2000_linux/loglinux0089.txt | less
-make METRICS_LOG=../../latest_log/sf2000_linux/loglinux0089.txt metrics-linux
-make METRICS_LOG=../../latest_log/sf2000_linux/loglinux0089.txt metrics-frontend
+strings -a ../latest_log/sf2000_linux/loglinux0089.txt | less
+make METRICS_LOG=../latest_log/sf2000_linux/loglinux0089.txt metrics-linux
+make METRICS_LOG=../latest_log/sf2000_linux/loglinux0089.txt metrics-frontend
 ```
 
 `metrics-frontend` splits capped/uncapped sessions and reports final FPS,
@@ -247,7 +245,7 @@ NOMMU memory rules:
 Never modify vendor/reference inputs. Capture:
 
 ```sh
-V=../mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libviddrv.a
+V=../unifrog-hcrtos-sdk/lib/vendor/libviddrv.a
 sha256sum "$V"
 file "$V"
 ${CROSS_COMPILE}ar t "$V"
