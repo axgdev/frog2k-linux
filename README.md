@@ -64,6 +64,10 @@ module rules are documented in
 The review and integration process for loader changes and vendor-library
 replacements is in
 [`docs/CONTRIBUTING-HARDWARE-PORTS.md`](docs/CONTRIBUTING-HARDWARE-PORTS.md).
+New contributors should also read
+[`docs/JUNIOR-DEVELOPER-GUIDE.md`](docs/JUNIOR-DEVELOPER-GUIDE.md) for the
+target constraints, repository map, diagnostic and performance workflow,
+vendor-driver/FFmpeg porting process, and prioritized roadmap.
 
 ## Commands
 

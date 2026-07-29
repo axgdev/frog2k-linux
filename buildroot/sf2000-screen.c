@@ -293,7 +293,7 @@ static volatile uint8_t *sysio_mapping;
 #define gma (gma_mapping ? gma_mapping : KSEG1ADDR(GMA_MMIO_PHYS))
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_PHYS))
 static volatile int stopping;
-static volatile sig_atomic_t application_paused;
+static int application_paused;
 static int panel_enabled = 1;
 static int led_enabled = 1;
 static int slow_panel_bus = 1;
@@ -841,47 +841,6 @@ static void progress_mark_file_head(const char *prefix, const char *path)
 	buf[got] = 0;
 	progress_mark(prefix, 0x23u, (uint32_t)got);
 	progress_mark_text(prefix, buf);
-}
-
-static const char *text_find(const char *haystack, const char *needle)
-{
-	size_t len = strlen(needle);
-
-	if (!len)
-		return haystack;
-	while (*haystack) {
-		if (strncmp(haystack, needle, len) == 0)
-			return haystack;
-		haystack++;
-	}
-	return NULL;
-}
-
-static void progress_mark_file_section(const char *prefix, const char *path,
-	const char *needle)
-{
-	char buf[1024];
-	const char *section;
-	ssize_t got;
-	int fd = open(path, O_RDONLY | O_CLOEXEC);
-
-	if (fd < 0) {
-		progress_mark(prefix, 0x26u, (uint32_t)errno);
-		return;
-	}
-	got = read(fd, buf, sizeof(buf) - 1u);
-	close(fd);
-	if (got < 0) {
-		progress_mark(prefix, 0x27u, (uint32_t)errno);
-		return;
-	}
-	buf[got] = 0;
-	section = text_find(buf, needle);
-	progress_mark(prefix, 0x28u, (uint32_t)got);
-	progress_mark("stor-section-off", 0x28u,
-		section ? (uint32_t)(section - buf) : 0xffffffffu);
-	if (section)
-		progress_mark_text(prefix, section);
 }
 
 static void progress_mark_dir_count(const char *name, const char *path)
@@ -1476,8 +1435,6 @@ static void run_inline_storage_probe_once(const char *source)
 	progress_mark_file_head("stor-cls-p2-dev", "/sys/class/block/mmcblk0p2/dev");
 	progress_mark_file_head("stor-proc-part", "/proc/partitions");
 	progress_mark_file_head("stor-proc-dev", "/proc/devices");
-	progress_mark_file_section("stor-proc-blk", "/proc/devices",
-		"Block devices:");
 	progress_mark_file_head("stor-proc-int", "/proc/interrupts");
 	storage_stat_node("/dev/mmcblk0");
 	storage_stat_node("/dev/mmcblk0p1");
@@ -1662,11 +1619,6 @@ static void runtime_watchdog_disable(void)
 	*(volatile uint8_t *)(wdt + WDT_REG_OFF + WDT_CONF_OFF) = 0;
 }
 
-static void application_pause_signal(int signal_number)
-{
-	application_paused = signal_number == SIGUSR1;
-}
-
 static void application_pause_service(void)
 {
 	struct timespec delay = { 0, 10000000L };
@@ -1678,9 +1630,9 @@ static void application_pause_service(void)
 	application_paused = 1;
 	runtime_watchdog_disable();
 	/*
-	 * A legacy SIGUSR1 request can interrupt HCGE_SYNC_TIMEOUT.  In either
-	 * request mode, drain the final command before acknowledging that scanout
-	 * ownership is available to the frontend.
+	 * Drain the final command before acknowledging that scanout ownership is
+	 * available to the frontend.  The request and acknowledgement are files
+	 * in tmpfs so they survive neither reboot nor an exec failure.
 	 */
 	if (display_ge)
 		sync_ret = hcge_engine_sync(display_ge);
@@ -3092,7 +3044,7 @@ static int console_input_refresh_fds(int fds[CONSOLE_INPUT_FDS])
 		snprintf(line, sizeof(line), "input event%u: %s", i, name);
 		console_add_line(line);
 		snprintf(line, sizeof(line),
-			 "sf2000-screen: opened %s name=%s\n", path, name);
+			 "sf2000-screen: opened event%u name=%.79s\n", i, name);
 		log_line(line);
 		changed = 1;
 	}
@@ -3450,8 +3402,6 @@ static void ge_copy_render_to_scanout(void)
 		}
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
-		if (sync_ret == -EINTR && application_paused)
-			return;
 	cpu_fallback:
 		{
 			char line[144];
@@ -4638,8 +4588,6 @@ int main(int argc, char **argv, char **envp)
 	(void)argv;
 	log_line("sf2000-screen: main entry\n");
 	publish_screen_pid();
-	(void)signal(SIGUSR1, application_pause_signal);
-	(void)signal(SIGUSR2, application_pause_signal);
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
 	first_variant = &panel_variants[0];
 	if (envp)

@@ -260,7 +260,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
-	metrics-linux metrics-qemu-fidelity benchmark-qemu-linux \
+	metrics-linux metrics-frontend metrics-qemu-fidelity benchmark-qemu-linux \
 	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
 	smoke-linux-physical-contract metrics-qemu-timing \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
@@ -300,6 +300,7 @@ help:
 		'make check-vendor          source/vendor GE parity tests' \
 		'make linux-buildroot-asd   build the physical-device artifact' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
+		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
@@ -2194,6 +2195,61 @@ metrics-linux:
 		if (rgb_metric != "") printf "linux.instrumented_rgb_ready_us=%s\n", rgb_metric; \
 		if (ready_metric != "") printf "linux.instrumented_service_ready_us=%s\n", ready_metric; \
 	}' '$(METRICS_LOG)'
+
+metrics-frontend:
+	@awk '\
+	function field(name,   i,p) { \
+		for (i = 1; i <= NF; i++) { \
+			p = index($$i, "="); \
+			if (p && substr($$i, 1, p - 1) == name) \
+				return substr($$i, p + 1); \
+		} \
+		return ""; \
+	} \
+	function emit(   fps) { \
+		if (!have) return; \
+		fps = last_fps / 1000; \
+		printf "frontend.session.%u.mode=%s\n", session, mode; \
+		printf "frontend.session.%u.frames=%u\n", session, last_frames; \
+		printf "frontend.session.%u.fps=%.3f\n", session, fps; \
+		printf "frontend.session.%u.xruns=%u\n", session, xruns; \
+		printf "frontend.session.%u.eagain=%u\n", session, eagain; \
+		printf "frontend.session.%u.dropped=%u\n", session, dropped; \
+		printf "frontend.session.%u.pacing_resets=%u\n", session, resets; \
+		printf "frontend.session.%u.sampled_max_run_us=%u\n", session, max_run; \
+		printf "frontend.session.%u.sampled_present_us=%u\n", session, max_present; \
+		printf "frontend.session.%u.presenter=%s\n", session, presenter; \
+	} \
+	/source=frontend-metric audio metric/ { \
+		frames = field("frames") + 0; current_mode = field("mode"); \
+		if (have && (frames < last_frames || current_mode != mode)) { \
+			emit(); session++; max_run = max_present = 0; \
+		} \
+		have = 1; mode = current_mode; last_frames = frames; \
+		last_fps = field("fps_milli") + 0; xruns = field("xrun") + 0; \
+		eagain = field("eagain") + 0; dropped = field("dropped") + 0; \
+		resets = field("pacing_resets") + 0; presenter = field("presenter"); \
+		run = field("sampled_max_run_us") + 0; \
+		present = field("sampled_present_us") + 0; \
+		if (run > max_run) max_run = run; \
+		if (present > max_present) max_present = present; \
+	} \
+	/\[gpSP JIT reason\]/ { \
+		printf "frontend.gpsp.%u.jit_capacity_flushes=%u\n", \
+			++gpsp, field("capacity") + 0; \
+		printf "frontend.gpsp.%u.jit_store_flushes=%u\n", \
+			gpsp, field("store") + 0; \
+		printf "frontend.gpsp.%u.jit_dma_flushes=%u\n", \
+			gpsp, field("dma") + 0; \
+	} \
+	/\[gpSP JIT cache\]/ { \
+		printf "frontend.gpsp.%u.cache_sync_calls=%u\n", \
+			gpsp, field("calls") + 0; \
+		printf "frontend.gpsp.%u.cache_sync_failures=%u\n", \
+			gpsp, field("failures") + 0; \
+	} \
+	END { emit() } \
+	' '$(METRICS_LOG)'
 
 benchmark-qemu-linux: qemu linux-buildroot-asd
 	mkdir -p '$(BUILD_DIR)'/metrics
