@@ -129,7 +129,10 @@ BUILDROOT_FLTHDR := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-fl
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
 BUILDROOT_HELPER_CFLAGS := -Os -Wall -Wextra -ffreestanding -fno-builtin \
 	-mno-abicalls -fno-pic -fno-pie -mno-gpopt
-BUILDROOT_FLAT_LDFLAGS := -Wl,-elf2flt=-r -static -no-pie
+BUILDROOT_FLAT_LDFLAGS := -static -Wl,-elf2flt=-r -Wl,--no-check-sections \
+	-Wl,--gc-sections
+BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x84000000 \
+	-Wl,--no-check-sections -Wl,--gc-sections
 BUILDROOT_HELPER_STACK_SIZE := 65536
 BUILDROOT_SCREEN_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
 BUILDROOT_SUPERVISOR_STACK_SIZE := $(BUILDROOT_HELPER_STACK_SIZE)
@@ -163,7 +166,7 @@ SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
 SF2000_BOOT_VISUAL ?= console
 SF2000_BOOT_COLOR ?= 0x0000
 SF2000_BOOT_HOLD_MS ?= 750
-LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init \
+LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init initramfs_async=0 \
 	SF2000_BOOT_VISUAL=$(SF2000_BOOT_VISUAL) \
 	SF2000_BOOT_COLOR=$(SF2000_BOOT_COLOR) \
 	SF2000_BOOT_HOLD_MS=$(SF2000_BOOT_HOLD_MS)
@@ -222,6 +225,25 @@ GE_SOURCE_CAPTURE := $(BUILD_DIR)/hcge-source-capture
 GE_VENDOR_CAPTURE_GOLDEN := ge/hcge_vendor_capture.golden
 GE_SOURCE_CAPTURE_GOLDEN := ge/hcge_source_capture.golden
 GE_ELF_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc.br_real
+
+FFMPEG_VERSION ?= 8.1.2
+FFMPEG_URL := https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
+FFMPEG_SRC ?= /tmp/sf2000-ffmpeg/ffmpeg-$(FFMPEG_VERSION)
+FFMPEG_OUT := $(BUILD_DIR)/ffmpeg
+FFMPEG_INSTALL := $(abspath $(FFMPEG_OUT)/install)
+FFMPEG_STAMP := $(FFMPEG_OUT)/.stamp-built
+
+BUILDROOT_DEVTEST_SRC := buildroot/sf2000-devtest.c
+BUILDROOT_DEVTEST := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-devtest
+BUILDROOT_EFUSE_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_efuse_device
+BUILDROOT_VDEC_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_vdec_device
+BUILDROOT_DSC_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_dsc_device
+BUILDROOT_PLAYER := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-player
+
+PLAYER_TEST_SD := $(BUILD_DIR)/player-test.sd.img
+PLAYER_TEST_WAV := $(BUILD_DIR)/test-tone.wav
+MKTESTWAV := $(BUILD_DIR)/mktestwav
+
 SMOKE_INIT_PATTERN ?= binfmt_flat: SF2000 NOMMU FLAT entry
 LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
@@ -268,7 +290,10 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
 	test-ge-queue test-ge-batch test-ge-filter-extract \
 	test-ge-symbol-coverage efuse-test vdec-test vdec-codec-test dsc-test \
-	device-tests clean
+	device-tests ffmpeg player \
+	run-linux-devtest smoke-linux-devtest \
+	run-linux-player smoke-linux-player \
+	clean
 
 GE_BATCH_TEST := $(BUILD_DIR)/hcge-batch-test
 
@@ -668,12 +693,13 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefi
 	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
 	rm -f '$@.gdb'
 
-$(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/tests -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' browser \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+$(BUILDROOT_FRONTEND): player/browser.c $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	rm -f '$(dir $@)/sf2000-frontend-demo'
-	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
+	'$(BUILDROOT_CC)' -Os -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
+		-march=mips32 -mabi=32 -msoft-float \
+		-ffunction-sections -fdata-sections \
+		$(BUILDROOT_FLAT_LDFLAGS) -o '$@' player/browser.c
+	'$(BUILDROOT_FLTHDR)' -s 131072 '$@'
 
 $(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' gambatte \
@@ -777,7 +803,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_DEVTEST) $(BUILDROOT_EFUSE_DEVICE) $(BUILDROOT_VDEC_DEVICE) $(BUILDROOT_DSC_DEVICE) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO)
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -916,19 +942,163 @@ dsc-test: $(DSC_TEST)
 DEVICE_TESTS := $(BUILD_DIR)/test_efuse_device $(BUILD_DIR)/test_vdec_device \
 		$(BUILD_DIR)/test_dsc_device
 
-$(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c
+$(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+		-march=mips32 -mabi=32 -msoft-float \
+		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
-$(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c
+$(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+		-march=mips32 -mabi=32 -msoft-float \
+		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
-$(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c
+$(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(CC_MIPS) -static -O2 -Wall -o '$@' '$<'
+	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+		-march=mips32 -mabi=32 -msoft-float \
+		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
 device-tests: $(DEVICE_TESTS)
+
+# --- FFmpeg static libraries ---
+
+$(FFMPEG_SRC)/configure:
+	mkdir -p '$(dir $@)'
+	curl -fSL '$(FFMPEG_URL)' | tar -xJ -C '$(dir $@)' --strip-components=1
+
+FFMPEG_CONFIGURE_FLAGS := \
+	--prefix='$(FFMPEG_INSTALL)' \
+	--cross-prefix='$(CROSS_COMPILE)' \
+	--arch=mipsel --target-os=linux --cpu=mips32 \
+	--extra-cflags='-Os -march=mips32 -mabi=32 -msoft-float -G0 -mno-abicalls -fno-pic -fno-pie -static' \
+	--extra-ldflags='-static' \
+	--enable-static --disable-shared \
+	--disable-pthreads \
+	--disable-asm --disable-mipsfpu --disable-mipsdsp --disable-mipsdspr2 \
+	--disable-doc --disable-programs --disable-network \
+	--disable-avdevice --disable-avfilter \
+	--disable-encoders --disable-muxers \
+	--disable-protocols --enable-protocol=file \
+	--disable-indevs --disable-outdevs \
+	--disable-decoders \
+	--enable-decoder=mp3,aac,flac,vorbis,pcm_s16le,pcm_s16be \
+	--disable-demuxers \
+	--enable-demuxer=wav,mp3,flac,ogg \
+	--disable-parsers \
+	--enable-parser=mpegaudio,aac,flac,vorbis \
+	--disable-bsfs \
+	--disable-swscale --enable-swresample \
+	--disable-iconv --disable-zlib --disable-bzlib --disable-lzma \
+	--disable-securetransport --disable-schannel --disable-gnutls --disable-openssl \
+	--disable-vdpau --disable-vaapi --disable-dxva2 --disable-d3d11va \
+	--disable-runtime-cpudetect --disable-autodetect \
+	--pkg-config=/bin/false
+
+$(FFMPEG_STAMP): $(FFMPEG_SRC)/configure $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(FFMPEG_OUT)'
+	cd '$(FFMPEG_OUT)' && '$(FFMPEG_SRC)/configure' $(FFMPEG_CONFIGURE_FLAGS)
+	sed -i 's/#define HAVE_POSIX_MEMALIGN 1/#define HAVE_POSIX_MEMALIGN 0/' \
+		'$(FFMPEG_OUT)'/config.h
+	sed -i 's/#define HAVE_MEMALIGN 1/#define HAVE_MEMALIGN 0/' \
+		'$(FFMPEG_OUT)'/config.h
+	sed -i 's/atomic_load_explicit(&max_alloc_size, memory_order_relaxed)/INT_MAX/g' \
+		'$(FFMPEG_SRC)'/libavutil/mem.c
+	$(MAKE) -C '$(FFMPEG_OUT)' -j'$(JOBS)'
+	$(MAKE) -C '$(FFMPEG_OUT)' install
+	touch '$@'
+
+ffmpeg: $(FFMPEG_STAMP)
+
+# --- Device test runner + overlay installs ---
+
+$(BUILDROOT_DEVTEST): $(BUILDROOT_DEVTEST_SRC) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' $(BUILDROOT_HELPER_CFLAGS) $(BUILDROOT_FLAT_LDFLAGS) -o '$@' '$<'
+	'$(BUILDROOT_FLTHDR)' -s '$(BUILDROOT_HELPER_STACK_SIZE)' '$@'
+	rm -f '$@.gdb'
+
+$(BUILDROOT_EFUSE_DEVICE): $(BUILD_DIR)/test_efuse_device
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(BUILDROOT_VDEC_DEVICE): $(BUILD_DIR)/test_vdec_device
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(BUILDROOT_DSC_DEVICE): $(BUILD_DIR)/test_dsc_device
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(BUILDROOT_PLAYER): player/sf2000-player.c $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -Os -std=c11 -Wall -Wextra \
+		-march=mips32 -mabi=32 -msoft-float \
+		$(BUILDROOT_ELF_LDFLAGS) -o '$@' \
+		player/sf2000-player.c
+
+player: $(BUILDROOT_PLAYER)
+
+# --- Test WAV generator ---
+
+$(MKTESTWAV): tools/mktestwav.c
+	mkdir -p '$(dir $@)'
+	$(HOSTCC) -O2 -std=c11 -Wall -o '$@' '$<' -lm
+
+$(PLAYER_TEST_WAV): $(MKTESTWAV)
+	'$<' '$@'
+
+$(PLAYER_TEST_SD): $(PLAYER_TEST_WAV) Makefile
+	mkdir -p '$(dir $@)'
+	rm -f '$@'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/MEDIA
+	mcopy -i '$@' '$(PLAYER_TEST_WAV)' ::/MEDIA/TEST.WAV
+
+# --- QEMU device test smoke ---
+
+run-linux-devtest: $(BUILDROOT_CPIO) qemu linux-buildroot-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	{ sleep 8; printf 'sendkey ret-x 500\n'; sleep 10; printf 'quit\n'; } | \
+		timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append '$(LINUX_CMDLINE)' \
+		-display none -serial none -monitor stdio \
+		-d '$(QEMU_DEBUG)' -D '$(BUILD_DIR)'/logs/linux-devtest.log \
+		> '$(BUILD_DIR)'/logs/linux-devtest.console 2>&1 || true
+
+smoke-linux-devtest: run-linux-devtest
+	grep -q 'sf2000-devtest: device test suite begin' '$(BUILD_DIR)'/logs/linux-devtest.log
+	grep -q 'sf2000-devtest: suite complete' '$(BUILD_DIR)'/logs/linux-devtest.log
+	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-devtest.log
+	@printf 'PASS smoke-linux-devtest\n'
+
+# --- QEMU player smoke ---
+
+run-linux-player: $(BUILDROOT_CPIO) qemu linux-buildroot-asd $(PLAYER_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	{ sleep 8; printf 'sendkey ret-w 500\n'; sleep 3; \
+		printf 'sendkey x 100\n'; sleep 2; \
+		printf 'sendkey x 100\n'; sleep 10; \
+		printf 'sendkey z 100\n'; sleep 3; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n'; } | \
+		timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append '$(LINUX_CMDLINE)' \
+		-drive if=none,id=sd0,file='$(PLAYER_TEST_SD)',format=raw \
+		-audiodev wav,id=sf2000wav,path='$(BUILD_DIR)'/sf2000-player.wav \
+		-display none -serial none -monitor stdio \
+		-d '$(QEMU_DEBUG)' -D '$(BUILD_DIR)'/logs/linux-player.log \
+		> '$(BUILD_DIR)'/logs/linux-player.console 2>&1 || true
+
+smoke-linux-player: run-linux-player
+	grep -q 'sf2000-player: audio playback ready' '$(BUILD_DIR)'/logs/linux-player.log
+	grep -q 'sf2000-player: playback complete' '$(BUILD_DIR)'/logs/linux-player.log
+	! grep -Eq 'reloc outside program|Kernel panic' '$(BUILD_DIR)'/logs/linux-player.log
+	test -s '$(BUILD_DIR)'/sf2000-player.wav
+	@printf 'PASS smoke-linux-player\n'
 
 $(LINUX_CMDLINE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	mkdir -p '$(dir $@)'
@@ -948,6 +1118,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile Makefile $(LINUX_CMDLINE_STAMP) | $
 		--disable BINFMT_ELF \
 		--disable COMPAT_BINFMT_ELF \
 		--enable BINFMT_FLAT \
+		--enable BINFMT_ELF_NOMMU \
 		--disable BINFMT_FLAT_ARGVP_ENVP_ON_STACK \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
