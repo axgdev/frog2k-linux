@@ -1,0 +1,37 @@
+--- a/libc/sysdeps/linux/mips/crt1.S
++++ b/libc/sysdeps/linux/mips/crt1.S
+@@ -96,17 +96,30 @@
+ 	move $31, $0
+ #endif
+ #ifdef L_rcrt1
+-	PTR_LA $4, _DYNAMIC           /* Place _DYNAMIC into the GOT */
+-	REG_S $4, -0x7ff0($28)        /* offset to GOT stolen from dl-startup */
+-	jal .L0                       /* Get the current $pc address */
+-.L0:
+-	PTR_SUBU $4, $31, $25         /* Calculate load addr */
++	/* Get runtime PC via jal (sets $31 = addr of .Lpc at runtime) */
++	jal .Lpc
++	nop
++.Lpc:
++	/* Branch over; beq encoded raw to prevent assembler j-conversion */
++	.set noreorder
++	.word 0x10850001
++	nop
++	.set reorder
++	PTR_LA $25, .Lpc              /* link-time addr of .Lpc */
++	PTR_SUBU $4, $31, $25         /* load bias = runtime - link-time */
+ 	move $31, $0                  /* Clear ra */
+ 	and $29, -2 * SZREG           /* Ensure stack is aligned */
+ 	PTR_ADDIU $29, (-2 * SZREG)   /* Allocate 2 register spaces on stack */
+ 	REG_S $2, SZREG($29)          /* Store atexit in case it exists */
+-	PTR_LA $5, reloc_static_pie   /* function calls before relocation
+-	                                 don't work unless we set $t9 manually */
++	PTR_LA $5, _gp                /* link-time GOT base */
++	PTR_ADDU $28, $5, $4          /* $28 = runtime GOT base */
++	PTR_LA $5, _DYNAMIC           /* link-time _DYNAMIC */
++	PTR_ADDU $5, $5, $4           /* runtime _DYNAMIC */
++	REG_S $5, -0x7ff0($28)        /* store runtime _DYNAMIC into GOT */
++	PTR_LA $5, reloc_static_pie   /* link-time reloc_static_pie */
+ 	PTR_ADDU $25, $4, $5          /* store reloc_static_pie in $t9 */
+ 	jalr $25                      /* call reloc_static_pie */
+ 	nop							  /* delay slot, just in case */

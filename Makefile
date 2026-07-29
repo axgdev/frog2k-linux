@@ -107,7 +107,7 @@ BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-gcc
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/mipsel-buildroot-uclinux-uclibc-strip
-BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x84000000 \
+BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
 PIE_SYSROOT := $(BUILD_DIR)/uclibc-pie/lib
 PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
@@ -564,7 +564,7 @@ $(INIT_BIN): init/sf2000-flat-init.S Makefile
 	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mno-abicalls \
 		-fno-pic -fno-pie -no-pie -mno-gpopt -G 0 \
-		-Wl,-Ttext-segment=0x84000000 -Wl,-e,_start \
+		-Wl,-Ttext-segment=0x85000000 -Wl,-e,_start \
 		-Wl,--gc-sections -Wl,-z,noexecstack \
 		-Wl,--no-check-sections -o '$@' '$<'
 
@@ -639,17 +639,17 @@ $(PIE_STAMP): $(BUILDROOT_TOOLCHAIN_STAMP) $(UCLIBC_PIE_PATCHES) Makefile
 	done
 	mkdir -p '$(dir $@)'
 	cp '$(UCLIBC_SRC)'/.config '$(BUILD_DIR)'/uclibc-pie/.config
-	'$(UCLIBC_SRC)'/extra/config/conf --silentoldconfig \
-		-Kconfig '$(UCLIBC_SRC)' 2>/dev/null || true
 	sed -i 's/^# STATIC_PIE is not set/STATIC_PIE=y/' '$(BUILD_DIR)'/uclibc-pie/.config
 	sed -i 's/^STATIC_PIE=n/STATIC_PIE=y/' '$(BUILD_DIR)'/uclibc-pie/.config
 	grep -q '^STATIC_PIE=y' '$(BUILD_DIR)'/uclibc-pie/.config || \
 		echo 'STATIC_PIE=y' >> '$(BUILD_DIR)'/uclibc-pie/.config
+	'$(UCLIBC_SRC)'/extra/config/conf --silentoldconfig \
+		-Kconfig '$(UCLIBC_SRC)' O='$(abspath $(BUILD_DIR)/uclibc-pie)' 2>/dev/null || true
 	$(MAKE) -C '$(UCLIBC_SRC)' \
 		O='$(abspath $(BUILD_DIR)/uclibc-pie)' \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))' \
 		UCLIBC_EXTRA_CFLAGS='' \
-		-j'$(JOBS)' lib/libc.a lib/rcrt1.o
+		-j'$(JOBS)' libs startfiles
 	touch '$@'
 
 

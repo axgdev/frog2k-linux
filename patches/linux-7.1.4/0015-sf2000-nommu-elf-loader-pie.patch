@@ -4,7 +4,7 @@ Subject: [PATCH] fs: add NOMMU ELF loader with ET_EXEC and ET_DYN support
 Add binfmt_elf_nommu.c: a minimal ELF binary format handler for NOMMU
 MIPS (SF2000).  Supports two loading modes:
 
-  ET_EXEC: fixed-address loading at KSEG0 0x84000000.  Segments are
+  ET_EXEC: fixed-address loading at KSEG0 0x85000000.  Segments are
   copied to their link-time p_vaddr.  Zero runtime relocations.
 
   ET_DYN: static-PIE loading at a dynamically allocated address via
@@ -25,7 +25,7 @@ binfmt handler.
 + * binfmt_elf_nommu.c - Load static ELF binaries on NOMMU MIPS (SF2000).
 + *
 + * Supports two modes:
-+ *   ET_EXEC: linked at fixed KSEG0 0x84000000, zero runtime relocations.
++ *   ET_EXEC: linked at fixed KSEG0 0x85000000, zero runtime relocations.
 + *   ET_DYN:  static-PIE, loaded at a dynamically allocated address.
 + *            Self-relocation is performed by userspace (rcrt1.o).
 + */
@@ -47,8 +47,8 @@ binfmt handler.
 +#include <asm/cacheflush.h>
 +#include <asm/page.h>
 +
-+#define ELF_NOMMU_VADDR_START	0x84000000UL
-+#define ELF_NOMMU_REGION_SIZE	0x01000000UL	/* 16 MiB */
++#define ELF_NOMMU_VADDR_START	0x85000000UL
++#define ELF_NOMMU_REGION_SIZE	0x00400000UL	/* 4 MiB */
 +#define ELF_NOMMU_VADDR_END	(ELF_NOMMU_VADDR_START + ELF_NOMMU_REGION_SIZE)
 +#define ELF_NOMMU_STACK_SIZE	0x20000UL	/* 128 KiB at top */
 +#define ELF_NOMMU_STACK_ALIGN	16
@@ -306,3 +306,40 @@ binfmt handler.
 +	return 0;
 +}
 +core_initcall(init_elf_nommu_binfmt);
+diff --git a/fs/Kconfig.binfmt b/fs/Kconfig.binfmt
+--- a/fs/Kconfig.binfmt
++++ b/fs/Kconfig.binfmt
+@@ -119,6 +119,13 @@ config BINFMT_FLAT
+ 	help
+ 	  Support uClinux FLAT format binaries.
+ 
++config BINFMT_ELF_NOMMU
++	bool "NOMMU MIPS static ELF loader (SF2000)"
++	depends on !MMU && 32BIT
++	help
++	  Minimal ELF binary format handler for NOMMU MIPS.  Supports
++	  ET_EXEC (fixed-address) and ET_DYN (static-PIE) binaries.
++
+ config BINFMT_FLAT_ARGVP_ENVP_ON_STACK
+ 	bool
+ 
+diff --git a/fs/Makefile b/fs/Makefile
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -41,5 +41,6 @@ obj-$(CONFIG_BINFMT_ELF_FDPIC)	+= binfmt_elf_fdpic.o
+ obj-$(CONFIG_BINFMT_FLAT)	+= binfmt_flat.o
++obj-$(CONFIG_BINFMT_ELF_NOMMU)	+= binfmt_elf_nommu.o
+ 
+ obj-$(CONFIG_FS_STACK)		+= backing-file.o
+ obj-$(CONFIG_FS_MBCACHE)	+= mbcache.o
+ obj-$(CONFIG_FS_POSIX_ACL)	+= posix_acl.o
+diff --git a/fs/exec.c b/fs/exec.c
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1090,5 +1090,5 @@ EXPORT_SYMBOL(open_exec);
+ 
+-#if defined(CONFIG_BINFMT_FLAT) || defined(CONFIG_BINFMT_ELF_FDPIC)
++#if defined(CONFIG_BINFMT_FLAT) || defined(CONFIG_BINFMT_ELF_FDPIC) || defined(CONFIG_BINFMT_ELF_NOMMU)
+ ssize_t read_code(struct file *file, unsigned long addr, loff_t pos, size_t len)
+ {
+ 	ssize_t res = vfs_read(file, (void __user *)addr, len, &pos);

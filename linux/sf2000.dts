@@ -85,8 +85,8 @@
 			no-map;
 		};
 
-		identity_exec: identity-exec@400000 {
-			reg = <0x00400000 0x00400000>;
+		identity_exec: identity-exec@5000000 {
+			reg = <0x05000000 0x00400000>;
 			no-map;
 		};
 
