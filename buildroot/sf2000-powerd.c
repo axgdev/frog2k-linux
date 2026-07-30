@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -22,11 +23,14 @@
 #define GPIO_R_DIR_OFF 0xf8u
 #define PIN_R05 5u
 #define STANDBY_MARKER "/run/sf2000-display-standby"
-#define POWER_CONFIG "/etc/sf2000-power.conf"
+#define SYSTEM_CONFIG "/etc/sf2000.conf"
+#define USER_CONFIG "/mnt/sd/sf2000.conf"
+#define STORAGE_MARKER "/run/sf2000-storage-mounted"
 #define ADC_BASE ((volatile uint32_t *)(uintptr_t)0xb8818400u)
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #define FRONTEND_PATH "/usr/bin/sf2000-frontend"
 #define FRONTEND_READY_MARKER "/run/sf2000-frontend-ready"
+#define BROWSER_EXIT_MARKER "/run/sf2000-browser-exit"
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
 #ifdef SF2000_EXPERIMENTAL_DEVTESTS
@@ -39,6 +43,7 @@
 
 static volatile uint8_t *sysio;
 static unsigned standby_poll_ms = DEFAULT_STANDBY_POLL_MS;
+static int boot_browser = 1;
 static unsigned last_battery_mv;
 static uint64_t last_battery_ms;
 
@@ -68,28 +73,62 @@ static uint64_t monotonic_ms(void)
 	return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
 }
 
+static int config_bool(const char *value, int fallback)
+{
+	if (!strcasecmp(value, "true") || !strcmp(value, "1") ||
+			!strcasecmp(value, "yes"))
+		return 1;
+	if (!strcasecmp(value, "false") || !strcmp(value, "0") ||
+			!strcasecmp(value, "no"))
+		return 0;
+	return fallback;
+}
+
+static void load_config_file(const char *path)
+{
+	FILE *file = fopen(path, "r");
+	char line[256];
+
+	if (!file)
+		return;
+	while (fgets(line, sizeof(line), file)) {
+		char *key = line;
+		char *value;
+		char *end;
+		unsigned long parsed;
+
+		while (*key == ' ' || *key == '\t')
+			key++;
+		if (!*key || *key == '#' || *key == ';')
+			continue;
+		value = strchr(key, '=');
+		if (!value)
+			continue;
+		*value++ = 0;
+		end = key + strlen(key);
+		while (end > key && (end[-1] == ' ' || end[-1] == '\t'))
+			*--end = 0;
+		end = value + strlen(value);
+		while (end > value && (end[-1] == '\r' || end[-1] == '\n' ||
+				end[-1] == ' ' || end[-1] == '\t'))
+			*--end = 0;
+		while (*value == ' ' || *value == '\t')
+			value++;
+		if (!strcmp(key, "standby_poll_ms")) {
+			parsed = strtoul(value, &end, 10);
+			if (end != value && parsed >= 100u && parsed <= 10000u)
+				standby_poll_ms = (unsigned)parsed;
+		} else if (!strcmp(key, "boot_browser")) {
+			boot_browser = config_bool(value, boot_browser);
+		}
+	}
+	fclose(file);
+}
+
 static void load_config(void)
 {
-	char data[128];
-	int fd = open(POWER_CONFIG, O_RDONLY | O_CLOEXEC);
-	ssize_t got;
-	char *value, *end;
-	unsigned long parsed;
-
-	if (fd < 0)
-		return;
-	got = read(fd, data, sizeof(data) - 1u);
-	close(fd);
-	if (got <= 0)
-		return;
-	data[got] = 0;
-	value = strstr(data, "standby_poll_ms=");
-	if (!value)
-		return;
-	value += strlen("standby_poll_ms=");
-	parsed = strtoul(value, &end, 10);
-	if (end != value && parsed >= 100u && parsed <= 10000u)
-		standby_poll_ms = (unsigned)parsed;
+	load_config_file(SYSTEM_CONFIG);
+	load_config_file(USER_CONFIG);
 }
 
 static void battery_sample(const char *mode)
@@ -222,8 +261,9 @@ static void run_frontend(void)
 	int status;
 	int visible = 0;
 
-	log_line("sf2000-powerd: frontend launch START+R\n");
+	log_line("sf2000-powerd: frontend launch\n");
 	(void)unlink(FRONTEND_READY_MARKER);
+	(void)unlink(BROWSER_EXIT_MARKER);
 	(void)unlink(PERFORMANCE_READY_MARKER);
 	{
 		int marker = open(PERFORMANCE_MARKER,
@@ -241,12 +281,17 @@ static void run_frontend(void)
 	backlight_set(0);
 	if (pause_screen() < 0)
 		log_line("sf2000-powerd: frontend screen stop failed\n");
-	pid = vfork();
-	if (pid == 0) {
-		execv(FRONTEND_PATH, argv);
-		_exit(127);
-	}
-	if (pid > 0) {
+	for (;;) {
+		visible = 0;
+		status = 0;
+		(void)unlink(FRONTEND_READY_MARKER);
+		pid = vfork();
+		if (pid == 0) {
+			execv(FRONTEND_PATH, argv);
+			_exit(127);
+		}
+		if (pid <= 0)
+			break;
 		/*
 		 * Interactive emulation is the only CPU-bound foreground job.
 		 * Keep low-rate logging and battery housekeeping from winning a
@@ -294,10 +339,20 @@ static void run_frontend(void)
 					"sf2000-powerd: frontend wait status=0x%x\n", status);
 			log_line(line);
 		}
+		if (access(BROWSER_EXIT_MARKER, F_OK) == 0)
+			break;
+		/*
+		 * The browser execs a core in-place. A clean core exit therefore
+		 * returns here; keep scanout ownership and relaunch the browser
+		 * instead of flashing the diagnostic console between applications.
+		 */
+		backlight_set(0);
+		log_line("sf2000-powerd: relaunch browser after application exit\n");
 	}
 	backlight_set(0);
 	(void)unlink(PERFORMANCE_MARKER);
 	(void)unlink(FRONTEND_READY_MARKER);
+	(void)unlink(BROWSER_EXIT_MARKER);
 	if (resume_screen() < 0)
 		log_line("sf2000-powerd: frontend screen resume failed\n");
 	/* Let the console publish a complete replacement frame while blanked. */
@@ -385,6 +440,30 @@ int main(void)
 		input = open("/dev/input/event0", O_RDONLY | O_CLOEXEC);
 		if (input < 0)
 			sleep_ms(100);
+	}
+	/*
+	 * The user configuration lives on the FAT volume. Wait for the mount
+	 * service rather than guessing a delay, then enter the browser directly.
+	 * Retained recovery and logd are already active before this point.
+	 */
+	if (boot_browser) {
+		unsigned wait;
+
+		for (wait = 0; wait < 300u &&
+				access(STORAGE_MARKER, F_OK) != 0; wait++)
+			sleep_ms(10);
+		load_config();
+		if (boot_browser && access(STORAGE_MARKER, F_OK) == 0) {
+			run_frontend();
+			/*
+			 * powerd did not consume controller events while the browser
+			 * owned input. Discard its exit chord before interpreting a
+			 * stale START+R as a second launch request.
+			 */
+			drain_input(input);
+			start = y = r = 0;
+			released = launch_released = 1;
+		}
 	}
 	log_line("sf2000-powerd: ready START+Y standby START+R browser\n");
 	for (;;) {

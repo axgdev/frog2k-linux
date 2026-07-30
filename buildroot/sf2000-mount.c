@@ -76,7 +76,7 @@ int main(void)
 			if (stat(devices[i], &st) != 0 || !S_ISBLK(st.st_mode))
 				continue;
 			if (mount(devices[i], MOUNT_POINT, "vfat",
-					MS_NOATIME, NULL) != 0)
+					MS_NOATIME, "iocharset=utf8") != 0)
 				continue;
 			(void)mkdir("/media", 0755);
 			(void)symlink(MOUNT_POINT, UNIFROG_MOUNT_POINT);

@@ -58,6 +58,9 @@
 #define STANDBY_CHECK_SCANS 64u
 #define STANDBY_MARKER "/run/sf2000-display-standby"
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
+#define STORAGE_MARKER "/run/sf2000-storage-mounted"
+#define SYSTEM_CONFIG "/etc/sf2000.conf"
+#define USER_CONFIG "/mnt/sd/sf2000.conf"
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -118,6 +121,7 @@ enum button_index {
 static volatile uint8_t *sysio_mapping;
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
 static volatile sig_atomic_t stopping;
+static unsigned normal_poll_ms = POLL_INTERVAL_MS;
 
 static void log_line(const char *line)
 {
@@ -171,6 +175,55 @@ static void sleep_until(struct timespec *deadline, unsigned msec)
 	} while (result == EINTR && !stopping);
 	if (result && result != EINTR)
 		(void)clock_gettime(CLOCK_MONOTONIC, deadline);
+}
+
+static void load_scan_config_file(const char *path)
+{
+	char data[4096];
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	ssize_t got;
+	char *line;
+
+	if (fd < 0)
+		return;
+	got = read(fd, data, sizeof(data) - 1u);
+	close(fd);
+	if (got <= 0)
+		return;
+	data[got] = 0;
+	for (line = data; line && *line;) {
+		char *next = strchr(line, '\n');
+		char *value;
+
+		if (next)
+			*next++ = 0;
+		while (*line == ' ' || *line == '\t')
+			line++;
+		value = strchr(line, '=');
+		if (value) {
+			char *end;
+			unsigned long parsed;
+
+			*value++ = 0;
+			end = line + strlen(line);
+			while (end > line && (end[-1] == ' ' || end[-1] == '\t'))
+				*--end = 0;
+			while (*value == ' ' || *value == '\t')
+				value++;
+			if (!strcmp(line, "input_scan_ms")) {
+				parsed = strtoul(value, &end, 10);
+				if (end != value && parsed >= 2u && parsed <= 20u)
+					normal_poll_ms = (unsigned)parsed;
+			}
+		}
+		line = next;
+	}
+}
+
+static void load_scan_config(void)
+{
+	load_scan_config_file(SYSTEM_CONFIG);
+	load_scan_config_file(USER_CONFIG);
 }
 
 static uint32_t mmio_read32(uint32_t off)
@@ -491,7 +544,7 @@ static unsigned poll_interval_ms(void)
 	ssize_t got;
 
 	if (fd < 0)
-		return POLL_INTERVAL_MS;
+		return normal_poll_ms;
 	got = read(fd, value, sizeof(value) - 1u);
 	close(fd);
 	if (got > 0) {
@@ -513,7 +566,8 @@ int main(int argc, char **argv)
 	uint32_t raw_prev = 0;
 	uint32_t raw_count = 0;
 	unsigned standby_check = 0;
-	unsigned poll_ms = POLL_INTERVAL_MS;
+	unsigned poll_ms;
+	int user_config_loaded = 0;
 	int uinput_fd;
 	char line[128];
 	struct timespec deadline;
@@ -537,11 +591,12 @@ int main(int argc, char **argv)
 	 */
 	(void)setpriority(PRIO_PROCESS, 0, -20);
 	(void)clock_gettime(CLOCK_MONOTONIC, &deadline);
+	load_scan_config();
+	poll_ms = normal_poll_ms;
 
 	snprintf(line, sizeof(line),
-		"sf2000-pad: userspace input bridge ready profile=%s scan_ms=%u debounce_ms=%u priority=-20\n",
-		profile_name(profile), POLL_INTERVAL_MS,
-		POLL_INTERVAL_MS * NORMAL_DEBOUNCE_SCANS);
+		"sf2000-pad: userspace input bridge ready profile=%s scan_ms=%u debounce=adaptive-confirm priority=-20\n",
+		profile_name(profile), normal_poll_ms);
 	log_line(line);
 
 	while (!stopping) {
@@ -553,10 +608,27 @@ int main(int argc, char **argv)
 		} else {
 			raw_prev = raw;
 			raw_count = 0;
+			/*
+			 * Confirm an edge immediately instead of waiting one complete
+			 * polling period. This removes up to scan_ms from press/release
+			 * latency while leaving the idle GPIO transaction rate exactly
+			 * unchanged. Mechanical transitions are rare, so the extra
+			 * shift-register read has negligible CPU cost.
+			 */
+			if (poll_ms == normal_poll_ms) {
+				uint32_t confirmed = scan_buttons(profile);
+
+				if (confirmed == raw)
+					raw_count = NORMAL_DEBOUNCE_SCANS;
+				else {
+					raw = confirmed;
+					raw_prev = confirmed;
+				}
+			}
 		}
 
 		/* Normal scans debounce; a low-rate standby scan is already stable. */
-		if (raw_count >= (poll_ms == POLL_INTERVAL_MS ?
+		if (raw_count >= (poll_ms == normal_poll_ms ?
 				NORMAL_DEBOUNCE_SCANS : 0u) && raw != state) {
 			emit_changes(uinput_fd, state, raw);
 			state = raw;
@@ -569,10 +641,26 @@ int main(int argc, char **argv)
 		 * transaction. Check it at a low duty cycle in normal operation;
 		 * while in standby, every wake scan also checks for its removal.
 		 */
-		if (poll_ms != POLL_INTERVAL_MS ||
+		if (poll_ms != normal_poll_ms ||
 				++standby_check >= STANDBY_CHECK_SCANS) {
 			poll_ms = poll_interval_ms();
 			standby_check = 0;
+			if (!user_config_loaded &&
+					access(STORAGE_MARKER, F_OK) == 0) {
+				unsigned old_poll_ms = normal_poll_ms;
+
+				load_scan_config_file(USER_CONFIG);
+				user_config_loaded = 1;
+				if (poll_ms == old_poll_ms)
+					poll_ms = normal_poll_ms;
+				if (normal_poll_ms != old_poll_ms) {
+					snprintf(line, sizeof(line),
+						"sf2000-pad: user scan_ms=%u debounce_ms=%u\n",
+						normal_poll_ms, normal_poll_ms *
+						NORMAL_DEBOUNCE_SCANS);
+					log_line(line);
+				}
+			}
 			(void)clock_gettime(CLOCK_MONOTONIC, &deadline);
 		}
 		sleep_until(&deadline, poll_ms);

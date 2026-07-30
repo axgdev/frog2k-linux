@@ -49,6 +49,20 @@ is optional compatibility support enabled explicitly with `FIXED_ET_EXEC=1`.
 `make ROOTFS=buildroot toolchain` downloads and compiles the complete cross
 toolchain into the disposable Buildroot output tree.
 
+Normal device boot enters the native browser as soon as input, display, and
+the SD mount are ready. The retained-RAM loader log and `log.txt` recovery path
+run before Linux and are unchanged; the old manual START+R step and diagnostic
+console wait are not on the boot hot path. START+L exits an application back to
+the browser and exits the browser to the diagnostic console.
+
+Runtime policy and browser theming share one typed configuration file:
+`/etc/sf2000.conf`, optionally overridden by `/sf2000.conf` on the card. The
+shipped file documents every key's type and range or finite enum. The staged
+SD tree also contains `sf2000/ui.ttf` and its OFL license; the large Unicode
+font is deliberately not embedded in every ASD. VFAT uses UTF-8 filename
+conversion, and the browser supports English, Spanish, Portuguese, Polish,
+Vietnamese, and Japanese labels.
+
 The detailed hardware contract, bring-up history, failed assumptions, current
 support matrix, and application-porting constraints are documented in
 [`docs/SF2000-LINUX-PORT.md`](docs/SF2000-LINUX-PORT.md).

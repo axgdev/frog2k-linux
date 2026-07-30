@@ -169,6 +169,11 @@ SDCARD_FASTBOOT_BIN := $(BUILD_DIR)/sdcard/firmware/unifrog.bin
 SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
+SDCARD_USER_CONFIG := $(BUILD_DIR)/sdcard/sf2000.conf
+SDCARD_UI_FONT := $(BUILD_DIR)/sdcard/sf2000/ui.ttf
+SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
+UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
+UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
@@ -1406,8 +1411,9 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable MSDOS_FS \
 		--enable VFAT_FS \
 		--enable NLS \
-		--enable NLS_CODEPAGE_437 \
-		--enable NLS_ISO8859_1 \
+	--enable NLS_CODEPAGE_437 \
+	--enable NLS_ISO8859_1 \
+	--enable NLS_UTF8 \
 		--disable EXT4_FS \
 		--disable EXPORTFS \
 		--disable FUSE_FS \
@@ -1582,10 +1588,24 @@ $(SDCARD_LOG_TXT): Makefile
 	mkdir -p '$(dir $@)'
 	dd if=/dev/zero of='$@' bs=262144 count=1 >/dev/null 2>&1
 
+$(SDCARD_USER_CONFIG): buildroot/sf2000-rootfs-overlay/etc/sf2000.conf
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(SDCARD_UI_FONT): $(UI_FONT_SOURCE)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
+$(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
-		$(SDCARD_FASTBOOT_BIN)
+		$(SDCARD_FASTBOOT_BIN) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) \
+		$(SDCARD_UI_FONT_LICENSE)
 	cd '$(BUILD_DIR)/sdcard' && sha256sum bios/bisrv.asd \
-		firmware/linux.asd firmware/unifrog.bin > SHA256SUMS
+		firmware/linux.asd firmware/unifrog.bin sf2000.conf \
+		sf2000/ui.ttf sf2000/OFL.txt > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
@@ -1604,7 +1624,7 @@ linux-buildroot-asd:
 
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS) $(SDCARD_LOG_TXT) \
-		$(SDCARD_CHECKSUMS)
+		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) $(SDCARD_CHECKSUMS)
 
 sdcard-buildroot:
 	$(MAKE) ROOTFS=buildroot sdcard-linux
@@ -1715,7 +1735,7 @@ $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
 	mmd -i '$@' ::/GB ::/GBC
-	mcopy -i '$@' '$(BROWSER_TEST_ROM)' ::/GB/TEST.GB
+	mcopy -i '$@' '$(BROWSER_TEST_ROM)' '::/GB/TEST GAME.GB'
 	mcopy -i '$@' Makefile ::/README.TXT
 
 $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
@@ -1723,14 +1743,15 @@ $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
 	mmd -i '$@' ::/GB ::/GBA
-	mcopy -i '$@' '$(BROWSER_TEST_ROM)' ::/GB/TEST.GB
+	mcopy -i '$@' '$(BROWSER_TEST_ROM)' '::/GB/TEST GAME.GB'
 	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
 
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
-		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(BROWSER_TEST_SD)',format=raw \
@@ -1742,15 +1763,15 @@ run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-powerd: frontend launch START+R' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: frontend launch' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Fq 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST GAME.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
-	awk '/sf2000-browser: ready:/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
+	awk '/sf2000-browser: launch Gambatte/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1770,7 +1791,8 @@ run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey backspace-w 500\n'; sleep 6; \
 		printf 'sendkey backspace-w 500\n'; sleep 7; \
-		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(GPSP_TEST_SD)',format=raw \
@@ -1811,7 +1833,8 @@ run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 15; \
-		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(GPSP_REAL_TEST_SD)',format=raw \
@@ -1875,7 +1898,8 @@ run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		printf 'sendkey ret-w 500\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
-		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(FRONTEND_LIFECYCLE_TEST_SD)',format=raw \
@@ -1889,7 +1913,7 @@ run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 smoke-linux-frontend-lifecycle: run-linux-frontend-lifecycle
 	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
-	grep -q 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST.GB' \
+	grep -Fq 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST GAME.GB' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
 	grep -Eq '\[gpSP JIT cache\] calls=[1-9][0-9]* failures=0' \
 		'$(BUILD_DIR)'/logs/linux-frontend-lifecycle.log
@@ -2604,7 +2628,8 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
-		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+		printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(FCEUMM_TEST_SD)',format=raw \

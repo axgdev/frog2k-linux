@@ -266,9 +266,19 @@ had reused the buffer, damaging unrelated FAT sectors and the superblock.
 The production mount service is a small static-PIE ELF at
 `/usr/sbin/sf2000-mount`. It replaces a large BusyBox shell exec in the boot
 hot path, retries the first two partitions and raw card, mounts VFAT with
-`noatime`, and publishes `/run/sf2000-storage-mounted`. `sf2000-logd` buffers
+`noatime` and UTF-8 filename conversion, and publishes
+`/run/sf2000-storage-mounted`. `sf2000-logd` buffers
 early records in RAM, appends `loglinux.txt` after mount, and uses bounded
 periodic flushes while the system is idle.
+
+`sf2000-powerd` waits on that mount marker and enters the browser directly.
+The QEMU boot gate measures browser readiness at roughly 3.4 seconds of guest
+monotonic time rather than requiring a later controller chord. The browser
+execs a selected static-PIE runner in place. On runner exit the supervisor
+relaunches the browser without returning scanout to the console; an explicit
+browser START+L marker ends the session. Input accumulated while the browser
+owned evdev is drained at that boundary so its exit chord cannot trigger an
+accidental second launch.
 
 Before launching the browser, `sf2000-powerd` creates a performance request
 and waits for `sf2000-logd` to acknowledge it. The logger first synchronizes
@@ -303,10 +313,12 @@ orderly path cannot complete.
   software must assert load and clock all twelve bits to identify a key.
   The data line represents only the selected bit, so there is no useful
   any-button interrupt to replace scanning. The input bridge instead performs
-  a bounded 4 ms scan with one confirmation scan, uses an absolute monotonic
-  deadline, and runs at the foreground priority. This reduces the hardware
-  scan/debounce contribution from roughly 40--60 ms to at most about 8 ms
-  without busy-wait polling between scans. It checks the standby marker only
+  a bounded 4 ms scan, uses an absolute monotonic deadline, and runs at the
+  foreground priority. An edge triggers an immediate second shifter
+  transaction; a stable edge is published without sleeping through another
+  scan period. This leaves the idle transaction rate unchanged while reducing
+  debounce latency to one scan phase plus one short transaction. It checks the
+  standby marker only
   every 64 active scans and suppresses synchronous state printk during a
   performance session. Frontend metrics report evdev events and maximum
   event-to-host latency so physical runs can distinguish scanning delay from
