@@ -150,7 +150,7 @@ LINUX_MODE_STAMP := $(LINUX_OUT)/.stamp-mode
 LINUX_DEFCONFIG ?= 32r1el_defconfig
 LINUX_PATCHES := $(wildcard patches/linux-$(LINUX_VERSION)/*.patch)
 SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
-SF2000_BOOT_VISUAL ?= console
+SF2000_BOOT_VISUAL ?= browser
 SF2000_BOOT_COLOR ?= 0x0000
 SF2000_BOOT_HOLD_MS ?= 750
 LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init initramfs_async=0 \

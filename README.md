@@ -197,8 +197,11 @@ display service has pushed a complete controlled frame. The first visible frame
 is configurable:
 
 ```sh
-# Immediate console (default)
+# Immediate diagnostic console
 make ROOTFS=buildroot SF2000_BOOT_VISUAL=console sdcard-linux
+
+# Black conditioning frame followed directly by the browser (default)
+make ROOTFS=buildroot SF2000_BOOT_VISUAL=browser sdcard-linux
 
 # Built-in logo, held for 750 ms
 make ROOTFS=buildroot SF2000_BOOT_VISUAL=logo sdcard-linux

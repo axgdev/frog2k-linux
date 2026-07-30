@@ -4277,6 +4277,7 @@ static void run_direct_console(unsigned *frame)
 	unsigned input_retry = 0;
 	int rgb_active = 0;
 	int ge_diagnostics;
+	int browser_boot = cmdline_contains("SF2000_BOOT_VISUAL=browser");
 	uint64_t performance_begin_us = monotonic_us();
 
 	log_line("sf2000-screen: direct text console begin\n");
@@ -4294,7 +4295,11 @@ static void run_direct_console(unsigned *frame)
 	console_input_init_fds(input_fds);
 	if (!console_input_refresh_fds(input_fds))
 		console_add_line("input: waiting for evdev devices");
-	draw_console_screen(++*frame);
+	++*frame;
+	if (browser_boot)
+		memset((void *)framebuffer(), 0, FRAME_BYTES);
+	else
+		draw_console_screen(*frame);
 	/*
 	 * Complete a real GRAM transaction before changing the ST7789 ownership
 	 * from its 8080/MCU port to RGB.  This cannot be reduced to register
