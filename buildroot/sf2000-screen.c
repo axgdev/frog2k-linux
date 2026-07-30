@@ -279,6 +279,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONDITIONING_TE_EDGES 4u
 #define CONDITIONING_TIMEOUT_MS 1000u
 #define SCREEN_PAUSE_REQUEST "/run/sf2000-screen-pause-request"
+#define SCREEN_STOP_REQUEST "/run/sf2000-screen-stop-request"
 #define CONSOLE_BTN_UP 0x01u
 #define CONSOLE_BTN_DOWN 0x02u
 #define CONSOLE_BTN_LEFT 0x04u
@@ -307,6 +308,21 @@ static uint32_t cached_render_frame_handle;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
 static hcge_context *display_ge;
+
+static void stop_signal(int signal_number)
+{
+	(void)signal_number;
+	stopping = 1;
+}
+
+static int screen_stop_requested(void)
+{
+	if (stopping || access(SCREEN_STOP_REQUEST, F_OK) == 0) {
+		stopping = 1;
+		return 1;
+	}
+	return 0;
+}
 
 static uint16_t *allocate_frame(uint32_t *physical, uint32_t *handle)
 {
@@ -1647,7 +1663,8 @@ static void application_pause_service(void)
 		return;
 	}
 	(void)publish_marker("/run/sf2000-screen-paused", "paused\n");
-	while (access(SCREEN_PAUSE_REQUEST, F_OK) == 0)
+	while (access(SCREEN_PAUSE_REQUEST, F_OK) == 0 &&
+	       !screen_stop_requested())
 		(void)nanosleep(&delay, NULL);
 	application_paused = 0;
 	(void)unlink("/run/sf2000-screen-paused");
@@ -4425,6 +4442,8 @@ handoff_complete:
 		int changed = 0;
 		unsigned kmsg_reads = 0;
 
+		if (screen_stop_requested())
+			break;
 		application_pause_service();
 		if (fd >= 0) {
 			do {
@@ -4583,6 +4602,9 @@ int main(int argc, char **argv, char **envp)
 
 	(void)argc;
 	(void)argv;
+	(void)signal(SIGTERM, stop_signal);
+	(void)signal(SIGINT, stop_signal);
+	(void)unlink(SCREEN_STOP_REQUEST);
 	log_line("sf2000-screen: main entry\n");
 	publish_screen_pid();
 	progress_mark("screen-main", 0x3fu, SCREEN_TAG);
@@ -4671,6 +4693,15 @@ int main(int argc, char **argv, char **envp)
 	else
 		run_direct_console(&frame);
 
+	/*
+	 * Normal production mode remains in run_direct_console() until the
+	 * service is stopped.  Do not start the legacy post-console diagnostic
+	 * sequence after SIGTERM: it takes ownership of the panel again and can
+	 * block init's ordered shutdown after the filesystem is unmounted.
+	 */
+	if (stopping)
+		goto shutdown;
+
 	log_line("sf2000-screen: before panel init\n");
 	panel_init_variant(first_variant);
 	log_line("sf2000-screen: after panel init\n");
@@ -4691,9 +4722,11 @@ int main(int argc, char **argv, char **envp)
 		run_rgb_diag(&frame);
 	}
 
-	backlight_set(1);
+shutdown:
+	backlight_set(0);
 	status_led_set(0);
 	unlink("/run/sf2000-screen-own-backlight");
+	unlink(SCREEN_STOP_REQUEST);
 	log_line("sf2000-screen: stopped\n");
 	return 0;
 }

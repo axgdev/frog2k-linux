@@ -23,12 +23,16 @@ typedef unsigned int size_t;
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR 2
+/* MIPS o32 uses the architecture-specific values, not asm-generic's. */
+#define O_CREAT 0x0100
+#define O_TRUNC 0x0200
 #define AT_FDCWD -100
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define MAP_SHARED 1
 #define SIGCHLD 18
 #define SIGTERM 15
+#define SIGKILL 9
 #define LINUX_REBOOT_MAGIC1 0xfee1deadUL
 #define LINUX_REBOOT_MAGIC2 672274793UL
 #define LINUX_REBOOT_CMD_RESTART 0x01234567UL
@@ -289,6 +293,19 @@ static long syscall6(long nr, long a0, long a1, long a2, long a3,
 static int mkdir_path(const char *path, unsigned int mode)
 {
 	return (int)syscall3(SYS_mkdirat, AT_FDCWD, (long)path, (long)mode);
+}
+
+static int publish_request(const char *path)
+{
+	static const char request[] = "requested\n";
+	long fd;
+
+	fd = syscall3(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return (int)fd;
+	(void)syscall3(SYS_write, fd, (long)request, sizeof(request) - 1u);
+	(void)syscall1(SYS_close, fd);
+	return 0;
 }
 
 static void *sys_mmap2(void *addr, unsigned long length, unsigned long prot,
@@ -650,6 +667,7 @@ static int stop_service(long pid)
 {
 	int status = 0;
 	long ret;
+	unsigned int elapsed;
 
 	if (pid <= 0)
 		return -1;
@@ -665,7 +683,21 @@ static int stop_service(long pid)
 	if (ret < 0)
 		return (int)ret;
 	(void)diagnostic_watchdog_disable();
-	ret = syscall4(SYS_wait4, pid, (long)&status, 0, 0);
+	for (elapsed = 0; elapsed < 50u; elapsed++) {
+		ret = syscall4(SYS_wait4, pid, (long)&status, 1, 0);
+		if (ret == pid)
+			break;
+		sleep_ms(10);
+	}
+	if (ret != pid) {
+		/*
+		 * A wedged MMIO transaction cannot be unwound cooperatively.
+		 * Never let it prevent an otherwise synchronized shutdown.
+		 */
+		progress_mark("init-screen-stop-timeout", 0x3eu, elapsed);
+		(void)syscall2(SYS_kill, pid, SIGKILL);
+		ret = syscall4(SYS_wait4, pid, (long)&status, 0, 0);
+	}
 	progress_mark("init-screen-stop-wait", 0x3eu, (unsigned int)ret);
 	/* Keep the invariant true even if a future screen binary exits abruptly. */
 	(void)diagnostic_watchdog_disable();
@@ -715,6 +747,8 @@ static void graceful_shutdown(long logd_pid, long screen_pid)
 
 	log_message("sf2000_buildroot: safe shutdown requested\n");
 	progress_mark("init-shutdown-request", 0x3eu, INIT_TAG);
+	ret = publish_request("/run/sf2000-screen-stop-request");
+	progress_mark("init-screen-stop-request", 0x3eu, (unsigned int)ret);
 	(void)stop_logger(logd_pid);
 	(void)syscall0(SYS_sync);
 	ret = syscall2(SYS_umount2, (long)"/mnt/sd", 0);
