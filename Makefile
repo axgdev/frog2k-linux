@@ -175,6 +175,10 @@ SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
 SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
 SDCARD_QUICKNES := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-quicknes
 SDCARD_QUICKNES_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/quicknes-LICENSE
+SDCARD_PROSYSTEM := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-prosystem
+SDCARD_PROSYSTEM_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/prosystem-LICENSE
+SDCARD_SNES9X2005 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-snes9x2005
+SDCARD_SNES9X2005_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/snes9x2005-copyright
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -1583,8 +1587,8 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
 			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
-		printf '  Press START+SELECT for a logger flush, sync, unmount, and clean restart.\n'; \
-		printf '  A bounded watchdog restart is used only if the orderly path stalls.\n'; \
+		printf '  START+SELECT opens the pause/options menu while a core is running.\n'; \
+		printf '  Use Reset or Safe Shutdown from the home menu for ordered storage handling.\n'; \
 	} > '$@'
 
 $(SDCARD_LOG_TXT): Makefile
@@ -1605,6 +1609,7 @@ $(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
 
 $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/quicknes \
+		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
@@ -1612,8 +1617,16 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 	mkdir -p '$(dir $@)/licenses'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-quicknes \
 		'$(SDCARD_QUICKNES)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-prosystem \
+		'$(SDCARD_PROSYSTEM)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-snes9x2005 \
+		'$(SDCARD_SNES9X2005)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
 		'$(SDCARD_QUICKNES_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/prosystem-LICENSE \
+		'$(SDCARD_PROSYSTEM_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/snes9x2005-copyright \
+		'$(SDCARD_SNES9X2005_LICENSE)'
 	touch '$@'
 
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -1623,7 +1636,11 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		firmware/linux.asd firmware/unifrog.bin sf2000.conf \
 		sf2000/ui.ttf sf2000/OFL.txt \
 		sf2000/cores/sf2000-quicknes \
-		sf2000/cores/licenses/quicknes-LICENSE > SHA256SUMS
+		sf2000/cores/sf2000-prosystem \
+		sf2000/cores/sf2000-snes9x2005 \
+		sf2000/cores/licenses/quicknes-LICENSE \
+		sf2000/cores/licenses/prosystem-LICENSE \
+		sf2000/cores/licenses/snes9x2005-copyright > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32

@@ -285,7 +285,6 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define CONSOLE_BTN_LEFT 0x04u
 #define CONSOLE_BTN_RIGHT 0x08u
 #define CONSOLE_BTN_SELECT 0x10u
-#define CONSOLE_BTN_BENCH 0x20u
 
 static volatile uint8_t *gma_ram_mapping;
 static volatile uint8_t *gma_mapping;
@@ -352,7 +351,6 @@ static void panel_te_service_sample(void);
 static void ge_copy_render_to_scanout(void);
 static void panel_te_irq_disable(void);
 static void present_frame(void);
-static int benchmark_requested;
 
 struct glyph {
 	char ch;
@@ -3446,194 +3444,6 @@ static void ge_copy_render_to_scanout(void)
 	}
 }
 
-#define GE_BENCH_ITERATIONS 128u
-#define GE_BENCH_BATCH_WORDS 8192u
-static uint32_t ge_benchmark_batch_words[GE_BENCH_BATCH_WORDS];
-static volatile uint16_t ge_benchmark_sink;
-
-static void benchmark_report(const char *test, uint64_t elapsed_us,
-		unsigned iterations, uint32_t bytes_per_iteration)
-{
-	char line[112];
-	uint64_t fps_x100;
-	uint64_t mib_x100;
-
-	if (!elapsed_us)
-		elapsed_us = 1;
-	fps_x100 = (uint64_t)iterations * 100000000u / elapsed_us;
-	mib_x100 = (uint64_t)iterations * bytes_per_iteration * 100000000u /
-		(elapsed_us * 1048576u);
-	snprintf(line, sizeof(line),
-		"BENCH %-10s %u.%02u fps %u.%02u MiB/s",
-		test, (unsigned)(fps_x100 / 100u), (unsigned)(fps_x100 % 100u),
-		(unsigned)(mib_x100 / 100u), (unsigned)(mib_x100 % 100u));
-	console_add_line(line);
-	snprintf(line, sizeof(line),
-		"sf2000-bench: test=%s iterations=%u bytes=%u elapsed_us=%u fps_x100=%u mib_s_x100=%u\n",
-		test, iterations, bytes_per_iteration, (unsigned)elapsed_us,
-		(unsigned)fps_x100, (unsigned)mib_x100);
-	log_line(line);
-}
-
-static void benchmark_show(unsigned *frame, const char *message)
-{
-	console_add_line(message);
-	draw_console_screen(++*frame);
-	present_frame();
-	watchdog_pet();
-}
-
-static int benchmark_set_blit_state(HCGEAccelerationMask accel)
-{
-	hcge_state *state;
-
-	if (!display_ge)
-		return -1;
-	state = &display_ge->state;
-	memset(state, 0, sizeof(*state));
-	state->render_options = HCGE_DSRO_NONE;
-	state->drawingflags = HCGE_DSDRAW_NOFX;
-	state->blittingflags = HCGE_DSBLIT_NOFX;
-	state->destination.config.format = HCGE_DSPF_RGB16;
-	state->destination.config.size.w = WIDTH;
-	state->destination.config.size.h = HEIGHT;
-	state->source.config.format = HCGE_DSPF_RGB16;
-	state->source.config.size.w = WIDTH;
-	state->source.config.size.h = HEIGHT;
-	state->dst.phys = GMA_FRAME_PHYS;
-	state->dst.pitch = PITCH;
-	state->src.phys = GMA_RENDER_PHYS;
-	state->src.pitch = PITCH;
-	state->color = (HCGEColor){ 0xff, 0x20, 0x80, 0xe0 };
-	state->accel = accel;
-	hcge_set_state(display_ge, state, accel);
-	return 0;
-}
-
-static void run_graphics_benchmark(unsigned *frame)
-{
-	hcge_batch batch;
-	HCGERectangle full = { 0, 0, WIDTH, HEIGHT };
-	HCGERectangle half = { 0, 0, WIDTH / 2, HEIGHT / 2 };
-	uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
-	uint16_t *src = (uint16_t *)(gma_ram + GMA_RENDER_OFF);
-	uint64_t begin, elapsed;
-	unsigned i, completed;
-
-	benchmark_requested = 0;
-	benchmark_show(frame, "BENCH START: CPU COPY");
-	begin = monotonic_us();
-	for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-		memcpy(dst, src, FRAME_BYTES);
-		if (!(i & 31u))
-			watchdog_pet();
-	}
-	elapsed = monotonic_us() - begin;
-	benchmark_report("cpu-copy", elapsed, GE_BENCH_ITERATIONS, FRAME_BYTES);
-
-	benchmark_show(frame, "BENCH 2/6: CACHED COPY");
-	if (cached_render_frame) {
-		const size_t half_pixels = WIDTH * HEIGHT / 2u;
-		const size_t half_bytes = FRAME_BYTES / 2u;
-		uint16_t *cached_src = cached_render_frame;
-		uint16_t *cached_dst = cached_render_frame + half_pixels;
-
-		for (i = 0; i < WIDTH * HEIGHT; ++i)
-			cached_render_frame[i] = (uint16_t)(i * 40503u);
-		begin = monotonic_us();
-		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			memcpy(cached_dst, cached_src, half_bytes);
-			if (!(i & 31u))
-				watchdog_pet();
-		}
-		ge_benchmark_sink = cached_dst[GE_BENCH_ITERATIONS &
-			(half_pixels - 1u)];
-		elapsed = monotonic_us() - begin;
-		benchmark_report("cpu-cached", elapsed, GE_BENCH_ITERATIONS,
-			half_bytes);
-	} else {
-		console_add_line("BENCH cpu-cached: unsupported on NOMMU");
-		log_line("sf2000-bench: test=cpu-cached status=unsupported reason=no-safe-cached-allocation\n");
-	}
-
-	benchmark_show(frame, "BENCH 3/6: GE FILL");
-	completed = 0;
-	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_FILLRECTANGLE) == 0 &&
-	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
-		GE_BENCH_BATCH_WORDS) == 0) {
-		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			display_ge->state.color.r = (uint8_t)(i * 29u);
-			display_ge->state.color.g = (uint8_t)(i * 53u);
-			if (!hcge_fill_rect(display_ge, &full))
-				break;
-			completed++;
-		}
-		if (hcge_batch_end(&batch, 1) < 0)
-			completed = 0;
-	}
-	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-fill-b", elapsed, completed, FRAME_BYTES);
-
-	benchmark_show(frame, "BENCH 4/6: GE BLIT");
-	(void)cacheflush(src, FRAME_BYTES, BCACHE);
-	completed = 0;
-	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
-	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
-		GE_BENCH_BATCH_WORDS) == 0) {
-		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			if (!hcge_blit(display_ge, &full, 0, 0))
-				break;
-			completed++;
-		}
-		if (hcge_batch_end(&batch, 1) < 0)
-			completed = 0;
-	}
-	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-blit-b", elapsed, completed, FRAME_BYTES);
-
-	benchmark_show(frame, "BENCH 5/6: CACHED GE BLIT");
-	completed = 0;
-	begin = monotonic_us();
-	if (hcge_linux_cached_phys(cached_render_frame) &&
-	    hcge_linux_cache_clean(display_ge, cached_render_frame,
-		FRAME_BYTES) == 0 &&
-	    benchmark_set_blit_state(HCGE_DFXL_BLIT) == 0 &&
-	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
-		GE_BENCH_BATCH_WORDS) == 0) {
-		display_ge->state.src.phys =
-			hcge_linux_cached_phys(cached_render_frame);
-		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			if (!hcge_blit(display_ge, &full, 0, 0))
-				break;
-			completed++;
-		}
-		if (hcge_batch_end(&batch, 1) < 0)
-			completed = 0;
-	}
-	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-cache-b", elapsed, completed, FRAME_BYTES);
-
-	benchmark_show(frame, "BENCH 6/6: GE SCALE");
-	completed = 0;
-	begin = monotonic_us();
-	if (benchmark_set_blit_state(HCGE_DFXL_STRETCHBLIT) == 0 &&
-	    hcge_batch_begin(display_ge, &batch, ge_benchmark_batch_words,
-		GE_BENCH_BATCH_WORDS) == 0) {
-		for (i = 0; i < GE_BENCH_ITERATIONS; ++i) {
-			if (!hcge_stretch_blit(display_ge, &half, &full))
-				break;
-			completed++;
-		}
-		if (hcge_batch_end(&batch, 1) < 0)
-			completed = 0;
-	}
-	elapsed = monotonic_us() - begin;
-	benchmark_report("ge-scale-b", elapsed, completed, FRAME_BYTES);
-	benchmark_show(frame, "BENCH FINISHED - SAFE TO REBOOT");
-}
-
 static uint32_t ge_diag_frame_hash(void)
 {
 	const uint16_t *pixels = (const uint16_t *)(gma_ram + GMA_FRAME_OFF);
@@ -4469,13 +4279,6 @@ handoff_complete:
 			changed |= console_input_refresh_fds(input_fds);
 			input_retry = 0;
 		}
-		if (benchmark_requested) {
-			run_graphics_benchmark(frame);
-			/* benchmark_show() already presented the final frame. */
-			changed = 0;
-			idle = 0;
-		}
-
 		if (changed || idle >= CONSOLE_IDLE_REDRAW_TICKS) {
 			if (*frame < 4u)
 				progress_mark("screen-loop-draw", 0x3fu, *frame + 1u);
