@@ -760,7 +760,7 @@ index 1ae6d0c0e..f0b2435ff 100644
  #include <asm/fw/fw.h>
  
  #ifdef CONFIG_MIPS_ELF_APPENDED_DTB
-@@ -74,6 +75,598 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
+@@ -74,6 +75,601 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
  static const char builtin_cmdline[] __initconst = "";
  #endif
  
@@ -1348,12 +1348,15 @@ index 1ae6d0c0e..f0b2435ff 100644
 +
 +void sf2000_visible_tick(const char *name)
 +{
-+	pr_info("sf2000: visible tick %s\n", name);
-+	sf2000_progress_mark(name, 2, 0);
-+	sf2000_screen_mark(2, 0);
-+	sf2000_backlight_set(0);
-+	sf2000_status_led_set(0);
-+	sf2000_watchdog_pet();
++	/*
++	 * The individual trap/TLB checkpoints were useful while establishing
++	 * the first HC15xx NOMMU exception path. They run before the normal
++	 * clock and console contracts exist, and each checkpoint used to touch
++	 * retained RAM, GPIO and UART. Keep the call sites as zero-cost
++	 * documentation, but do not put diagnostic I/O on every production boot.
++	 * Coarse visible stages and the retained loader journal remain active.
++	 */
++	(void)name;
 +}
 +
  /*
@@ -1434,7 +1437,7 @@ diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
 index 8ec1e185b..fa0655280 100644
 --- a/arch/mips/kernel/traps.c
 +++ b/arch/mips/kernel/traps.c
-@@ -111,6 +111,85 @@ void (*board_ejtag_handler_setup)(void);
+@@ -111,6 +111,84 @@ void (*board_ejtag_handler_setup)(void);
  void (*board_bind_eic_interrupt)(int irq, int regset);
  void (*board_ebase_setup)(void);
  void(*board_cache_error_setup)(void);
@@ -1445,8 +1448,7 @@ index 8ec1e185b..fa0655280 100644
 +
 +static void sf2000_trap_tick(const char *name)
 +{
-+	if (IS_ENABLED(CONFIG_MIPS_SF2000))
-+		sf2000_visible_tick(name);
++	(void)name;
 +}
 +
 +static void sf2000_exception_mark(const char *name, unsigned long value)
@@ -2006,7 +2008,7 @@ index 24fe85fa1..53cee414a 100644
  #include <asm/cpu.h>
  #include <asm/cpu-type.h>
  #include <asm/bootinfo.h>
-@@ -30,6 +31,20 @@
+@@ -30,6 +31,15 @@
  #include <asm/tlbmisc.h>
  #include <asm/setup.h>
  
@@ -2016,12 +2018,7 @@ index 24fe85fa1..53cee414a 100644
 +
 +static void sf2000_tlb_tick(const char *name)
 +{
-+	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
-+		return;
-+	sf2000_progress_mark(name, 2, 0);
-+	/* QEMU-visible tracing; physical ROM boots retain the RAM marker. */
-+	if (!*(volatile unsigned int *)0x8101f044)
-+		sf2000_visible_tick(name);
++	(void)name;
 +}
 +
  /*
