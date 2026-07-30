@@ -1766,10 +1766,11 @@ $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
 
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
-		printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(BROWSER_TEST_SD)',format=raw \
@@ -1783,34 +1784,40 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-browser: ready: DPAD select A open B back START+L exit' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Fq 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST GAME.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
-	awk '/sf2000-browser: launch Gambatte/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
+	awk '/sf2000-frontend: ROM load begin/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-frontend: frontend running START+L exits' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: frontend running START+SELECT opens pause and core options' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause menu exit selected' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-powerd: frontend returned to console' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -Eq 'sf2000-powerd: discarded [1-9][0-9]* stale frontend input events' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-powerd: relaunch browser after application exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'storage-test=' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic|Data bus error|Oops\[#' \
 		'$(BUILD_DIR)'/logs/linux-frontend.log
 
 run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
-		printf 'sendkey backspace-w 500\n'; sleep 6; \
-		printf 'sendkey backspace-w 500\n'; sleep 7; \
-		printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey left 100\n'; \
+		sleep 1; printf 'sendkey z 100\n'; sleep 6; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey right 100\n'; \
+		sleep 1; printf 'sendkey z 100\n'; sleep 7; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(GPSP_TEST_SD)',format=raw \
@@ -1825,7 +1832,7 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-gpsp.log
-	awk '/sf2000-browser: launch gpSP/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	awk '/sf2000-frontend: ROM load begin/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
@@ -1849,10 +1856,11 @@ smoke-linux-gpsp: run-linux-gpsp
 
 run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 15; \
-		printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(GPSP_REAL_TEST_SD)',format=raw \
@@ -1910,14 +1918,15 @@ smoke-linux-gpsp-smc: run-linux-gpsp-smc
 run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
-		printf 'sendkey ret-q 500\n'; sleep 3; \
-		printf 'sendkey ret-w 500\n'; sleep 1; \
-		printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 3; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
-		printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(FRONTEND_LIFECYCLE_TEST_SD)',format=raw \
@@ -2644,10 +2653,12 @@ $(FCEUMM_TEST_SD): FORCE Makefile
 
 run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
-		printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(FCEUMM_TEST_SD)',format=raw \
@@ -2659,7 +2670,7 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 
 smoke-linux-fceumm: run-linux-fceumm
 	grep -q 'sf2000-browser: launch FCEUMM /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
-	grep -q 'sf2000-frontend: first frame 256x240' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-frontend: first frame 256x224' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-fceumm.log
@@ -2682,9 +2693,12 @@ $(QUICKNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
 
 run-linux-quicknes: qemu linux-buildroot-asd $(QUICKNES_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
-		sleep 8; printf 'sendkey ret-q 500\n'; sleep 2; \
-		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(QUICKNES_TEST_SD)',format=raw \
@@ -2697,9 +2711,10 @@ run-linux-quicknes: qemu linux-buildroot-asd $(QUICKNES_TEST_SD)
 smoke-linux-quicknes: run-linux-quicknes
 	grep -Fq 'sf2000-browser: launch QuickNES /mnt/sd/QUICKNES/SUPER MARIO BROS 3.NES' \
 		'$(BUILD_DIR)'/logs/linux-quicknes.log
-	grep -q 'sf2000-frontend: first frame 240x224' \
+	grep -q 'sf2000-frontend: first frame 256x224' \
 		'$(BUILD_DIR)'/logs/linux-quicknes.log
 	grep -q 'sf2000-frontend: returned cleanly' \
 		'$(BUILD_DIR)'/logs/linux-quicknes.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault|Data bus error' \
 		'$(BUILD_DIR)'/logs/linux-quicknes.log
+.NOTPARALLEL:

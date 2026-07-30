@@ -14,6 +14,7 @@
 
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
+#define SHUTDOWN_MARKER "/run/sf2000-shutdown-request"
 #define STANDBY_MARKER "/run/sf2000-display-standby"
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
@@ -38,7 +39,8 @@ static long ticks_per_second = 100;
 
 static int stop_requested(void)
 {
-	return access(REBOOT_MARKER, F_OK) == 0;
+	return access(REBOOT_MARKER, F_OK) == 0 ||
+		access(SHUTDOWN_MARKER, F_OK) == 0;
 }
 
 static uint64_t monotonic_us(void)

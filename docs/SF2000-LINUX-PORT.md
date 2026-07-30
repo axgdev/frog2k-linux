@@ -275,23 +275,21 @@ periodic flushes while the system is idle.
 The QEMU boot gate measures browser readiness at roughly 3.4 seconds of guest
 monotonic time rather than requiring a later controller chord. The browser
 execs a selected static-PIE runner in place. On runner exit the supervisor
-relaunches the browser without returning scanout to the console; an explicit
-browser START+L marker ends the session. Input accumulated while the browser
-owned evdev is drained at that boundary so its exit chord cannot trigger an
-accidental second launch.
+relaunches the browser without returning scanout to the console.
 
-Before launching the browser, `sf2000-powerd` creates a performance request
-and waits for `sf2000-logd` to acknowledge it. The logger first synchronizes
+Immediately before executing a game or media player, the browser creates a
+performance request and waits for `sf2000-logd` to acknowledge it. The logger
+first synchronizes
 all earlier records, switches to a bounded 512 KiB RAM journal, and only then
 acknowledges the request. It continues draining kernel and input messages and
 records a low-rate heartbeat, but performs no FAT write or `fsync` until the
-browser and selected emulator have exited. Frontend metrics are appended to a
+selected application has exited. Frontend metrics are appended to a
 tmpfs spool with a single write and imported into the journal at that
 transition; they never enter printk or its synchronous 115200-baud console
 during gameplay. The logger then records journal byte, peak, dropped-byte,
 metric-record, and metric-byte counters and drains the journal. The supervisor
-owns the request lifetime, so it is released even when a child exits with an
-error.
+clears the request after every child exit, including a crash, before it
+relaunches the browser.
 This is necessary because the logger and ROM loader share one MMC channel:
 the former two-second snapshot-plus-fsync cycle reproducibly intercepted
 gpSP's fourth 1 MiB ROM cache read, and the same storage stalls produced
@@ -300,10 +298,10 @@ resume automatically afterward.
 
 An abrupt watchdog reset can leave the FAT dirty even after all payload data
 was flushed. This is distinct from the fixed DMA corruption: the card remains
-readable and a filesystem check clears the dirty state. START+SELECT now asks
-init to stop and flush the logger, `sync()`, unmount `/mnt/sd`, and invoke the
-kernel restart path. The hardware watchdog remains a bounded fallback if that
-orderly path cannot complete.
+readable and a filesystem check clears the dirty state. Reset and Safe
+Shutdown ask init to stop and flush the logger, `sync()`, unmount `/mnt/sd`,
+and invoke the appropriate kernel path. START+SELECT opens the in-core pause
+menu.
 
 ## Input, audio, and USB
 
@@ -363,8 +361,9 @@ orderly path cannot complete.
   runtime once per second rather than issuing an extra clock syscall every
   frame, gives the foreground frontend highest nice priority, and blocks the
   supervisor after first-frame handoff instead of polling it every 10 ms.
-  SELECT+R provides a reversible uncapped, audio-suppressed, no-frameskip
-  measurement window. Its `mode=uncapped`, `fps_milli`, and `suppressed`
+  The START+SELECT pause menu provides a reversible unlimited,
+  audio-suppressed, no-frameskip measurement mode. Its `mode=uncapped`,
+  `fps_milli`, and `suppressed`
   records measure real device headroom without changing an emulator core.
   Log135 measured gpSP at 76.7--127.6 FPS across the two uncapped runs, with
   about 85--93 FPS in the sustained demanding section. The remaining normal
@@ -558,11 +557,9 @@ Proven now:
 
 Still needed for a complete retro-gaming distribution:
 
-- expand the integrated launcher beyond the working file browser;
+- expand metadata, artwork, search, and configuration in the home menu;
 - add further emulator or libretro-core ports built static/soft-float and
   audited for NOMMU assumptions (Gambatte and dynarec gpSP are working);
-- a user-facing shutdown/poweroff policy in addition to the implemented clean
-  START+SELECT restart;
 - packaging/save-state policy that limits SD write amplification;
 - optional drivers for hardware video decode and any additional audio engines.
 

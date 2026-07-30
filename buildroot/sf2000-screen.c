@@ -2961,11 +2961,6 @@ static int console_handle_buttons(uint32_t buttons)
 	int changed = 0;
 	int page = (int)CONSOLE_ROWS - 3;
 
-	/* Init owns the SELECT+START reboot chord and performs sync/unmount first. */
-	if (buttons & CONSOLE_BTN_BENCH) {
-		benchmark_requested = 1;
-		changed = 1;
-	}
 	if (buttons & CONSOLE_BTN_UP)
 		changed |= console_scroll_delta(1);
 	if (buttons & CONSOLE_BTN_DOWN)
@@ -2989,8 +2984,6 @@ static uint32_t console_button_for_key(uint16_t code)
 		return CONSOLE_BTN_RIGHT;
 	if (code == BTN_SELECT || code == KEY_BACKSPACE)
 		return CONSOLE_BTN_SELECT;
-	if (code == BTN_NORTH || code == KEY_X)
-		return CONSOLE_BTN_BENCH;
 	return 0;
 }
 
@@ -4291,7 +4284,6 @@ static void run_direct_console(unsigned *frame)
 	console_clear();
 	console_add_line("sf2000 linux direct lcd console");
 	console_add_line("reading /dev/kmsg");
-	console_add_line("PRESS X: GRAPHICS BENCHMARK");
 	console_input_init_fds(input_fds);
 	if (!console_input_refresh_fds(input_fds))
 		console_add_line("input: waiting for evdev devices");

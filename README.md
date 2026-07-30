@@ -52,8 +52,11 @@ toolchain into the disposable Buildroot output tree.
 Normal device boot enters the native browser as soon as input, display, and
 the SD mount are ready. The retained-RAM loader log and `log.txt` recovery path
 run before Linux and are unchanged; the old manual START+R step and diagnostic
-console wait are not on the boot hot path. START+L exits an application back to
-the browser and exits the browser to the diagnostic console.
+console wait are not on the boot hot path. The initial menu provides Library,
+Settings, Reset, and Safe Shutdown. START+SELECT belongs to the running
+libretro host: it opens the pause/options menu rather than rebooting. Reset is
+therefore explicit, and Safe Shutdown drains persistent logs, synchronizes and
+unmounts FAT, blanks the display, and quiesces Linux before power is removed.
 
 Runtime policy and browser theming share one typed configuration file:
 `/etc/sf2000.conf`, optionally overridden by `/sf2000.conf` on the card. The
@@ -65,8 +68,9 @@ Vietnamese, and Japanese labels.
 
 Additional cores are SD packages, not boot-image payload. `make sdcard-linux`
 stages them below `build/sdcard/sf2000/cores` with their licenses and includes
-them in `SHA256SUMS`. QuickNES is the first packaged core; place NES ROMs under
-`/QUICKNES` to select it, or under `/NES` to use the embedded FCEUmm runner.
+them in `SHA256SUMS`. QuickNES is the first packaged core. Opening any `.nes`
+file displays a core chooser containing FCEUmm and QuickNES; the directory
+controls only the initial selection.
 The QEMU `smoke-linux-quicknes` gate uses a ROM filename containing spaces and
 verifies launch, a real 240x224 frame, clean exit, and absence of guest faults.
 
@@ -213,8 +217,9 @@ make ROOTFS=buildroot SF2000_BOOT_VISUAL=color \
 
 `SF2000_BOOT_HOLD_MS` is limited to five seconds. The logo is generated directly
 into the framebuffer and adds no image decoder or filesystem dependency.
-Press START+SELECT to flush `loglinux.txt`, synchronize and unmount the card,
-then restart through the kernel; the watchdog is retained only as a fallback.
+Use Reset or Safe Shutdown in the home menu to flush `loglinux.txt`,
+synchronize and unmount the card. START+SELECT is reserved for the in-core
+pause/options menu.
 
 When explicitly enabled, init disarms the display watchdog, terminates the
 console by its supervised PID, and waits for kernel-owned GE cleanup without

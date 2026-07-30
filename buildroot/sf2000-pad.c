@@ -11,7 +11,6 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
@@ -62,9 +61,6 @@
 #define SYSTEM_CONFIG "/etc/sf2000.conf"
 #define USER_CONFIG "/mnt/sd/sf2000.conf"
 #define DEFAULT_STANDBY_POLL_MS 2000u
-#ifndef LINUX_REBOOT_CMD_RESTART
-#define LINUX_REBOOT_CMD_RESTART 0x01234567
-#endif
 
 enum pad_profile {
 	PAD_PROFILE_SF2000,
@@ -99,8 +95,6 @@ static const uint8_t gb300_stock_bit_for_shift[KEY_SHIFTER_BITS] = {
 	15, 11, 10, 12, 13, 14, 0, 3, 4, 6, 7, 5, 1, 2, 8, 9,
 };
 
-#define BUTTON_BIT(name) (1u << BUTTON_##name)
-
 enum button_index {
 	BUTTON_R,
 	BUTTON_Y,
@@ -115,8 +109,6 @@ enum button_index {
 	BUTTON_LEFT,
 	BUTTON_RIGHT,
 };
-
-#define REBOOT_BUTTON_MASK (BUTTON_BIT(SELECT) | BUTTON_BIT(START))
 
 static volatile uint8_t *sysio_mapping;
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_BASE_PHYS))
@@ -143,16 +135,6 @@ static void delay_spins(unsigned count)
 
 	for (i = 0; i < count; i++)
 		__asm__ volatile ("nop");
-}
-
-static void sleep_ms(unsigned msec)
-{
-	struct timespec ts;
-
-	ts.tv_sec = msec / 1000u;
-	ts.tv_nsec = (long)(msec % 1000u) * 1000000L;
-	while (nanosleep(&ts, &ts) < 0 && errno == EINTR && !stopping)
-		;
 }
 
 static void timespec_add_ms(struct timespec *time, unsigned msec)
@@ -467,34 +449,6 @@ static void log_button_state(uint32_t mask)
 		log_line(line);
 }
 
-static void maybe_reboot(uint32_t state)
-{
-	static int armed = 1;
-	int fd;
-	unsigned wait;
-
-	if ((state & REBOOT_BUTTON_MASK) != REBOOT_BUTTON_MASK) {
-		armed = 1;
-		return;
-	}
-
-	if (!armed)
-		return;
-	armed = 0;
-	log_line("sf2000-pad: START+SELECT pressed, requesting clean restart\n");
-	fd = open("/run/sf2000-reboot-request",
-		O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-	if (fd >= 0) {
-		(void)write(fd, "restart\n", 8);
-		close(fd);
-	}
-	for (wait = 0; wait < 60u; wait++)
-		sleep_ms(100);
-	sync();
-	reboot(LINUX_REBOOT_CMD_RESTART);
-	log_line("sf2000-pad: reboot syscall returned\n");
-}
-
 static enum pad_profile parse_profile(const char *name)
 {
 	if (name && (!strcmp(name, "stock-bits") || !strcmp(name, "gb300") ||
@@ -634,8 +588,6 @@ int main(int argc, char **argv)
 			state = raw;
 			log_button_state(state);
 		}
-		maybe_reboot(state);
-
 		/*
 		 * Opening the standby marker every 4 ms cost more than the GPIO
 		 * transaction. Check it at a low duty cycle in normal operation;

@@ -264,20 +264,8 @@ static void run_frontend(void)
 	log_line("sf2000-powerd: frontend launch\n");
 	(void)unlink(FRONTEND_READY_MARKER);
 	(void)unlink(BROWSER_EXIT_MARKER);
+	(void)unlink(PERFORMANCE_MARKER);
 	(void)unlink(PERFORMANCE_READY_MARKER);
-	{
-		int marker = open(PERFORMANCE_MARKER,
-			O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-		unsigned attempts;
-
-		if (marker >= 0)
-			close(marker);
-		for (attempts = 0; attempts < 100u &&
-				access(PERFORMANCE_READY_MARKER, F_OK) != 0; attempts++)
-			sleep_ms(10);
-		if (access(PERFORMANCE_READY_MARKER, F_OK) != 0)
-			log_line("sf2000-powerd: performance journal acknowledgement timeout\n");
-	}
 	backlight_set(0);
 	if (pause_screen() < 0)
 		log_line("sf2000-powerd: frontend screen stop failed\n");
@@ -338,6 +326,23 @@ static void run_frontend(void)
 				snprintf(line, sizeof(line),
 					"sf2000-powerd: frontend wait status=0x%x\n", status);
 			log_line(line);
+		}
+		/*
+		 * A browser creates the performance marker immediately before it
+		 * execs a game or media player.  End that session after every child
+		 * exit, including a crash, and let logd drain the RAM journal before
+		 * another application can contend with FAT.
+		 */
+		(void)unlink(PERFORMANCE_MARKER);
+		{
+			unsigned attempts;
+
+			for (attempts = 0; attempts < 100u &&
+					access(PERFORMANCE_READY_MARKER, F_OK) == 0;
+					attempts++)
+				sleep_ms(10);
+			if (access(PERFORMANCE_READY_MARKER, F_OK) == 0)
+				log_line("sf2000-powerd: performance journal drain timeout\n");
 		}
 		if (access(BROWSER_EXIT_MARKER, F_OK) == 0)
 			break;
