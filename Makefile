@@ -69,6 +69,7 @@ FRONTEND_PROJECT ?= ../sf2000_linux_frontend
 BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
 BUILDROOT_GAMBATTE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gambatte
 BUILDROOT_GPSP := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gpsp
+BUILDROOT_FCEUMM := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-fceumm
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
@@ -719,6 +720,12 @@ $(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-gpsp '$@'
 
+$(BUILDROOT_FCEUMM): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/fceumm -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	$(MAKE) -C '$(FRONTEND_PROJECT)' fceumm \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+	mkdir -p '$(dir $@)'
+	cp '$(FRONTEND_PROJECT)'/build/sf2000-fceumm '$@'
+
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
@@ -832,7 +839,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_FCEUMM) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1451,7 +1458,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable DEBUG_INFO_NONE \
 		--enable FB \
 		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
-		--enable FB_SIMPLE
+		--enable FB_SIMPLE \
+		--set-val ARCH_FORCE_MAX_ORDER 11
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 	touch '$@'
@@ -2577,3 +2585,38 @@ smoke-linux-buildroot-reset-restore: run-linux-buildroot-reset-restore
 
 clean:
 	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'
+
+FCEUMM_TEST_SD := $(BUILD_DIR)/fceumm-test.sd.img
+FCEUMM_TEST_ROM ?= /root/roms/Super Mario Bros. 3 (USA) (Rev 1).nes
+
+$(FCEUMM_TEST_SD): Makefile
+	@test -f '$(FCEUMM_TEST_ROM)' || { \
+		echo 'set FCEUMM_TEST_ROM=/path/to/a.nes' >&2; exit 2; }
+	mkdir -p '$(dir $@)'
+	truncate -s 64M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/NES
+	mcopy -i '$@' '$(FCEUMM_TEST_ROM)' ::/NES/TEST.NES
+
+run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey ret-w 500\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
+		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n') | \
+			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(FCEUMM_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-fceumm.log \
+		> '$(BUILD_DIR)'/logs/linux-fceumm.console 2>&1
+	mcopy -o -i '$(FCEUMM_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-fceumm-loglinux.txt 2>/dev/null || true
+
+smoke-linux-fceumm: run-linux-fceumm
+	grep -q 'sf2000-browser: launch FCEUMM /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-fceumm.log
+

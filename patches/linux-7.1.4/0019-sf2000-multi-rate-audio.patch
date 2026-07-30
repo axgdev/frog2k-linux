@@ -1,0 +1,203 @@
+From: SF2000 Linux project
+Subject: [PATCH] sf2000: support all vendor audio sample rates
+
+The HC1512 audio subsystem supports two PLL families recovered from
+the vendor libauddrv.a (apll_dai_hw_params):
+
+  48 kHz family:  8000, 12000, 16000, 24000, 32000, 48000, 64000, 128000
+  44.1 kHz family: 5512, 11025, 22050, 44100, 88200, 176400
+
+Each family programs different I2S clock divisors at SYS+0x470/0x474/
+0x478/0x47a.  The APLL at SYS+0x148 remains 0x0c000120 for both; the
+I2S divisors select the final bit/frame clock.
+
+Evidence: vendor libauddrv.a disassembly (mipsel-mti-elf-objdump),
+section .text.apll_dai_hw_params.  Chip ID 0x1512 (HC1512/SF2000)
+path uses divisor M=284/N=13 for the 48 kHz family and M=281/N=14
+for the 44.1 kHz family, with additional I2S control bit differences.
+
+Risk: the 44.1 kHz family path has not been confirmed on physical
+hardware.  The register sequences are exact copies of the vendor
+code but the PLL interaction at 0x148 may need a different value
+for 11.2896 MHz master clock.  If 44.1 kHz produces no audio or
+wrong pitch on device, the PLL value at SYS+0x148 is the first
+register to investigate.
+
+Rollback: revert this patch; the driver returns to 32 kHz only.
+
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -36,6 +36,10 @@
+ #define SF2000_SYS_AUDIO_GATE	0x154
+ #define SF2000_GPIO_R_OUT	0xf4
+ #define SF2000_GPIO_R_DIR	0xf8
++#define SF2000_SYS_I2S_CTL	0x470
++#define SF2000_SYS_I2S_CFG	0x474
++#define SF2000_SYS_I2S_DIV_N	0x478
++#define SF2000_SYS_I2S_DIV_M	0x47a
+ #define SF2000_PINMUX_R07	0x4e7
+ #define SF2000_AMP_R07		BIT(7)
+ #define SF2000_DMA_CHANNEL_MASK	GENMASK(17, 16)
+@@ -52,7 +56,6 @@
+ #define SF2000_DMA_MONO_S16_LE	(SF2000_DMA_MONO_PACK | \
+ 	BIT(20) | SF2000_DMA_ENABLE)
+ #define SF2000_AUDIO_PLL_32K	0x0c000120
+-#define SF2000_VOLUME_90		0xcb
+-#define SF2000_RATE		32000
++#define SF2000_VOLUME_90	0xcb
+ #define SF2000_RING_GUARD	64
+ #define SF2000_BUFFER_MAX	(128 * 1024)
+ #define SF2000_PERIOD_MIN	256
+@@ -76,12 +79,40 @@ struct sf2000_pcm {
+ 	bool ever_armed;
+ };
+ 
++/*
++ * Vendor I2S clock divisor table from libauddrv.a apll_dai_hw_params.
++ * family: 0 = 48 kHz multiples, 1 = 44.1 kHz multiples.
++ */
++struct sf2000_rate_cfg {
++	unsigned int rate;
++	u8 family;
++};
++
++static const struct sf2000_rate_cfg sf2000_rates[] = {
++	{  8000, 0 }, { 11025, 1 }, { 12000, 0 }, { 16000, 0 },
++	{ 22050, 1 }, { 24000, 0 }, { 32000, 0 }, { 44100, 1 },
++	{ 48000, 0 }, { 64000, 0 }, { 88200, 1 }, { 96000, 0 },
++	{ 128000, 0 }, { 176400, 1 },
++};
++
++static unsigned int sf2000_rate_list[ARRAY_SIZE(sf2000_rates)];
++
++static const struct sf2000_rate_cfg *sf2000_find_rate(unsigned int rate)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(sf2000_rates); i++)
++		if (sf2000_rates[i].rate == rate)
++			return &sf2000_rates[i];
++	return NULL;
++}
++
+ static const struct snd_pcm_hardware sf2000_pcm_hardware = {
+ 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER |
+ 		SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
+ 		SNDRV_PCM_INFO_BATCH | SNDRV_PCM_INFO_NO_REWINDS,
+ 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+-	.rates = SNDRV_PCM_RATE_32000,
+-	.rate_min = SF2000_RATE,
+-	.rate_max = SF2000_RATE,
++	.rates = SNDRV_PCM_RATE_KNOT,
++	.rate_min = 8000,
++	.rate_max = 176400,
+ 	.channels_min = 1,
+ 	.channels_max = 1,
+ 	.buffer_bytes_max = SF2000_BUFFER_MAX,
+@@ -331,10 +362,22 @@ static int sf2000_pcm_open(struct snd_pcm_substream *substream)
+ {
+ 	int ret;
+ 
++	static const struct snd_pcm_hw_constraint_list rate_constraint = {
++		.count = ARRAY_SIZE(sf2000_rates),
++		.list = sf2000_rate_list,
++		.mask = 0,
++	};
++
+ 	substream->runtime->hw = sf2000_pcm_hardware;
+ 	ret = snd_pcm_hw_constraint_step(substream->runtime, 0,
+ 		SNDRV_PCM_HW_PARAM_BUFFER_BYTES, 16);
+ 	if (ret)
+ 		return ret;
++	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
++		SNDRV_PCM_HW_PARAM_RATE, &rate_constraint);
++	if (ret)
++		return ret;
+ 	return snd_pcm_hw_constraint_step(substream->runtime, 0,
+ 		SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 16);
+ }
+@@ -369,6 +412,7 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+ 	struct snd_pcm_runtime *runtime = substream->runtime;
+ 	size_t bytes = frames_to_bytes(runtime, runtime->buffer_size);
++	const struct sf2000_rate_cfg *cfg;
+ 
+ 	if (!runtime->dma_area || !bytes || bytes > SF2000_BUFFER_MAX ||
+ 	    bytes & 0xf || bytes >> 4 > U16_MAX ||
+@@ -376,9 +420,36 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	    upper_32_bits(runtime->dma_addr))
+ 		return -EINVAL;
+ 
++	cfg = sf2000_find_rate(runtime->rate);
++	if (!cfg)
++		return -EINVAL;
++
+ 	sf2000_dac_init(chip);
+-	/* 294.912 MHz / 24 = 12.288 MHz; / (32 kHz * 32) = 288. */
+ 	writel(SF2000_AUDIO_PLL_32K, chip->sys + SF2000_SYS_AUDIO_PLL);
++
++	/*
++	 * I2S clock divisors from vendor apll_dai_hw_params (HC1512 path).
++	 * Family 0 (48 kHz multiples): M=284, N=13.
++	 * Family 1 (44.1 kHz multiples): M=281, N=14, plus I2S_CTL bit3
++	 * cleared and I2S_CFG set to 0x106000.
++	 */
++	sf2000_update_bits(chip->sys + SF2000_SYS_I2S_CTL,
++		GENMASK(23, 16), BIT(16) | BIT(21));
++	if (cfg->family == 0) {
++		writew(284, chip->sys + SF2000_SYS_I2S_DIV_M);
++		writew(13, chip->sys + SF2000_SYS_I2S_DIV_N);
++	} else {
++		writew(281, chip->sys + SF2000_SYS_I2S_DIV_M);
++		writew(14, chip->sys + SF2000_SYS_I2S_DIV_N);
++		sf2000_update_bits(chip->sys + SF2000_SYS_I2S_CTL,
++			BIT(3), 0);
++		writel((readl(chip->sys + SF2000_SYS_I2S_CFG) &
++			GENMASK(31, 24)) | 0x106000,
++			chip->sys + SF2000_SYS_I2S_CFG);
++	}
++	sf2000_apll_reset(chip);
++
+ 	sf2000_update_bits(chip->sys + SF2000_SYS_AUDIO_GATE,
+ 		BIT(14), BIT(14));
+ 	sf2000_update_bits(chip->snd + SF2000_SND_CTL50,
+@@ -405,8 +476,9 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	chip->published_producer = 0;
+ 	chip->ever_armed = false;
+ 	dev_info_once(chip->dev,
+-		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",
+-		&runtime->dma_addr, bytes, runtime->period_size,
++		"DMA base=%pad bytes=%zu period=%lu rate=%u config=%08x pll=%08x\n",
++		&runtime->dma_addr, bytes, runtime->period_size,
++		runtime->rate,
+ 		readl(chip->snd + SF2000_SND_DMA_SIZE),
+ 		readl(chip->sys + SF2000_SYS_AUDIO_PLL));
+ 	return 0;
+@@ -470,6 +542,7 @@ static int sf2000_pcm_probe(struct platform_device *pdev)
+ 	struct resource sys_res;
+ 	struct resource *res;
+ 	int ret;
++	unsigned int i;
+ 
+ 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(29));
+ 	if (ret)
+@@ -488,6 +561,9 @@ static int sf2000_pcm_probe(struct platform_device *pdev)
+ 	chip->irq = -1;
+ 	timer_setup(&chip->timer, sf2000_pcm_timer, 0);
+ 
++	for (i = 0; i < ARRAY_SIZE(sf2000_rates); i++)
++		sf2000_rate_list[i] = sf2000_rates[i].rate;
++
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	chip->snd = devm_ioremap_resource(dev, res);
+ 	if (IS_ERR(chip->snd)) {
+@@ -543,8 +619,8 @@ static int sf2000_pcm_probe(struct platform_device *pdev)
+ 	ret = snd_card_register(card);
+ 	if (ret)
+ 		goto err_card;
+ 	platform_set_drvdata(pdev, card);
+-	dev_info(dev, "32 kHz S16_LE mono PCM playback ready (%s)\n",
++	dev_info(dev, "S16_LE mono PCM playback ready (%s)\n",
+ 		chip->irq >= 0 ? "IRQ" : "polling");
+ 	return 0;
+ 
