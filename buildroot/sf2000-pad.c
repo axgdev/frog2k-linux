@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/reboot.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -52,8 +53,11 @@
 #define KEY_SHIFTER_SETTLE_SPINS 300u
 #define KEY_SHIFTER_CLOCK_LOW_SPINS 180u
 #define KEY_SHIFTER_CLOCK_HIGH_SPINS 180u
-#define POLL_INTERVAL_MS 20u
+#define POLL_INTERVAL_MS 4u
+#define NORMAL_DEBOUNCE_SCANS 1u
+#define STANDBY_CHECK_SCANS 64u
 #define STANDBY_MARKER "/run/sf2000-display-standby"
+#define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define DEFAULT_STANDBY_POLL_MS 2000u
 #ifndef LINUX_REBOOT_CMD_RESTART
 #define LINUX_REBOOT_CMD_RESTART 0x01234567
@@ -145,6 +149,28 @@ static void sleep_ms(unsigned msec)
 	ts.tv_nsec = (long)(msec % 1000u) * 1000000L;
 	while (nanosleep(&ts, &ts) < 0 && errno == EINTR && !stopping)
 		;
+}
+
+static void timespec_add_ms(struct timespec *time, unsigned msec)
+{
+	time->tv_nsec += (long)msec * 1000000L;
+	while (time->tv_nsec >= 1000000000L) {
+		time->tv_nsec -= 1000000000L;
+		time->tv_sec++;
+	}
+}
+
+static void sleep_until(struct timespec *deadline, unsigned msec)
+{
+	int result;
+
+	timespec_add_ms(deadline, msec);
+	do {
+		result = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
+			deadline, NULL);
+	} while (result == EINTR && !stopping);
+	if (result && result != EINTR)
+		(void)clock_gettime(CLOCK_MONOTONIC, deadline);
 }
 
 static uint32_t mmio_read32(uint32_t off)
@@ -379,7 +405,13 @@ static void log_button_state(uint32_t mask)
 	else
 		line[sizeof(line) - 1] = '\0';
 
-	log_line(line);
+	/*
+	 * During emulation the frontend records evdev latency directly. Avoid
+	 * synchronous printk/serial work on every transition on the one CPU.
+	 * Keep the verbose state trace for boot diagnostics and QEMU input tests.
+	 */
+	if (access(PERFORMANCE_MARKER, F_OK) != 0)
+		log_line(line);
 }
 
 static void maybe_reboot(uint32_t state)
@@ -480,8 +512,11 @@ int main(int argc, char **argv)
 	uint32_t state = 0;
 	uint32_t raw_prev = 0;
 	uint32_t raw_count = 0;
+	unsigned standby_check = 0;
+	unsigned poll_ms = POLL_INTERVAL_MS;
 	int uinput_fd;
-	char line[96];
+	char line[128];
+	struct timespec deadline;
 
 	if (argc > 1)
 		profile = parse_profile(argv[1]);
@@ -495,13 +530,21 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
+	/*
+	 * The CPU-bound frontend runs at -20. Give the sleeping, bounded scan the
+	 * same priority so it runs promptly on wake even in uncapped mode. Each
+	 * scan performs a fixed 12-bit transaction and then sleeps again.
+	 */
+	(void)setpriority(PRIO_PROCESS, 0, -20);
+	(void)clock_gettime(CLOCK_MONOTONIC, &deadline);
 
-	snprintf(line, sizeof(line), "sf2000-pad: userspace input bridge ready profile=%s\n",
-		profile_name(profile));
+	snprintf(line, sizeof(line),
+		"sf2000-pad: userspace input bridge ready profile=%s scan_ms=%u debounce_ms=%u priority=-20\n",
+		profile_name(profile), POLL_INTERVAL_MS,
+		POLL_INTERVAL_MS * NORMAL_DEBOUNCE_SCANS);
 	log_line(line);
 
 	while (!stopping) {
-		unsigned poll_ms = poll_interval_ms();
 		uint32_t raw = scan_buttons(profile);
 
 		if (raw == raw_prev) {
@@ -513,14 +556,26 @@ int main(int argc, char **argv)
 		}
 
 		/* Normal scans debounce; a low-rate standby scan is already stable. */
-		if (raw_count >= (poll_ms == POLL_INTERVAL_MS ? 2u : 0u) && raw != state) {
+		if (raw_count >= (poll_ms == POLL_INTERVAL_MS ?
+				NORMAL_DEBOUNCE_SCANS : 0u) && raw != state) {
 			emit_changes(uinput_fd, state, raw);
 			state = raw;
 			log_button_state(state);
 		}
 		maybe_reboot(state);
 
-		sleep_ms(poll_ms);
+		/*
+		 * Opening the standby marker every 4 ms cost more than the GPIO
+		 * transaction. Check it at a low duty cycle in normal operation;
+		 * while in standby, every wake scan also checks for its removal.
+		 */
+		if (poll_ms != POLL_INTERVAL_MS ||
+				++standby_check >= STANDBY_CHECK_SCANS) {
+			poll_ms = poll_interval_ms();
+			standby_check = 0;
+			(void)clock_gettime(CLOCK_MONOTONIC, &deadline);
+		}
+		sleep_until(&deadline, poll_ms);
 	}
 
 	(void)ioctl(uinput_fd, UI_DEV_DESTROY);

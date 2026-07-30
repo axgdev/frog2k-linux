@@ -42,6 +42,11 @@ Programs using `vfork()`/`exec()`, threads supported by the selected uClibc
 configuration, ordinary files, evdev, ALSA, and fbdev can be ported. Keep
 executables small: on NOMMU each program is allocated as a contiguous image,
 so a tiny dedicated helper starts much faster than a large multi-call binary.
+The integrated FCEUmm static PIE spans about 4.9 MiB, above the default 4 MiB
+buddy-allocation ceiling. The kernel therefore uses
+`ARCH_FORCE_MAX_ORDER=11`, permitting an 8 MiB allocation. This does not
+reserve 8 MiB: memory stays available to all processes until an executable
+requests a large contiguous image. The QEMU FCEUmm smoke guards this contract.
 Static PIE relocation is performed by the kernel before entry. The loader
 accepts only symbol-free MIPS `R_MIPS_REL32` relocations and rejects
 `PT_INTERP`, malformed ranges, and unsupported relocation kinds.
@@ -294,6 +299,18 @@ orderly path cannot complete.
 
 - The built-in controls are exposed through evdev and drive the diagnostic
   console. Applications should consume evdev rather than private GPIO state.
+  The SF2000 board wires the buttons through a parallel-load serial shifter:
+  software must assert load and clock all twelve bits to identify a key.
+  The data line represents only the selected bit, so there is no useful
+  any-button interrupt to replace scanning. The input bridge instead performs
+  a bounded 4 ms scan with one confirmation scan, uses an absolute monotonic
+  deadline, and runs at the foreground priority. This reduces the hardware
+  scan/debounce contribution from roughly 40--60 ms to at most about 8 ms
+  without busy-wait polling between scans. It checks the standby marker only
+  every 64 active scans and suppresses synchronous state printk during a
+  performance session. Frontend metrics report evdev events and maximum
+  event-to-host latency so physical runs can distinguish scanning delay from
+  scheduler or core delay.
 - UART1 is SYSINT source 17. It must not be assigned directly to MIPS CPU IRQ
   3, because IRQ 3 is one of the parent cascade lines for the SoC interrupt
   controller; sharing those incompatible handlers caused intermittent
@@ -304,6 +321,11 @@ orderly path cannot complete.
   after the ring is primed; the I2S/DMA enable bits alone leave the amplifier
   emitting idle hiss without advancing the consumer. QEMU enforces this
   ordering and captures the same guest DMA stream as WAV.
+  Physical tests have validated only the 32 kHz clock contract. Cores remain
+  free to produce other rates; the shared fixed-point resampler converts them
+  to the verified sink rate. Do not advertise extra hardware rates until each
+  APLL/divider tuple is derived from the vendor sequence and passes both QEMU
+  register-order checks and a physical tone test.
 - Core stereo is mixed and linearly resampled to that hardware format by
   `audio/hc15xx_resampler.c`, a fixed-point, allocation-free module shared with
   RTOS adapters. The frontend uses a circular staging queue and retains queued

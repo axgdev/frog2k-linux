@@ -256,7 +256,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
-	run-linux-gpsp smoke-linux-gpsp \
+	run-linux-gpsp smoke-linux-gpsp run-linux-fceumm smoke-linux-fceumm \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
@@ -1218,6 +1218,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
+	# NOMMU static PIE executables occupy one contiguous allocation.  FCEUmm's
+	# 4.9 MiB image needs order 11; this changes the buddy limit, not a reservation.
 	'$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
 		--enable BLK_DEV_INITRD \
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
@@ -1229,6 +1231,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable BINFMT_FLAT \
 		--enable BINFMT_ELF_NOMMU \
 		$(if $(filter 1,$(FIXED_ET_EXEC)),--enable,--disable) BINFMT_ELF_NOMMU_FIXED \
+		--set-val ARCH_FORCE_MAX_ORDER 11 \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
 		--disable DEVMEM \
@@ -1458,8 +1461,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable DEBUG_INFO_NONE \
 		--enable FB \
 		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
-		--enable FB_SIMPLE \
-		--set-val ARCH_FORCE_MAX_ORDER 11
+		--enable FB_SIMPLE
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 	touch '$@'
@@ -2587,9 +2589,9 @@ clean:
 	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'
 
 FCEUMM_TEST_SD := $(BUILD_DIR)/fceumm-test.sd.img
-FCEUMM_TEST_ROM ?= /root/roms/Super Mario Bros. 3 (USA) (Rev 1).nes
+FCEUMM_TEST_ROM ?= /root/host-frogdev/roms/Super Mario Bros. 3 (USA) (Rev 1).nes
 
-$(FCEUMM_TEST_SD): Makefile
+$(FCEUMM_TEST_SD): FORCE Makefile
 	@test -f '$(FCEUMM_TEST_ROM)' || { \
 		echo 'set FCEUMM_TEST_ROM=/path/to/a.nes' >&2; exit 2; }
 	mkdir -p '$(dir $@)'
@@ -2614,9 +2616,11 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 
 smoke-linux-fceumm: run-linux-fceumm
 	grep -q 'sf2000-browser: launch FCEUMM /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-frontend: first frame 256x240' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -Eq 'source=frontend-metric .*xrun=0 .*input_polls=[1-9][0-9]* .*input_max_latency_us=[0-9]+' \
+		'$(BUILD_DIR)'/logs/linux-fceumm-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-fceumm.log
-
