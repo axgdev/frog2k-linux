@@ -172,6 +172,9 @@ SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 SDCARD_USER_CONFIG := $(BUILD_DIR)/sdcard/sf2000.conf
 SDCARD_UI_FONT := $(BUILD_DIR)/sdcard/sf2000/ui.ttf
 SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
+SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
+SDCARD_QUICKNES := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-quicknes
+SDCARD_QUICKNES_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/quicknes-LICENSE
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -1600,12 +1603,27 @@ $(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
+$(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
+		'$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/quicknes \
+		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile
+	$(MAKE) -C '$(FRONTEND_PROJECT)' core-packages \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+	rm -rf '$(dir $@)'
+	mkdir -p '$(dir $@)/licenses'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-quicknes \
+		'$(SDCARD_QUICKNES)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
+		'$(SDCARD_QUICKNES_LICENSE)'
+	touch '$@'
+
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) \
-		$(SDCARD_UI_FONT_LICENSE)
+		$(SDCARD_UI_FONT_LICENSE) $(SDCARD_CORE_STAMP)
 	cd '$(BUILD_DIR)/sdcard' && sha256sum bios/bisrv.asd \
 		firmware/linux.asd firmware/unifrog.bin sf2000.conf \
-		sf2000/ui.ttf sf2000/OFL.txt > SHA256SUMS
+		sf2000/ui.ttf sf2000/OFL.txt \
+		sf2000/cores/sf2000-quicknes \
+		sf2000/cores/licenses/quicknes-LICENSE > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
@@ -2649,3 +2667,39 @@ smoke-linux-fceumm: run-linux-fceumm
 		'$(BUILD_DIR)'/logs/linux-fceumm-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-fceumm.log
+
+QUICKNES_TEST_SD := $(BUILD_DIR)/quicknes-test.sd.img
+
+$(QUICKNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
+	@test -f '$(FCEUMM_TEST_ROM)' || { \
+		echo 'set FCEUMM_TEST_ROM=/path/to/a.nes' >&2; exit 2; }
+	mkdir -p '$(dir $@)'
+	truncate -s 64M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/QUICKNES ::/sf2000 ::/sf2000/cores
+	mcopy -i '$@' '$(FCEUMM_TEST_ROM)' '::/QUICKNES/SUPER MARIO BROS 3.NES'
+	mcopy -i '$@' '$(SDCARD_QUICKNES)' ::/sf2000/cores/sf2000-quicknes
+
+run-linux-quicknes: qemu linux-buildroot-asd $(QUICKNES_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 8; printf 'sendkey ret-q 500\n'; sleep 2; \
+		printf 'sendkey ret-q 500\n'; sleep 2; printf 'quit\n') | \
+			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(QUICKNES_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-quicknes.log \
+		> '$(BUILD_DIR)'/logs/linux-quicknes.console 2>&1
+	mcopy -o -i '$(QUICKNES_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-quicknes-loglinux.txt 2>/dev/null || true
+
+smoke-linux-quicknes: run-linux-quicknes
+	grep -Fq 'sf2000-browser: launch QuickNES /mnt/sd/QUICKNES/SUPER MARIO BROS 3.NES' \
+		'$(BUILD_DIR)'/logs/linux-quicknes.log
+	grep -q 'sf2000-frontend: first frame 240x224' \
+		'$(BUILD_DIR)'/logs/linux-quicknes.log
+	grep -q 'sf2000-frontend: returned cleanly' \
+		'$(BUILD_DIR)'/logs/linux-quicknes.log
+	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault|Data bus error' \
+		'$(BUILD_DIR)'/logs/linux-quicknes.log

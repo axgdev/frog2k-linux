@@ -63,6 +63,13 @@ font is deliberately not embedded in every ASD. VFAT uses UTF-8 filename
 conversion, and the browser supports English, Spanish, Portuguese, Polish,
 Vietnamese, and Japanese labels.
 
+Additional cores are SD packages, not boot-image payload. `make sdcard-linux`
+stages them below `build/sdcard/sf2000/cores` with their licenses and includes
+them in `SHA256SUMS`. QuickNES is the first packaged core; place NES ROMs under
+`/QUICKNES` to select it, or under `/NES` to use the embedded FCEUmm runner.
+The QEMU `smoke-linux-quicknes` gate uses a ROM filename containing spaces and
+verifies launch, a real 240x224 frame, clean exit, and absence of guest faults.
+
 The detailed hardware contract, bring-up history, failed assumptions, current
 support matrix, and application-porting constraints are documented in
 [`docs/SF2000-LINUX-PORT.md`](docs/SF2000-LINUX-PORT.md).
