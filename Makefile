@@ -179,6 +179,8 @@ SDCARD_PROSYSTEM := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-prosystem
 SDCARD_PROSYSTEM_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/prosystem-LICENSE
 SDCARD_SNES9X2005 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-snes9x2005
 SDCARD_SNES9X2005_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/snes9x2005-copyright
+SDCARD_SNES9X2002 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-snes9x2002
+SDCARD_SNES9X2002_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/snes9x2002-copyright.h
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -1621,12 +1623,16 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_PROSYSTEM)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-snes9x2005 \
 		'$(SDCARD_SNES9X2005)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-snes9x2002 \
+		'$(SDCARD_SNES9X2002)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
 		'$(SDCARD_QUICKNES_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/prosystem-LICENSE \
 		'$(SDCARD_PROSYSTEM_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/snes9x2005-copyright \
 		'$(SDCARD_SNES9X2005_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/snes9x2002-copyright.h \
+		'$(SDCARD_SNES9X2002_LICENSE)'
 	touch '$@'
 
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -1638,9 +1644,11 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		sf2000/cores/sf2000-quicknes \
 		sf2000/cores/sf2000-prosystem \
 		sf2000/cores/sf2000-snes9x2005 \
+		sf2000/cores/sf2000-snes9x2002 \
 		sf2000/cores/licenses/quicknes-LICENSE \
 		sf2000/cores/licenses/prosystem-LICENSE \
-		sf2000/cores/licenses/snes9x2005-copyright > SHA256SUMS
+		sf2000/cores/licenses/snes9x2005-copyright \
+		sf2000/cores/licenses/snes9x2002-copyright.h > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
