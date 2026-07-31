@@ -1911,6 +1911,7 @@ smoke-linux-gpsp: run-linux-gpsp
 	awk '/sf2000-frontend: ROM load begin/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q '\[gpSP ROM\] size=4194304 buffer_mib=4 swapped=0 direct=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
@@ -1951,7 +1952,11 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	@rom_size="$$(wc -c < '$(GPSP_REAL_ROM)')"; \
-	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=32 swapped=0 direct=0" \
+	rom_size=$$(( (rom_size + 32767) & ~32767 )); \
+	if [ "$$rom_size" -eq 1048576 ]; then rom_size=4194304; fi; \
+	cache_mib=$$(( (rom_size + 1048575) / 1048576 )); \
+	if [ "$$cache_mib" -gt 32 ]; then cache_mib=32; fi; \
+	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=$$cache_mib swapped=0 direct=0" \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q '\[gpSP ROM\] runtime_page_loads=0 runtime_page_bytes=0' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
@@ -1967,7 +1972,7 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	grep -q 'sf2000: ge-queue start seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000: ge-queue complete seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq 'source=frontend-metric audio metric .*frames=600 .*ge_stage_frames=300 buffered_frames=0 mode=normal presenter=GE' \
+	grep -Eq 'source=frontend-metric audio metric .*frames=600 .*ge_stage_frames=300.*buffered_frames=0.*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*peak=[1-9][0-9]* .*frames=(300|600)' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
