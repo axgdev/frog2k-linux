@@ -737,7 +737,8 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_FRONTEND): $(FRONTEND_PROJECT)/src/browser.c \
+$(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
+		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
 		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
 		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(FRONTEND_MAKE) browser \
@@ -1849,6 +1850,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: font loaded path=/mnt/sd/sf2000/ui.ttf' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-browser: framebuffer write complete bytes=153600 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1860,6 +1862,9 @@ smoke-linux-frontend: run-linux-frontend
 	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+SELECT opens pause and core options' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause GE fence complete pending=1' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause menu exit selected' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2873,7 +2878,8 @@ smoke-linux-fceumm: run-linux-fceumm
 SNES_TEST_SD := $(BUILD_DIR)/snes9x-test.sd.img
 SNES_TEST_ROM ?= /root/host-frogdev/roms/SNES/Mega Man X (USA) (Rev 1).sfc
 
-$(SNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
+$(SNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
+		$(SDCARD_UI_FONT)
 	@test -f '$(SNES_TEST_ROM)' || { \
 		echo 'set SNES_TEST_ROM=/path/to/an.sfc' >&2; exit 2; }
 	mkdir -p '$(dir $@)'
@@ -2881,6 +2887,8 @@ $(SNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
 	mmd -i '$@' ::/SNES ::/sf2000 ::/sf2000/cores
 	mcopy -i '$@' '$(SNES_TEST_ROM)' '::/SNES/MEGA MAN X.SFC'
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$@' '$(SDCARD_SNES9X2005)' '::/sf2000/cores/sf2000-snes9x2005'
 	mcopy -i '$@' '$(SDCARD_SNES9X2002)' '::/sf2000/cores/sf2000-snes9x2002'
 
@@ -2904,6 +2912,13 @@ smoke-linux-snes9x2005: run-linux-snes9x2005
 	grep -q 'sf2000-browser: launch Snes9x 2005 /mnt/sd/SNES/MEGA MAN X.SFC' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: first frame 256x224 pitch=1024 .*scanout_hash=485b4dc5' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: pause GE fence complete pending=1' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	! grep -Eq 'malloc-failed|Data bus error|reloc outside program|Kernel panic|frontend: fault' \
