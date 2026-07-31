@@ -643,10 +643,17 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
 };
 
+/* The production source and scanout are already RGB565.  Keep the native
+ * path in RGB565 passthrough mode; the other profiles remain available to
+ * the explicit GMA diagnostic cycle below. */
+#define GMA_NATIVE_DESCRIPTOR_PROFILE 1u
+#define GMA_NATIVE_SCANOUT_PROFILE 0u
+
 /*
- * G1 is the proven MuFrog descriptor.  The last consistently sharp physical
- * runs traversed all eight descriptor states before restoring G1; repeating
- * G1 alone did not reproduce that hardware state.
+ * G2 is the native RGB565 descriptor without the vendor YUV CSC bit.  The
+ * browser and emulator surfaces are RGB565 already, so applying the BT.709
+ * enhancement matrix to them can alter otherwise exact UI colors.  The full
+ * descriptor matrix remains available to the explicit hardware diagnostic.
  */
 static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
 	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
@@ -3129,7 +3136,7 @@ static uint32_t gma_descriptor_d0(unsigned variant, uint32_t mode)
 {
 	(void)variant;
 	(void)mode;
-	return gma_descriptor_profiles[0].d0;
+	return gma_descriptor_profiles[GMA_NATIVE_DESCRIPTOR_PROFILE].d0;
 }
 
 static void build_gma_descriptor_profile(
@@ -3194,7 +3201,8 @@ static void build_gma_descriptor_profile(
 static void build_gma_descriptor_variant(unsigned variant)
 {
 	(void)variant;
-	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
+	build_gma_descriptor_profile(
+		&gma_descriptor_profiles[GMA_NATIVE_DESCRIPTOR_PROFILE]);
 }
 
 static void build_gma_descriptor(void)
@@ -3756,8 +3764,8 @@ static void present_frame(void)
 		build_gma_descriptor();
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-desc", 0x3fu, gma_desc_phys);
-	/* The captured HC15 RGB565 frontend uses CSC enhancement mode. */
-	present_frame_profile(&gma_scanout_profiles[3]);
+	/* RGB565 is already final display color; bypass CSC and enhancement. */
+	present_frame_profile(&gma_scanout_profiles[GMA_NATIVE_SCANOUT_PROFILE]);
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-dmba", 0x3fu,
 			mmio_read32(gma, GMA_DMBA));
@@ -4028,18 +4036,18 @@ static int condition_native_scanout(void)
 	unsigned rearmed;
 
 	/*
-	 * G1 is the first sharp frame in every successful physical run.  Its
-	 * defining operation is a native descriptor update after RAMCTRL and the
-	 * shared pads have changed to RGB ownership.  Submit that frame once, wait
-	 * for its hardware mirror, then allow the first four TE/RAMWR boundaries
-	 * to complete before leaving the panel in continuous RGB mode.
+	 * Submit a native RGB565 passthrough descriptor after RAMCTRL and the
+	 * shared pads have changed to RGB ownership.  Wait for its hardware mirror,
+	 * then allow the first four TE/RAMWR boundaries to complete before leaving
+	 * the panel in continuous RGB mode.
 	 */
 	progress_mark("screen-native-hold-begin", 0x3fu,
 		CONDITIONING_TE_EDGES);
 	draw_console_screen(0);
-	build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
+	build_gma_descriptor_profile(
+		&gma_descriptor_profiles[GMA_NATIVE_DESCRIPTOR_PROFILE]);
 	progress_mark("screen-native-present", 0x3fu, gma_desc_phys);
-	present_frame_profile(&gma_scanout_profiles[3]);
+	present_frame_profile(&gma_scanout_profiles[GMA_NATIVE_SCANOUT_PROFILE]);
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		progress_mark("screen-native-present-fail", 0x3fu,
 			gma_desc_phys);
@@ -4210,9 +4218,10 @@ static void run_direct_console(unsigned *frame)
 			goto handoff_complete;
 		}
 		draw_console_screen(*frame);
-		build_gma_descriptor_profile(&gma_descriptor_profiles[0]);
+		build_gma_descriptor_profile(
+			&gma_descriptor_profiles[GMA_NATIVE_DESCRIPTOR_PROFILE]);
 		progress_mark("screen-probe-restore-present", 0x3fu, *frame);
-		present_frame_profile(&gma_scanout_profiles[3]);
+		present_frame_profile(&gma_scanout_profiles[GMA_NATIVE_SCANOUT_PROFILE]);
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 			progress_mark("screen-rgb-handoff-abort", 0x3fu,
 				SCREEN_TAG);
