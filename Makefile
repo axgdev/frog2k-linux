@@ -1854,6 +1854,8 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-browser: framebuffer write complete bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
+	strings -a '$(BUILD_DIR)'/buildroot-generated-overlay/usr/bin/sf2000-frontend | \
+		grep -Fq 'UI diagnostic path=%s source='
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Fq 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST GAME.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
