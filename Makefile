@@ -739,6 +739,7 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_
 
 $(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
+		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
 		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
 		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	$(FRONTEND_MAKE) browser \
@@ -1850,7 +1851,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: font loaded path=/mnt/sd/sf2000/ui.ttf' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-browser: framebuffer write complete bytes=153600 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-browser: framebuffer write complete bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1865,8 +1866,10 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause GE fence complete pending=1' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause menu exit selected' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
+	! grep -Eq 'GE (unavailable|present failed|framebuffer source allocation failed)|CPU presenter active|using CPU write' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2867,6 +2870,9 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 smoke-linux-fceumm: run-linux-fceumm
 	grep -q 'sf2000-browser: launch FCEUmm /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-frontend: first frame 256x224' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	! grep -Eq 'GE (unavailable|present failed|framebuffer source allocation failed)|CPU presenter active|using CPU write' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-fceumm.log
@@ -2913,12 +2919,18 @@ smoke-linux-snes9x2005: run-linux-snes9x2005
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: first frame 256x224 pitch=1024 .*scanout_hash=485b4dc5' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause GE fence complete pending=1' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640 presenter=GE' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	! grep -Eq 'GE (unavailable|present failed|framebuffer source allocation failed)|CPU presenter active|using CPU write' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	! grep -Eq 'malloc-failed|Data bus error|reloc outside program|Kernel panic|frontend: fault' \
