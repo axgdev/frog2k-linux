@@ -20,20 +20,30 @@
  * is /dev/mmcblk0p1 (never /dev/sda*).  Superfloppy cards still use
  * /dev/mmcblk0 with no partition nodes.
  *
- * Filesystems tried, in order: vfat, msdos, exfat.
+ * Filesystems match the ROM bootloader (XMC bugfix image strings and QEMU
+ * stock full-chain smokes): FAT12/16 ("msdos"/"vfat"), FAT32 ("vfat"), and
+ * exFAT ("exfat").  NTFS is intentionally omitted — the bootloader has no
+ * NTFS path and cannot load bios/bisrv.asd from an NTFS volume.
+ *
+ * This process is a long-running mount supervisor: it remounts after card
+ * removal/reinsertion or card swap (size/CID change).  The board DTS uses
+ * broken-cd + MMC_CAP_NEEDS_POLL, so presence is polled via sysfs.
  */
 
 #define PRIMARY_MOUNT "/mnt/sd"
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define ROOTS_PATH "/run/sf2000-storage-roots"
 #define MAP_PATH "/run/sf2000-storage-map"
+#define GEN_PATH "/run/sf2000-storage-generation"
 #define UNIFROG_MOUNT_POINT "/media/mmcblk0"
 #define STATUS_PATH "/run/sf2000-storage.status"
 #define VOL_BASE "/mnt"
-#define ATTEMPTS 30u
 #define MAX_CANDIDATES 16u
 #define MAX_MOUNTS 8u
 #define MMC_BLOCK_MAJOR 179u
+#define POLL_MS_IDLE 500u
+#define POLL_MS_MOUNTED 1000u
+#define POLL_MS_RETRY 1000u
 
 static const char *const fallback_devices[] = {
 	"/dev/mmcblk0p1", "/dev/mmcblk0p2", "/dev/mmcblk0p3",
@@ -41,8 +51,15 @@ static const char *const fallback_devices[] = {
 	"/dev/mmcblk0p7", "/dev/mmcblk0"
 };
 
-/* Prefer common consumer SD formats first. */
+/* Bootloader-compatible consumer SD formats only. */
 static const char *const fstypes[] = { "vfat", "msdos", "exfat" };
+
+static const char *const public_mounts[] = {
+	"/mnt/sd", "/mnt/sd2", "/mnt/sd3", "/mnt/sd4",
+	"/mnt/sd5", "/mnt/sd6", "/mnt/sd7", "/mnt/sd8",
+};
+
+static unsigned storage_generation;
 
 struct mounted_volume {
 	char device[32];
@@ -519,27 +536,172 @@ static int mount_all_volumes(void)
 		}
 		for (i = 0; i < kept_n; i++)
 			kept[i].is_primary = (i == new_primary);
+		storage_generation++;
+		{
+			char gen[32];
+
+			snprintf(gen, sizeof(gen), "%u\n", storage_generation);
+			write_text(GEN_PATH, gen);
+		}
 		publish_results(kept, kept_n, new_primary);
 		return 0;
 	}
 }
 
+static int card_present(void)
+{
+	struct stat st;
+
+	if (stat("/sys/block/mmcblk0", &st) == 0 && S_ISDIR(st.st_mode))
+		return 1;
+	if (stat("/dev/mmcblk0", &st) == 0 && S_ISBLK(st.st_mode))
+		return 1;
+	return 0;
+}
+
+/* Identity used to detect card swap without a clean remove event. */
+static int read_card_identity(char *out, size_t out_len)
+{
+	char size_buf[32];
+	char cid_buf[64];
+	ssize_t got;
+	int fd;
+	size_t n = 0;
+
+	if (!out || !out_len)
+		return -1;
+	out[0] = 0;
+
+	fd = open("/sys/block/mmcblk0/size", O_RDONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		got = read(fd, size_buf, sizeof(size_buf) - 1u);
+		close(fd);
+		if (got > 0) {
+			size_buf[got] = 0;
+			n = (size_t)snprintf(out, out_len, "size=%s", size_buf);
+		}
+	}
+	fd = open("/sys/block/mmcblk0/device/cid", O_RDONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		got = read(fd, cid_buf, sizeof(cid_buf) - 1u);
+		close(fd);
+		if (got > 0) {
+			cid_buf[got] = 0;
+			if (n && n + 1u < out_len)
+				out[n++] = ' ';
+			if (n < out_len)
+				snprintf(out + n, out_len - n, "cid=%.48s", cid_buf);
+		}
+	}
+	return out[0] ? 0 : -1;
+}
+
+static int primary_mount_alive(void)
+{
+	struct stat st;
+	char path[64];
+
+	if (stat(PRIMARY_MOUNT, &st) != 0 || !S_ISDIR(st.st_mode))
+		return 0;
+	/* Prefer a real directory read over a bare mountpoint check. */
+	snprintf(path, sizeof(path), "%s/.", PRIMARY_MOUNT);
+	if (stat(path, &st) != 0)
+		return 0;
+	return access(MOUNT_MARKER, R_OK) == 0;
+}
+
+static void unmount_all_volumes(void)
+{
+	unsigned i;
+	char line[96];
+
+	sync();
+	/* Extras first so nothing depends on them. */
+	for (i = sizeof(public_mounts) / sizeof(public_mounts[0]); i > 0; i--) {
+		const char *mp = public_mounts[i - 1u];
+
+		if (umount(mp) == 0) {
+			snprintf(line, sizeof(line), "umount ok %.32s", mp);
+			log_status(line);
+		}
+	}
+	/* Clear leftover probe mounts. */
+	for (i = 0; i < MAX_MOUNTS; i++) {
+		char tmp[32];
+
+		snprintf(tmp, sizeof(tmp), "/mnt/.sf2000-vol%u", i);
+		(void)umount(tmp);
+		(void)rmdir(tmp);
+	}
+	(void)unlink(MOUNT_MARKER);
+	(void)unlink(ROOTS_PATH);
+	(void)unlink(MAP_PATH);
+	(void)unlink(UNIFROG_MOUNT_POINT);
+	write_text(STATUS_PATH, "card removed or unmounted");
+	log_status("storage released");
+	sync();
+}
+
 int main(void)
 {
-	unsigned attempt;
+	char identity[160];
+	char last_identity[160];
+	int mounted = 0;
 
 	(void)mkdir("/run", 0755);
 	(void)mkdir("/mnt", 0755);
 	(void)mkdir(PRIMARY_MOUNT, 0755);
 	(void)mkdir("/media", 0755);
-	log_status("mount service start");
+	last_identity[0] = 0;
+	log_status("mount service start (hotplug)");
 
-	for (attempt = 0; attempt < ATTEMPTS; attempt++) {
+	for (;;) {
 		ensure_known_nodes();
-		if (mount_all_volumes() == 0)
-			return 0;
-		sleep_ms(1000);
+
+		if (!card_present()) {
+			if (mounted) {
+				log_status("card removed");
+				unmount_all_volumes();
+				mounted = 0;
+				last_identity[0] = 0;
+			}
+			sleep_ms(POLL_MS_IDLE);
+			continue;
+		}
+
+		identity[0] = 0;
+		(void)read_card_identity(identity, sizeof(identity));
+
+		if (mounted) {
+			/*
+			 * Card still enumerated: drop mounts if the filesystem
+			 * disappeared or a different card was swapped in under us.
+			 */
+			if (!primary_mount_alive() ||
+			    (identity[0] && last_identity[0] &&
+			     strcmp(identity, last_identity) != 0)) {
+				log_status("card changed or mount lost; remounting");
+				unmount_all_volumes();
+				mounted = 0;
+				/* Fall through to mount on this iteration. */
+			} else {
+				sleep_ms(POLL_MS_MOUNTED);
+				continue;
+			}
+		}
+
+		if (mount_all_volumes() == 0) {
+			mounted = 1;
+			if (identity[0])
+				snprintf(last_identity, sizeof(last_identity),
+					"%.150s", identity);
+			else
+				last_identity[0] = 0;
+			sleep_ms(POLL_MS_MOUNTED);
+			continue;
+		}
+
+		log_status("mount retry pending");
+		sleep_ms(POLL_MS_RETRY);
 	}
-	log_status("mount failed after 30 attempts");
-	return 1;
 }

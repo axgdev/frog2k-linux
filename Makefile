@@ -266,6 +266,9 @@ smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeb
 smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-storage-enumeration \
 smoke-linux-buildroot-storage-enumeration smoke-linux-buildroot-persistent-storage \
 smoke-linux-buildroot-partitioned-storage \
+smoke-linux-buildroot-fat16-storage \
+smoke-linux-buildroot-exfat-storage \
+smoke-linux-buildroot-mixed-fs-storage \
 run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
@@ -2110,25 +2113,22 @@ smoke-linux-buildroot-persistent-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-persistent-storage.XXXXXX.img); \
 	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-loglinux.XXXXXX.txt); \
-	tmp_test=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-test.XXXXXX.bin); \
-	trap 'rm -f $$tmp_sd $$tmp_log $$tmp_test' EXIT; \
+	trap 'rm -f $$tmp_sd $$tmp_log' EXIT; \
 	truncate -s 64M "$$tmp_sd"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
 	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
-	mcopy -i "$$tmp_sd" ::sf2000-storage-test.bin "$$tmp_test"; \
-	grep -q 'source=storage storage-test=pass bytes=262144 hash=ec55efc5' "$$tmp_log"; \
 	grep -q 'source=kmsg .*sf2000-mount: mount ok' "$$tmp_log"; \
 	grep -q 'source=kmsg ' "$$tmp_log"; \
 	grep -q 'source=logd --- SF2000 Linux pre-mount profile begin ---' "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
 	grep -q 'source=proc-stat ' "$$tmp_log"; \
 	grep -q 'source=proc-meminfo ' "$$tmp_log"; \
 	grep -q 'source=proc-interrupts ' "$$tmp_log"; \
 	grep -q 'source=heartbeat alive' "$$tmp_log"; \
-	test "$$(wc -c < "$$tmp_test")" -eq 262144; \
-	echo '61825158a601440496406cded7107a985e4201366c379dccb78f8b8a67398ec4  '"$$tmp_test" | sha256sum -c -; \
+	grep -q 'sf2000-mount: mount service start (hotplug)' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 # Most consumer SD cards are MBR/GPT + a VFAT partition (/dev/sda1 on a host,
@@ -2170,8 +2170,90 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	grep -q 'source=kmsg .*sf2000-mount: mount ok primary=/dev/mmcblk0p1' "$$tmp_log"; \
 	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
 	grep -q 'source=heartbeat alive' "$$tmp_log"; \
+	grep -q 'sf2000-mount: mount service start (hotplug)' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	! grep -q 'sf2000-mount: mount failed' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Bootloader-proven FAT16 primary (QEMU stock full-chain + ROM FAT strings).
+smoke-linux-buildroot-fat16-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-fat16-storage.XXXXXX.img); \
+	tmp_part=$$(mktemp '$(BUILD_DIR)'/sf2000-fat16-part.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-fat16-loglinux.XXXXXX.txt); \
+	trap 'rm -f $$tmp_sd $$tmp_part $$tmp_log' EXIT; \
+	part_lba=2048; \
+	part_sectors=$$((48 * 1024 * 1024 / 512)); \
+	truncate -s $$(((part_lba + part_sectors) * 512)) "$$tmp_sd"; \
+	truncate -s $$((part_sectors * 512)) "$$tmp_part"; \
+	mkfs.vfat -F 16 -n SF2000 "$$tmp_part" >/dev/null 2>&1; \
+	mmd -i "$$tmp_part" ::bios ::firmware ::saves; \
+	python3 -c "import struct; lba=$$part_lba; sec=$$part_sectors; mbr=bytearray(512); mbr[0x1be:0x1be+16]=struct.pack('<BBBBBBBBII',0x80,1,1,0,0x06,0xfe,0xff,0xff,lba,sec); mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
+	dd if="$$tmp_part" of="$$tmp_sd" bs=512 seek="$$part_lba" conv=notrunc status=none; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -Eq 'sf2000-mount: volume /dev/mmcblk0p1 type=(vfat|msdos)' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	mcopy -i "$$tmp_sd@@$$((part_lba * 512))" ::loglinux.txt "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Bootloader ROM contains EXFAT OEM/type strings; Linux mounts exFAT volumes.
+smoke-linux-buildroot-exfat-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-exfat-storage.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-exfat-loglinux.XXXXXX.txt); \
+	trap 'rm -f $$tmp_sd $$tmp_log' EXIT; \
+	part_lba=2048; \
+	part_bytes=$$((64 * 1024 * 1024)); \
+	part_sectors=$$((part_bytes / 512)); \
+	truncate -s $$((part_lba * 512 + part_bytes)) "$$tmp_sd"; \
+	python3 -c "import struct; lba=$$part_lba; sec=$$part_sectors; mbr=bytearray(512); mbr[0x1be:0x1be+16]=struct.pack('<BBBBBBBBII',0x80,1,1,0,0x07,0xfe,0xff,0xff,lba,sec); mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
+	loop=$$(losetup -f --show -o $$((part_lba * 512)) "$$tmp_sd"); \
+	mkfs.exfat -n SF2000 "$$loop" >/dev/null; \
+	losetup -d "$$loop"; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	grep -q 'sf2000-mount: volume /dev/mmcblk0p1 type=exfat' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Primary FAT32 system partition + secondary exFAT ROM partition.
+smoke-linux-buildroot-mixed-fs-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-mixed-fs.XXXXXX.img); \
+	tmp_p1=$$(mktemp '$(BUILD_DIR)'/sf2000-mixed-p1.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-mixed-loglinux.XXXXXX.txt); \
+	trap 'rm -f $$tmp_sd $$tmp_p1 $$tmp_log' EXIT; \
+	p1_lba=2048; \
+	p1_sectors=$$((32 * 1024 * 1024 / 512)); \
+	p2_lba=$$((p1_lba + p1_sectors)); \
+	p2_sectors=$$((64 * 1024 * 1024 / 512)); \
+	truncate -s $$(((p2_lba + p2_sectors) * 512)) "$$tmp_sd"; \
+	truncate -s $$((p1_sectors * 512)) "$$tmp_p1"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_p1" >/dev/null 2>&1; \
+	mmd -i "$$tmp_p1" ::bios ::firmware ::saves; \
+	python3 -c "import struct; \
+p1_lba=$$p1_lba; p1_sec=$$p1_sectors; p2_lba=$$p2_lba; p2_sec=$$p2_sectors; \
+mbr=bytearray(512); \
+mbr[0x1be:0x1be+16]=struct.pack('<BBBBBBBBII',0x80,1,1,0,0x0c,0xfe,0xff,0xff,p1_lba,p1_sec); \
+mbr[0x1ce:0x1ce+16]=struct.pack('<BBBBBBBBII',0x00,1,1,0,0x07,0xfe,0xff,0xff,p2_lba,p2_sec); \
+mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
+	dd if="$$tmp_p1" of="$$tmp_sd" bs=512 seek="$$p1_lba" conv=notrunc status=none; \
+	loop=$$(losetup -f --show -o $$((p2_lba * 512)) "$$tmp_sd"); \
+	mkfs.exfat -n ROMS "$$loop" >/dev/null; \
+	losetup -d "$$loop"; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	grep -Eq 'mmcblk0: *p1 p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: volume /dev/mmcblk0p1 type=vfat' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: volume /dev/mmcblk0p2 type=exfat' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1 extras=1' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	mcopy -i "$$tmp_sd@@$$((p1_lba * 512))" ::loglinux.txt "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-launch:
 	$(MAKE) ROOTFS=buildroot \

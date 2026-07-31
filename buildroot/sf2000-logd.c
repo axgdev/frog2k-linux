@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
+#define GEN_PATH "/run/sf2000-storage-generation"
 #define REBOOT_MARKER "/run/sf2000-reboot-request"
 #define SHUTDOWN_MARKER "/run/sf2000-shutdown-request"
 #define STANDBY_MARKER "/run/sf2000-display-standby"
@@ -36,6 +37,7 @@ static int storage_deferred;
 static unsigned performance_metric_records;
 static size_t performance_metric_bytes;
 static long ticks_per_second = 100;
+static unsigned mount_generation;
 
 static int stop_requested(void)
 {
@@ -356,6 +358,77 @@ static void drain_input_fds(int fds[INPUT_FDS])
 	}
 }
 
+static unsigned read_mount_generation(void)
+{
+	char buf[32];
+	ssize_t got;
+	unsigned value = 0;
+	unsigned i = 0;
+	int fd;
+
+	fd = open(GEN_PATH, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return 0;
+	got = read(fd, buf, sizeof(buf) - 1u);
+	close(fd);
+	if (got <= 0)
+		return 0;
+	buf[got] = 0;
+	while (buf[i] >= '0' && buf[i] <= '9') {
+		value = value * 10u + (unsigned)(buf[i] - '0');
+		i++;
+	}
+	return value;
+}
+
+static int open_log_file(void)
+{
+	if (log_fd >= 0) {
+		close(log_fd);
+		log_fd = -1;
+	}
+	log_fd = open(LOG_PATH, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0644);
+	return log_fd >= 0 ? 0 : -1;
+}
+
+/*
+ * Hotplug: when the card is removed the mount marker disappears; when a new
+ * card is mounted the generation increments.  Drain or drop the open log FD
+ * and reopen so writes go to the live volume.
+ */
+static void refresh_storage_binding(void)
+{
+	unsigned gen = read_mount_generation();
+	int marker = access(MOUNT_MARKER, R_OK) == 0;
+
+	if (!marker) {
+		if (log_fd >= 0) {
+			(void)flush_log();
+			close(log_fd);
+			log_fd = -1;
+			kmsg_line("storage unmounted; log file closed\n");
+		}
+		return;
+	}
+	if (log_fd < 0 || (gen && gen != mount_generation)) {
+		if (log_fd >= 0) {
+			(void)flush_log();
+			close(log_fd);
+			log_fd = -1;
+		}
+		if (open_log_file() == 0) {
+			mount_generation = gen;
+			append_record("logd",
+				"--- SF2000 Linux storage mounted ---",
+				strlen("--- SF2000 Linux storage mounted ---"));
+			(void)sync_log();
+			kmsg_line("storage remounted; log file reopened\n");
+		} else {
+			kmsg_line("cannot open /mnt/sd/loglinux.txt after remount\n");
+		}
+	}
+}
+
 int main(void)
 {
 	char kmsg[2048];
@@ -384,11 +457,11 @@ int main(void)
 				append_record("kmsg", kmsg, (size_t)got);
 		sleep_ms(50);
 	}
-	log_fd = open(LOG_PATH, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0644);
-	if (log_fd < 0) {
+	if (open_log_file() != 0) {
 		kmsg_line("cannot open /mnt/sd/loglinux.txt\n");
 		return 1;
 	}
+	mount_generation = read_mount_generation();
 	append_record("logd", "--- SF2000 Linux storage mounted ---",
 		strlen("--- SF2000 Linux storage mounted ---"));
 	(void)sync_log();
@@ -400,6 +473,7 @@ int main(void)
 		uint64_t now;
 		int active;
 
+		refresh_storage_binding();
 		if (access(STANDBY_MARKER, F_OK) == 0) {
 			/* Finish outstanding FAT writes, then avoid periodic SD traffic. */
 			(void)sync_log();
