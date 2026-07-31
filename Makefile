@@ -132,6 +132,11 @@ BUILDROOT_EXPERIMENTAL_DEVTESTS := $(BUILDROOT_DEVTEST) \
 BUILDROOT_POWERD_CPPFLAGS := -DSF2000_EXPERIMENTAL_DEVTESTS
 endif
 BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))'
+# Frontend Makefiles nest further into libretro core trees.  Inheriting the
+# outer jobserver (make buildroot -jN) deadlocks when several cores rebuild in
+# parallel and each child waits for tokens the parent still holds.  Drop the
+# jobserver and give each frontend invocation its own -j budget.
+FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' -C '$(FRONTEND_PROJECT)'
 ifeq ($(ROOTFS),tiny)
 ROOTFS_SUFFIX :=
 ROOTFS_CPIO := $(INITRAMFS)
@@ -260,6 +265,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
 smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-storage-enumeration \
 smoke-linux-buildroot-storage-enumeration smoke-linux-buildroot-persistent-storage \
+smoke-linux-buildroot-partitioned-storage \
 run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
@@ -717,25 +723,25 @@ $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_
 $(BUILDROOT_FRONTEND): $(FRONTEND_PROJECT)/src/browser.c \
 		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
 		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' browser \
+	$(FRONTEND_MAKE) browser \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
 $(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' gambatte \
+	$(FRONTEND_MAKE) gambatte \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-gambatte '$@'
 
 $(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/gpsp -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' gpsp \
+	$(FRONTEND_MAKE) gpsp \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-gpsp '$@'
 
 $(BUILDROOT_FCEUMM): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/fceumm -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' fceumm \
+	$(FRONTEND_MAKE) fceumm \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-fceumm '$@'
@@ -921,6 +927,8 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/ttyS0 0660 0 5 c 4 64\n'; \
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
 		printf 'nod /dev/mmcblk0 0600 0 0 b 179 0\n'; \
+		printf 'nod /dev/mmcblk0p1 0600 0 0 b 179 1\n'; \
+		printf 'nod /dev/mmcblk0p2 0600 0 0 b 179 2\n'; \
 		printf 'nod /dev/uinput 0660 0 0 c 10 223\n'; \
 		printf 'nod /dev/ge 0660 0 0 c 10 243\n'; \
 		printf 'nod /dev/fb0 0660 0 0 c 29 0\n'; \
@@ -1327,7 +1335,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable BLK_DEV \
 		--enable PARTITION_ADVANCED \
 		--enable MSDOS_PARTITION \
-		--disable EFI_PARTITION \
+		--enable EFI_PARTITION \
 		--disable MQ_IOSCHED_DEADLINE \
 		--disable MQ_IOSCHED_KYBER \
 		--disable IOSCHED_BFQ \
@@ -1419,10 +1427,11 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable FAT_FS \
 		--enable MSDOS_FS \
 		--enable VFAT_FS \
+		--enable EXFAT_FS \
 		--enable NLS \
-	--enable NLS_CODEPAGE_437 \
-	--enable NLS_ISO8859_1 \
-	--enable NLS_UTF8 \
+		--enable NLS_CODEPAGE_437 \
+		--enable NLS_ISO8859_1 \
+		--enable NLS_UTF8 \
 		--disable EXT4_FS \
 		--disable EXPORTFS \
 		--disable FUSE_FS \
@@ -2121,6 +2130,48 @@ smoke-linux-buildroot-persistent-storage:
 	test "$$(wc -c < "$$tmp_test")" -eq 262144; \
 	echo '61825158a601440496406cded7107a985e4201366c379dccb78f8b8a67398ec4  '"$$tmp_test" | sha256sum -c -; \
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Most consumer SD cards are MBR/GPT + a VFAT partition (/dev/sda1 on a host,
+# /dev/mmcblk0p1 on the device).  Superfloppy images used by other smokes do not
+# cover that layout.
+smoke-linux-buildroot-partitioned-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-partitioned-storage.XXXXXX.img); \
+	tmp_p1=$$(mktemp '$(BUILD_DIR)'/sf2000-partitioned-p1.XXXXXX.img); \
+	tmp_p2=$$(mktemp '$(BUILD_DIR)'/sf2000-partitioned-p2.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-part-loglinux.XXXXXX.txt); \
+	trap 'rm -f $$tmp_sd $$tmp_p1 $$tmp_p2 $$tmp_log' EXIT; \
+	p1_lba=2048; \
+	p1_sectors=$$((32 * 1024 * 1024 / 512)); \
+	p2_lba=$$((p1_lba + p1_sectors)); \
+	p2_sectors=$$((32 * 1024 * 1024 / 512)); \
+	truncate -s $$(((p2_lba + p2_sectors) * 512)) "$$tmp_sd"; \
+	truncate -s $$((p1_sectors * 512)) "$$tmp_p1"; \
+	truncate -s $$((p2_sectors * 512)) "$$tmp_p2"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_p1" >/dev/null 2>&1; \
+	mkfs.vfat -F 32 -n ROMS "$$tmp_p2" >/dev/null 2>&1; \
+	mmd -i "$$tmp_p1" ::bios ::firmware ::saves; \
+	mmd -i "$$tmp_p2" ::GB; \
+	python3 -c "import struct; \
+p1_lba=$$p1_lba; p1_sec=$$p1_sectors; p2_lba=$$p2_lba; p2_sec=$$p2_sectors; \
+mbr=bytearray(512); \
+mbr[0x1be:0x1be+16]=struct.pack('<BBBBBBBBII',0x80,1,1,0,0x0c,0xfe,0xff,0xff,p1_lba,p1_sec); \
+mbr[0x1ce:0x1ce+16]=struct.pack('<BBBBBBBBII',0x00,1,1,0,0x0c,0xfe,0xff,0xff,p2_lba,p2_sec); \
+mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
+	dd if="$$tmp_p1" of="$$tmp_sd" bs=512 seek="$$p1_lba" conv=notrunc status=none; \
+	dd if="$$tmp_p2" of="$$tmp_sd" bs=512 seek="$$p2_lba" conv=notrunc status=none; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	grep -Eq 'mmcblk0: *p1 p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: volume /dev/mmcblk0p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	mcopy -i "$$tmp_sd@@$$((p1_lba * 512))" ::loglinux.txt "$$tmp_log"; \
+	grep -q 'source=kmsg .*sf2000-mount: mount ok primary=/dev/mmcblk0p1' "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
+	grep -q 'source=heartbeat alive' "$$tmp_log"; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	! grep -q 'sf2000-mount: mount failed' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-launch:
 	$(MAKE) ROOTFS=buildroot \

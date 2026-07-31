@@ -265,9 +265,16 @@ had reused the buffer, damaging unrelated FAT sectors and the superblock.
 
 The production mount service is a small static-PIE ELF at
 `/usr/sbin/sf2000-mount`. It replaces a large BusyBox shell exec in the boot
-hot path, retries the first two partitions and raw card, mounts VFAT with
-`noatime` and UTF-8 filename conversion, and publishes
-`/run/sf2000-storage-mounted`. `sf2000-logd` buffers
+hot path, discovers every `mmcblk0pN` partition from `/sys/block/mmcblk0`
+(host `/dev/sda1`/`sda2` appear here as `mmcblk0p1`/`p2`), falls back to the
+whole-disk node for superfloppy images, and tries `vfat`, `msdos`, then
+`exfat` with `noatime` (and UTF-8 filename conversion for VFAT/MSDOS). The
+highest-scoring volume (bios/firmware/saves/ROM layout markers) becomes the
+primary at `/mnt/sd`; additional mountable partitions are published as
+`/mnt/sd2`, `/mnt/sd3`, … so ROM libraries on other partitions remain
+readable. It writes `/run/sf2000-storage-mounted`,
+`/run/sf2000-storage-roots`, and `/run/sf2000-storage-map`. The browser
+lists extra roots at the primary volume root. `sf2000-logd` buffers
 early records in RAM, appends `loglinux.txt` after mount, and uses bounded
 periodic flushes while the system is idle.
 

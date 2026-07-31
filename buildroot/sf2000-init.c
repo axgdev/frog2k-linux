@@ -731,8 +731,19 @@ static void graceful_restart(long logd_pid)
 	progress_mark("init-reboot-request", 0x3eu, INIT_TAG);
 	(void)stop_logger(logd_pid);
 	(void)syscall0(SYS_sync);
+	/* Unmount primary first, then extra volumes published by sf2000-mount. */
 	ret = syscall2(SYS_umount2, (long)"/mnt/sd", 0);
 	progress_mark("init-reboot-umount", 0x3eu, (unsigned int)ret);
+	{
+		static const char *const extra_vols[] = {
+			"/mnt/sd2", "/mnt/sd3", "/mnt/sd4",
+			"/mnt/sd5", "/mnt/sd6", "/mnt/sd7", "/mnt/sd8",
+		};
+		unsigned i;
+
+		for (i = 0; i < sizeof(extra_vols) / sizeof(extra_vols[0]); i++)
+			(void)syscall2(SYS_umount2, (long)extra_vols[i], 0);
+	}
 	(void)syscall0(SYS_sync);
 	log_message("sf2000_buildroot: storage synchronized, restarting\n");
 	progress_mark("init-reboot-synced", 0x3eu, INIT_TAG);
