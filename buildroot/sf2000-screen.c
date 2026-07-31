@@ -3319,6 +3319,10 @@ static void ge_copy_render_to_scanout(void)
 	unsigned attempt = ++display_ge_attempts;
 	int trace_attempt = attempt <= 4u;
 
+	/* A stop request may interrupt the GE fence below.  Do not submit more
+	 * work once ownership is being handed back to init. */
+	if (screen_stop_requested())
+		return;
 	if (!display_ge) {
 		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
 		return;
@@ -3370,6 +3374,12 @@ static void ge_copy_render_to_scanout(void)
 		if (trace_attempt)
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
+		/* SIGTERM interrupts HCGE_SYNC_TIMEOUT with -EINTR.  That is the
+		 * normal shutdown path, not a failed frame to be copied and retried.
+		 * Returning here prevents an interrupted handoff from becoming a
+		 * self-generated kmsg/CPU-copy loop. */
+		if (sync_ret == -EINTR || screen_stop_requested())
+			return;
 		if (sync_ret == 0 && trace_attempt) {
 			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 			uint16_t *src = render_cpu;
@@ -3611,6 +3621,8 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	uint32_t ctl;
 
 	ge_copy_render_to_scanout();
+	if (screen_stop_requested())
+		return;
 	flush_present_memory();
 	/*
 	 * The captured HC15 frontend masks both compositor banks around every

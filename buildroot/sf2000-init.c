@@ -678,6 +678,11 @@ static int stop_service(long pid)
 	 * Process exit closes /dev/ge and releases its IRQ through the kernel.
 	 */
 	(void)diagnostic_watchdog_disable();
+	/* Publish the cooperative stop request before signalling.  The GE fence
+	 * is interruptible, so the screen can leave its render loop and release
+	 * /dev/ge before the bounded wait reaches the kill fallback. */
+	ret = publish_request("/run/sf2000-screen-stop-request");
+	progress_mark("init-screen-stop-request", 0x3eu, (unsigned int)ret);
 	progress_mark("init-screen-stop-signal", 0x3eu, (unsigned int)pid);
 	ret = syscall2(SYS_kill, pid, SIGTERM);
 	if (ret < 0)

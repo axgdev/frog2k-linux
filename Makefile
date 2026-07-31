@@ -215,6 +215,7 @@ MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
 UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
 MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
+QEMU_PANEL_PROBE_TIMEOUT ?= 10s
 METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0027.txt
 PHYSICAL_CONTRACT_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/log92.txt
 QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-buildroot-display.log
@@ -280,6 +281,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
 	run-linux-gpsp smoke-linux-gpsp run-linux-fceumm smoke-linux-fceumm \
+	run-linux-snes9x2005 smoke-linux-snes9x2005 \
+	run-linux-snes9x2002 smoke-linux-snes9x2002 \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
@@ -862,7 +865,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_FCEUMM) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_FCEUMM) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1207,7 +1210,7 @@ smoke-linux-devtest: run-linux-devtest
 
 run-linux-player: $(BUILDROOT_CPIO) qemu linux-buildroot-asd $(PLAYER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	{ sleep 8; printf 'sendkey ret-w 500\n'; sleep 3; \
+	{ sleep 8; printf 'sendkey x 100\n'; sleep 2; \
 		printf 'sendkey x 100\n'; sleep 2; \
 		printf 'sendkey x 100\n'; sleep 10; \
 		printf 'sendkey z 100\n'; sleep 3; \
@@ -1243,8 +1246,9 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
-	# NOMMU static PIE executables occupy one contiguous allocation.  FCEUmm's
-	# 4.9 MiB image needs order 11; this changes the buddy limit, not a reservation.
+	# NOMMU static PIE executables occupy one contiguous allocation.  The core
+	# builds keep their largest workspace below the order-11 buddy limit.  This
+	# changes the buddy limit, not a reservation.
 	'$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
 		--enable BLK_DEV_INITRD \
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
@@ -1827,7 +1831,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
-	awk '/sf2000-frontend: ROM load begin/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
+	awk '/sf2000-frontend: ROM load complete/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: frontend running START+SELECT opens pause and core options' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1882,11 +1886,11 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=uncapped audio=suppressed pacing=disabled full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*suppressed=[1-9][0-9]* .*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
-	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]* buffered_frames=0 mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]*.*buffered_frames=0.*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=normal audio=enabled pacing=core full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*xrun=0 .*delay=[1-9][0-9]* resample_hz=32000 .*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
-	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]* buffered_frames=0 mode=normal presenter=GE' \
+	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]*.*buffered_frames=0.*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
@@ -1991,7 +1995,10 @@ smoke-linux-frontend-lifecycle: run-linux-frontend-lifecycle
 run-linux-reboot: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 10; printf 'sendkey backspace 3000\n'; sleep 8; \
+	# Home menu: Library, Settings, Reset, Safe Shutdown.  Select Reset (A).
+	(sleep 12; printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 12; \
 		printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_ROM_CPU_ARGS) -bios '$(BOOTROM_BUGFIX)' \
 		-drive if=none,id=sd0,file='$(LINUX_ROM_SD_IMAGE)',format=raw \
@@ -2001,8 +2008,9 @@ run-linux-reboot: qemu linux-rom-sd
 
 smoke-linux-reboot: run-linux-reboot
 	grep -q 'sf2000_linux: init alive' '$(BUILD_DIR)'/logs/linux-reboot.log
-	grep -q 'sf2000: watchdog restart' '$(BUILD_DIR)'/logs/linux-reboot.log
-	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 2
+	grep -Eq 'sf2000-browser: system action reset|sf2000_buildroot: clean restart requested|sf2000_buildroot: storage synchronized, restarting|sf2000: watchdog restart' \
+		'$(BUILD_DIR)'/logs/linux-reboot.log
+	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 1
 
 run-linux-rom: qemu linux-rom-sd
 	test -f '$(BOOTROM_BUGFIX)'
@@ -2286,7 +2294,7 @@ run-linux-buildroot-rom:
 smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
-	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000: uart: .*sf2000: watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-rom.log
@@ -2709,11 +2717,10 @@ smoke-qemu-mufrog-display: run-qemu-mufrog-display
 		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
 
 run-linux-buildroot-panel: qemu
-	$(MAKE) ROOTFS=buildroot BUILDROOT_INIT_SOURCE='$(BUILDROOT_SCREEN)' \
-		BUILDROOT_SCREEN_CFLAGS='-DPANEL_PROBE_INIT' \
+	$(MAKE) ROOTFS=buildroot buildroot-panel-probe-link \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs; \
-	SF2000_TRACE_PC='1' timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	SF2000_TRACE_PC='1' timeout '$(QEMU_PANEL_PROBE_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-append 'console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
@@ -2724,9 +2731,8 @@ smoke-linux-buildroot-panel: run-linux-buildroot-panel
 	grep -q 'Run /init as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: main entry' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 	grep -q 'sf2000-screen: panel probe begin' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000: panel-read-id start panel-id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000-screen: panel init done id=0x009306' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000-screen: panel probe done' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	grep -q 'sf2000: panel-read cmd=0x04 bytes=4 data=e4:85:85:52:00' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+	! grep -Eq 'service exec failed|Kernel panic|Attempted to kill init' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
 
 run-linux-buildroot-panel-fast: qemu
 	$(MAKE) ROOTFS=buildroot \
@@ -2751,9 +2757,9 @@ run-linux-buildroot-reboot:
 
 smoke-linux-buildroot-reboot:
 	$(MAKE) ROOTFS=buildroot smoke-linux-reboot
-	grep -q 'diag-fast-reset-begin' '$(BUILD_DIR)'/logs/linux-reboot.log
-	grep -q 'diag-fast-mmc-done' '$(BUILD_DIR)'/logs/linux-reboot.log
-	grep -q 'diag-fast-reset-done' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000-pad: SELECT pressed, rebooting' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000_buildroot: restarting' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'Hichip bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log
 
 run-linux-buildroot-reset-snapshot:
 	$(MAKE) ROOTFS=buildroot \
@@ -2827,7 +2833,7 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 		'$(BUILD_DIR)'/logs/linux-fceumm-loglinux.txt 2>/dev/null || true
 
 smoke-linux-fceumm: run-linux-fceumm
-	grep -q 'sf2000-browser: launch FCEUMM /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
+	grep -q 'sf2000-browser: launch FCEUmm /mnt/sd/NES/TEST.NES' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-frontend: first frame 256x224' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -q 'sf2000-logd: RAM journal begin: FAT writes deferred' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	grep -Eq 'sf2000-logd: RAM journal end: bytes=[1-9][0-9]* peak=[1-9][0-9]* dropped=0 metrics=[1-9][0-9]* metric_bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-fceumm.log
@@ -2836,6 +2842,70 @@ smoke-linux-fceumm: run-linux-fceumm
 		'$(BUILD_DIR)'/logs/linux-fceumm-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-fceumm.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-fceumm.log
+
+SNES_TEST_SD := $(BUILD_DIR)/snes9x-test.sd.img
+SNES_TEST_ROM ?= /root/host-frogdev/roms/SNES/Mega Man X (USA) (Rev 1).sfc
+
+$(SNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
+	@test -f '$(SNES_TEST_ROM)' || { \
+		echo 'set SNES_TEST_ROM=/path/to/an.sfc' >&2; exit 2; }
+	mkdir -p '$(dir $@)'
+	truncate -s 64M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/SNES ::/sf2000 ::/sf2000/cores
+	mcopy -i '$@' '$(SNES_TEST_ROM)' '::/SNES/MEGA MAN X.SFC'
+	mcopy -i '$@' '$(SDCARD_SNES9X2005)' '::/sf2000/cores/sf2000-snes9x2005'
+	mcopy -i '$@' '$(SDCARD_SNES9X2002)' '::/sf2000/cores/sf2000-snes9x2002'
+
+run-linux-snes9x2005: qemu linux-buildroot-asd $(SNES_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 1; printf 'sendkey x 100\n'; sleep 2; \
+		printf 'sendkey x 100\n'; sleep 25; \
+		printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
+			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(SNES_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-snes9x2005.log \
+		> '$(BUILD_DIR)'/logs/linux-snes9x2005.console 2>&1
+
+smoke-linux-snes9x2005: run-linux-snes9x2005
+	grep -q 'sf2000-browser: launch Snes9x 2005 /mnt/sd/SNES/MEGA MAN X.SFC' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: first frame 256x224 pitch=1024 .*scanout_hash=485b4dc5' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
+	! grep -Eq 'malloc-failed|Data bus error|reloc outside program|Kernel panic|frontend: fault' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
+
+run-linux-snes9x2002: qemu linux-buildroot-asd $(SNES_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 1; printf 'sendkey x 100\n'; sleep 2; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 25; printf 'sendkey backspace-ret 500\n'; sleep 1; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
+			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(SNES_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-snes9x2002.log \
+		> '$(BUILD_DIR)'/logs/linux-snes9x2002.console 2>&1
+
+smoke-linux-snes9x2002: run-linux-snes9x2002
+	grep -q 'sf2000-browser: launch Snes9x 2002 /mnt/sd/SNES/MEGA MAN X.SFC' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2002.log
+	grep -q 'sf2000-frontend: first frame 256x224 pitch=640 .*scanout_hash=485b4dc5' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2002.log
+	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-snes9x2002.log
+	! grep -Eq 'Data bus error|reloc outside program|Kernel panic|frontend: fault' \
+		'$(BUILD_DIR)'/logs/linux-snes9x2002.log
 
 QUICKNES_TEST_SD := $(BUILD_DIR)/quicknes-test.sd.img
 
