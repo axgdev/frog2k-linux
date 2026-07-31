@@ -643,18 +643,15 @@ static const struct gma_scanout_profile gma_scanout_profiles[] = {
 	{ "LB02 BOTH SDK", 0x02u, GMA_DOORBELL_PRIMARY | GMA_DOORBELL_ALT, 1 },
 };
 
-/* The production source and scanout are already RGB565.  Keep the native
- * path in RGB565 passthrough mode; the other profiles remain available to
- * the explicit GMA diagnostic cycle below. */
-#define GMA_NATIVE_DESCRIPTOR_PROFILE 1u
-#define GMA_NATIVE_SCANOUT_PROFILE 0u
-
 /*
- * G2 is the native RGB565 descriptor without the vendor YUV CSC bit.  The
- * browser and emulator surfaces are RGB565 already, so applying the BT.709
- * enhancement matrix to them can alter otherwise exact UI colors.  The full
- * descriptor matrix remains available to the explicit hardware diagnostic.
+ * The physical SF2000 path is RGB565 at the source, but the panel's proven
+ * operating point uses the vendor GMA CSC/enhancement stage.  Keep that
+ * configuration for normal scanout; the no-CSC and alternate profiles remain
+ * available to the explicit hardware diagnostic.
  */
+#define GMA_NATIVE_DESCRIPTOR_PROFILE 0u
+#define GMA_NATIVE_SCANOUT_PROFILE 3u
+
 static const struct gma_descriptor_profile gma_descriptor_profiles[] = {
 	{ "G1 MUFROG NATIVE", 0xaa201b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
 	{ "G2 NATIVE NO CSC", 0xaa200b61u, WIDTH, HEIGHT, PITCH, 0, 0 },
@@ -3619,10 +3616,46 @@ static void gma_set_bit(uint32_t off, uint32_t bit, int on)
 	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
 }
 
+static void gma_reconfigure_scanout_profile(
+	const struct gma_scanout_profile *profile)
+{
+	uint32_t mask0;
+	uint32_t mask1;
+	uint32_t linebuf;
+	uint32_t ctl;
+
+	linebuf = mmio_read32(gma, GMA_LINEBUF);
+	linebuf = (linebuf & ~0x1fu) | (profile->linebuf & 0x1fu);
+	linebuf |= 0x00020000u;
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+	mmio_write32(gma, GMA_LINEBUF, linebuf);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+
+	ctl = mmio_read32(gma, GMA_CTL);
+	ctl &= ~((1u << 19) | (1u << 18));
+	if (profile->sdk_enhance)
+		ctl |= 1u << 18;
+	else
+		ctl |= 1u << 19;
+	mask0 = mmio_read32(gma, GMA_MASK);
+	mask1 = mmio_read32(gma, GMA_MASK_ALT);
+	mmio_write32(gma, GMA_MASK, mask0 | 1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+	mmio_write32(gma, GMA_CTL, ctl);
+	mmio_write32(gma, GMA_CTL_ALT, ctl);
+	mmio_write32(gma, GMA_MASK, mask0 & ~1u);
+	mmio_write32(gma, GMA_MASK_ALT, mask1 & ~1u);
+}
+
 static void present_frame_profile(const struct gma_scanout_profile *profile)
 {
 	static int logged_hw_state;
 	static int gma_taken_over;
+	static const struct gma_scanout_profile *active_profile;
 	uint32_t mask0;
 	uint32_t mask1;
 	uint32_t linebuf;
@@ -3639,6 +3672,10 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	 * proving that the complete HC15 compositor transaction was accepted.
 	 */
 	if (gma_taken_over) {
+		if (active_profile != profile) {
+			gma_reconfigure_scanout_profile(profile);
+			active_profile = profile;
+		}
 		if (profile->doorbells & GMA_DOORBELL_PRIMARY) {
 			mask0 = mmio_read32(gma, GMA_MASK);
 			mask1 = mmio_read32(gma, GMA_MASK_ALT);
@@ -3722,6 +3759,7 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 	}
 	gma_set_bit(GMA_CTL, 1u, 1);
 	gma_taken_over = 1;
+	active_profile = profile;
 	progress_mark("screen-gma-takeover-on", 0x3fu,
 		mmio_read32(gma, GMA_CTL));
 	if (!logged_hw_state) {
@@ -3745,6 +3783,41 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 			((volatile uint32_t *)(gma_ram + gma_desc_off))[140]);
 		progress_mark("screen-gma-csc0", 0x3fu,
 			((volatile uint32_t *)(gma_ram + gma_desc_off))[144]);
+		{
+			const volatile uint32_t *desc =
+				(const volatile uint32_t *)(gma_ram + gma_desc_off);
+			char line[256];
+			uint32_t active_ctl = mmio_read32(gma, GMA_CTL);
+			uint32_t active_ctl_hw = mmio_read32(gma, GMA_CTL_HW);
+			uint32_t active_dmba = mmio_read32(gma, GMA_DMBA);
+			uint32_t active_dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
+
+			snprintf(line, sizeof(line),
+				"sf2000-screen: native-gma profile=%s enhance=%d "
+				"gctl=%08x hw=%08x dmba=%08x hw_dmba=%08x line=%08x "
+				"d0=%08x d4=%08x d5=%08x d7=%08x d8=%08x d9=%08x\n",
+				profile->name, profile->sdk_enhance, active_ctl,
+				active_ctl_hw, active_dmba, active_dmba_hw,
+				mmio_read32(gma, GMA_LINEBUF), desc[0], desc[4], desc[5],
+				desc[7], desc[8], desc[9]);
+			log_line(line);
+			append_file_log(line);
+			snprintf(line, sizeof(line),
+				"sf2000-screen: native-gma bits csc=%u bypass=%u "
+				"enhance=%u d0_csc=%u edge_reduce=%u edge_avg=%u "
+				"coef=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+				(desc[0] >> 12) & 1u, (active_ctl >> 19) & 1u,
+				(active_ctl >> 18) & 1u, (desc[0] >> 12) & 1u,
+				(desc[0] >> 16) & 0x7fu, (desc[0] >> 24) & 0xffu,
+				(int32_t)desc[144], (int32_t)desc[145],
+				(int32_t)desc[146], (int32_t)desc[147],
+				(int32_t)desc[148], (int32_t)desc[149],
+				(int32_t)desc[150], (int32_t)desc[151],
+				(int32_t)desc[152], (int32_t)desc[153],
+				(int32_t)desc[154], (int32_t)desc[155]);
+			log_line(line);
+			append_file_log(line);
+		}
 		logged_hw_state = 1;
 	}
 }
@@ -3764,7 +3837,7 @@ static void present_frame(void)
 		build_gma_descriptor();
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-desc", 0x3fu, gma_desc_phys);
-	/* RGB565 is already final display color; bypass CSC and enhancement. */
+	/* The physical panel uses the vendor RGB565 CSC/enhancement operating point. */
 	present_frame_profile(&gma_scanout_profiles[GMA_NATIVE_SCANOUT_PROFILE]);
 	if (presents <= 4u)
 		progress_mark("screen-gma-present-dmba", 0x3fu,
@@ -4036,10 +4109,10 @@ static int condition_native_scanout(void)
 	unsigned rearmed;
 
 	/*
-	 * Submit a native RGB565 passthrough descriptor after RAMCTRL and the
-	 * shared pads have changed to RGB ownership.  Wait for its hardware mirror,
-	 * then allow the first four TE/RAMWR boundaries to complete before leaving
-	 * the panel in continuous RGB mode.
+	 * Submit the proven native RGB565 descriptor and vendor enhancement profile
+	 * after RAMCTRL and the shared pads have changed to RGB ownership.  Wait for
+	 * its hardware mirror, then allow the first four TE/RAMWR boundaries to
+	 * complete before leaving the panel in continuous RGB mode.
 	 */
 	progress_mark("screen-native-hold-begin", 0x3fu,
 		CONDITIONING_TE_EDGES);
