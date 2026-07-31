@@ -285,6 +285,16 @@ static unsigned score_volume(const char *mountpoint)
 	 * logs and the frontend keep writing under /mnt/sd.  Extra partitions
 	 * that only hold ROM trees still mount and remain browsable.
 	 */
+	/* The UI contract is stronger evidence than a generic ROM directory. */
+	snprintf(path, sizeof(path), "%s/sf2000", mountpoint);
+	if (path_is_dir(path))
+		score += 120u;
+	snprintf(path, sizeof(path), "%s/sf2000/ui.ttf", mountpoint);
+	if (path_exists(path))
+		score += 100u;
+	snprintf(path, sizeof(path), "%s/sf2000.conf", mountpoint);
+	if (path_exists(path))
+		score += 80u;
 	snprintf(path, sizeof(path), "%s/bios", mountpoint);
 	if (path_is_dir(path))
 		score += 100u;
@@ -406,6 +416,8 @@ static void publish_results(const struct mounted_volume *vols, unsigned count,
 	log_status(line);
 }
 
+static void unmount_all_volumes(void);
+
 /*
  * Mount every usable candidate.  The highest-scoring volume becomes the
  * primary at /mnt/sd; remaining volumes land on /mnt/sd2, /mnt/sd3, ...
@@ -495,6 +507,14 @@ static int mount_all_volumes(void)
 				"relocate fail %.24s errno=%d",
 				vols[i].device, errno);
 			log_status(line);
+			if (i == primary) {
+				/* Never publish an extra volume as /mnt/sd.  That would make
+				 * the logger and browser appear alive while hiding the system
+				 * partition (including its font and configuration). */
+				log_status("primary relocation failed; retrying");
+				unmount_all_volumes();
+				return -1;
+			}
 			vols[i].mountpoint[0] = 0;
 			continue;
 		}
@@ -521,19 +541,8 @@ static int mount_all_volumes(void)
 		}
 		if (!kept_n)
 			return -1;
-		if (!have_primary) {
-			/* Primary relocate failed; promote best remaining volume. */
-			new_primary = 0;
-			for (i = 1; i < kept_n; i++) {
-				if (kept[i].score > kept[new_primary].score)
-					new_primary = i;
-			}
-			/*
-			 * If the winner is not at /mnt/sd, leave it where it is
-			 * only when /mnt/sd is already occupied by another kept
-			 * volume; otherwise remounting is too late here.
-			 */
-		}
+		if (!have_primary)
+			return -1;
 		for (i = 0; i < kept_n; i++)
 			kept[i].is_primary = (i == new_primary);
 		storage_generation++;

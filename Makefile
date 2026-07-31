@@ -158,10 +158,21 @@ SF2000_DTB := $(BUILD_DIR)/sf2000.dtb
 SF2000_BOOT_VISUAL ?= browser
 SF2000_BOOT_COLOR ?= 0x0000
 SF2000_BOOT_HOLD_MS ?= 750
-LINUX_CMDLINE ?= console=ttyS0,115200 earlycon init=/init initramfs_async=0 \
+
+LINUX_DEFAULT_CMDLINE := console=ttyS0,115200 earlycon init=/init initramfs_async=0 \
 	SF2000_BOOT_VISUAL=$(SF2000_BOOT_VISUAL) \
 	SF2000_BOOT_COLOR=$(SF2000_BOOT_COLOR) \
 	SF2000_BOOT_HOLD_MS=$(SF2000_BOOT_HOLD_MS)
+LINUX_CMDLINE ?= $(LINUX_DEFAULT_CMDLINE)
+
+# A diagnostic command line produces a private QEMU/test ASD.  Do not let it
+# overwrite the normal SD-card image that is copied to a physical device.
+ifeq ($(strip $(LINUX_CMDLINE)),$(strip $(LINUX_DEFAULT_CMDLINE)))
+SDCARD_ASD_SYNC_DEFAULT := 1
+else
+SDCARD_ASD_SYNC_DEFAULT := 0
+endif
+SDCARD_ASD_SYNC ?= $(SDCARD_ASD_SYNC_DEFAULT)
 LINUX_LOADER_BLOBS_S := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-blobs.S
 LINUX_LOADER_ENTRY_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX)-entry.o
 LINUX_LOADER_OBJ := $(BUILD_DIR)/linux-loader$(ROOTFS_SUFFIX).o
@@ -1669,11 +1680,16 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
 
+ifeq ($(SDCARD_ASD_SYNC),1)
 linux-asd: $(LINUX_ASD) $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_CHECKSUMS)
 	cmp '$(LINUX_ASD)' '$(SDCARD_LINUX_ASD)'
 	cmp '$(LINUX_ASD)' '$(SDCARD_BIOS_ASD)'
 	cd '$(BUILD_DIR)/sdcard' && sha256sum -c SHA256SUMS
+else
+linux-asd: $(LINUX_ASD)
+	@echo "diagnostic ASD: leaving build/sdcard normal artifacts unchanged"
+endif
 
 linux-buildroot:
 	$(MAKE) ROOTFS=buildroot linux
@@ -1681,9 +1697,15 @@ linux-buildroot:
 linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot linux-asd
 
+ifeq ($(SDCARD_ASD_SYNC),1)
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_BOOT_OPTIONS) $(SDCARD_LOG_TXT) \
 		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) $(SDCARD_CHECKSUMS)
+else
+sdcard-linux:
+	@echo "refusing to assemble an SD card from a diagnostic command line" >&2
+	@exit 2
+endif
 
 sdcard-buildroot:
 	$(MAKE) ROOTFS=buildroot sdcard-linux
@@ -1789,12 +1811,14 @@ gpsp-real-test-sd:
 	mmd -i '$(GPSP_REAL_TEST_SD)' ::/GBA
 	mcopy -i '$(GPSP_REAL_TEST_SD)' '$(GPSP_REAL_ROM)' ::/GBA/TEST.GBA
 
-$(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM)
+$(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
-	mmd -i '$@' ::/GB ::/GBC
+	mmd -i '$@' ::/GB ::/GBC ::/sf2000
 	mcopy -i '$@' '$(BROWSER_TEST_ROM)' '::/GB/TEST GAME.GB'
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$@' Makefile ::/README.TXT
 
 $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
@@ -1824,6 +1848,7 @@ run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 smoke-linux-frontend: run-linux-frontend
 	grep -q 'screen-ready-done' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend launch' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-browser: font loaded path=/mnt/sd/sf2000/ui.ttf' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2158,7 +2183,8 @@ smoke-linux-buildroot-partitioned-storage:
 	truncate -s $$((p2_sectors * 512)) "$$tmp_p2"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_p1" >/dev/null 2>&1; \
 	mkfs.vfat -F 32 -n ROMS "$$tmp_p2" >/dev/null 2>&1; \
-	mmd -i "$$tmp_p1" ::bios ::firmware ::saves; \
+	mmd -i "$$tmp_p1" ::bios ::firmware ::saves ::sf2000; \
+	mcopy -i "$$tmp_p1" Makefile ::sf2000/ui.ttf; \
 	mmd -i "$$tmp_p2" ::GB; \
 	python3 -c "import struct; \
 p1_lba=$$p1_lba; p1_sec=$$p1_sectors; p2_lba=$$p2_lba; p2_sec=$$p2_sectors; \
@@ -2172,6 +2198,7 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -Eq 'mmcblk0: *p1 p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: volume /dev/mmcblk0p1 type=vfat score=457' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sf2000-mount: volume /dev/mmcblk0p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	mcopy -i "$$tmp_sd@@$$((p1_lba * 512))" ::loglinux.txt "$$tmp_log"; \

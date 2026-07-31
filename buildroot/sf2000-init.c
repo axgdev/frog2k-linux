@@ -799,6 +799,8 @@ int main(void)
 	(void)mount_procfs();
 	panel_probe = cmdline_contains("SF2000_PANEL_PROBE=1");
 	fb_test_enabled = cmdline_contains("SF2000_FB_TEST=1");
+	progress_mark(fb_test_enabled ? "init-image-fb-test" : "init-image-normal",
+		0x3eu, INIT_TAG);
 #ifdef PANEL_PROBE_INIT
 	panel_probe = 1;
 #endif
