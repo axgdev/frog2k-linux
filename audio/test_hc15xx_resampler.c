@@ -40,10 +40,12 @@ int main(void)
 		32768, batch_output, 32768) == 32000);
 	assert(hc15xx_resampler_set_output_rate(&batch_state, 32256) == 0);
 	assert(batch_state.output_rate == 32256);
-	assert(hc15xx_resampler_set_output_rate(&batch_state, 32769) < 0);
+	assert(hc15xx_resampler_set_output_rate(&batch_state, 32769) == 0);
 	assert(hc15xx_resampler_process_stereo_s16(&batch_state, stereo,
 		1, batch_output, 0) == 0);
-	assert(hc15xx_resampler_init(&state, 16000, 32000) < 0);
+	assert(hc15xx_resampler_init(&state, 16000, 32000) == 0);
+	assert(hc15xx_resampler_process_stereo_s16(&state, stereo,
+		16000, batch_output, 32768) == 31999);
 	puts("hc15xx resampler tests: PASS");
 	return 0;
 }

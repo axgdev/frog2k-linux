@@ -6,7 +6,7 @@
 int hc15xx_resampler_init(struct hc15xx_resampler *state,
 	uint32_t input_rate, uint32_t output_rate)
 {
-	if (!state || !input_rate || !output_rate || output_rate > input_rate)
+	if (!state || !input_rate || !output_rate)
 		return -1;
 	*state = (struct hc15xx_resampler){
 		.input_rate = input_rate,
@@ -18,7 +18,7 @@ int hc15xx_resampler_init(struct hc15xx_resampler *state,
 int hc15xx_resampler_set_output_rate(struct hc15xx_resampler *state,
 	uint32_t output_rate)
 {
-	if (!state || !output_rate || output_rate > state->input_rate)
+	if (!state || !output_rate)
 		return -1;
 	state->output_rate = output_rate;
 	return 0;
@@ -47,8 +47,7 @@ size_t hc15xx_resampler_process_stereo_s16(struct hc15xx_resampler *state,
 	size_t produced = 0;
 
 	if (!state || (!stereo && frames) || (!mono && capacity) ||
-			!state->input_rate || !state->output_rate ||
-			capacity < frames)
+		!state->input_rate || !state->output_rate || !capacity)
 		return 0;
 	input_rate = state->input_rate;
 	output_rate = state->output_rate;
@@ -59,29 +58,33 @@ size_t hc15xx_resampler_process_stereo_s16(struct hc15xx_resampler *state,
 		int32_t current = ((int32_t)stereo[input * 2] +
 			(int32_t)stereo[input * 2 + 1]) / 2;
 		uint32_t old_phase;
-		uint32_t fraction;
+		uint64_t advanced;
+		uint64_t outputs;
+		uint64_t output_index;
 
 		if (!have_previous) {
+			if (produced >= capacity)
+				break;
 			previous = current;
 			have_previous = 1;
 			mono[produced++] = (int16_t)current;
 			continue;
 		}
 		old_phase = phase;
-		phase += output_rate;
-		if (phase < input_rate) {
-			previous = current;
-			continue;
+		advanced = (uint64_t)old_phase + output_rate;
+		outputs = advanced / input_rate;
+		/* A slow core can require multiple outputs between two inputs. */
+		if (outputs > (uint64_t)capacity - produced)
+			break;
+		for (output_index = 0; output_index < outputs; output_index++) {
+			uint64_t fraction = (uint64_t)input_rate - old_phase +
+				output_index * input_rate;
+			int64_t delta = (int64_t)current - previous;
+
+			mono[produced++] = (int16_t)(previous +
+				delta * (int64_t)fraction / output_rate);
 		}
-		phase -= input_rate;
-		fraction = input_rate - old_phase;
-		/*
-		 * output_rate <= input_rate, so there is at most one output per
-		 * input interval and a frames-sized output is always sufficient.
-		 */
-		mono[produced++] = (int16_t)(previous +
-			(current - previous) * (int32_t)fraction /
-			(int32_t)output_rate);
+		phase = (uint32_t)(advanced - outputs * input_rate);
 		previous = current;
 	}
 	state->phase = phase;

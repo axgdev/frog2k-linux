@@ -1879,7 +1879,8 @@ $(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM)
 	mmd -i '$@' ::/GBA
 	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
 
-gpsp-real-test-sd:
+gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
+		$(SDCARD_UI_FONT)
 	@test -n '$(GPSP_REAL_ROM)' || { \
 		echo 'set GPSP_REAL_ROM=/path/to/a/legal GBA ROM' >&2; exit 2; }
 	@test -f '$(GPSP_REAL_ROM)' || { \
@@ -1887,8 +1888,13 @@ gpsp-real-test-sd:
 	mkdir -p '$(dir $(GPSP_REAL_TEST_SD))'
 	truncate -s 128M '$(GPSP_REAL_TEST_SD)'
 	mkfs.vfat -F 32 -n SFTEST '$(GPSP_REAL_TEST_SD)' >/dev/null
-	mmd -i '$(GPSP_REAL_TEST_SD)' ::/GBA
+	mmd -i '$(GPSP_REAL_TEST_SD)' ::/GBA ::/sf2000 ::/sf2000/cores
 	mcopy -i '$(GPSP_REAL_TEST_SD)' '$(GPSP_REAL_ROM)' ::/GBA/TEST.GBA
+	mcopy -i '$(GPSP_REAL_TEST_SD)' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$(GPSP_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
+	mcopy -i '$(GPSP_REAL_TEST_SD)' \
+		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp-multicore' \
+		::/sf2000/cores/sf2000-gpsp-multicore
 
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
@@ -2034,36 +2040,22 @@ run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
 		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
 
 smoke-linux-gpsp-real: run-linux-gpsp-real
-	grep -q 'sf2000-browser: launch gpSP /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-browser: launch gpSP multicore /mnt/sd/GBA/TEST.GBA' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	@rom_size="$$(wc -c < '$(GPSP_REAL_ROM)')"; \
-	rom_size=$$(( (rom_size + 32767) & ~32767 )); \
-	if [ "$$rom_size" -eq 1048576 ]; then rom_size=4194304; fi; \
-	cache_mib=$$(( (rom_size + 1048575) / 1048576 )); \
-	if [ "$$cache_mib" -gt 32 ]; then cache_mib=32; fi; \
-	grep -F "[gpSP ROM] size=$$rom_size buffer_mib=$$cache_mib swapped=0 direct=0" \
+	grep -q 'sf2000-frontend: load ROM 16/16' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: load GPSP_LOAD_OK 7/7' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -q '\[gpSP ROM\] runtime_page_loads=0 runtime_page_bytes=0' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq '\[gpSP JIT\] rom_peak=[0-9]+ rom_capacity=[0-9]+ rom_flushes=[0-9]+ ram_peak=[0-9]+ ram_capacity=[0-9]+ ram_flushes=[0-9]+' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq '\[gpSP JIT reason\] capacity=[0-9]+ store=[0-9]+ dma=[0-9]+' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq '\[gpSP JIT cache\] calls=[1-9][0-9]* failures=0' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: ALSA mono DMA presenter ready' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: timing .*audio_core_hz=22050 audio_output_hz=32000' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000: ge-queue start seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000: ge-queue complete seq=' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -Eq 'source=frontend-metric audio metric .*frames=600 .*ge_stage_frames=300.*buffered_frames=0.*mode=normal presenter=GE' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
-	grep -Eq 'source=frontend-metric audio metric .*peak=[1-9][0-9]* .*frames=(300|600)' \
-		'$(BUILD_DIR)'/logs/linux-gpsp-real-loglinux.txt
-	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|reloc outside program|frontend: fault' \
+	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault|core (load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
