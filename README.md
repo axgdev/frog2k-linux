@@ -68,9 +68,16 @@ Vietnamese, and Japanese labels.
 
 Additional cores are SD packages, not boot-image payload. `make sdcard-linux`
 stages them below `build/sdcard/sf2000/cores` with their licenses and includes
-them in `SHA256SUMS`. QuickNES is the first packaged core. Opening any `.nes`
-file displays a core chooser containing FCEUmm and QuickNES; the directory
-controls only the initial selection.
+them in `SHA256SUMS`. The current verified packages are QuickNES, ProSystem,
+Snes9x 2005, Snes9x 2002, Stella 2014, Gearboy, and PCE Fast. Opening
+`.nes`, `.sfc`, or `.gb` content displays the corresponding core chooser; the directory
+controls only the initial selection. Gambatte, gpSP, and FCEUmm remain in the
+boot image because they are part of the QEMU launch gates.
+The browser also records a durable log checkpoint immediately before every
+player/core `execve`; START+RIGHT requests the same checkpoint while the
+browser or a running core is active. The logger independently recognizes the
+chord, so it remains available even if a core hangs before its input loop.
+This is useful when a core fails before the normal exit-time logger drain.
 The QEMU `smoke-linux-quicknes` gate uses a ROM filename containing spaces and
 verifies launch, a real 240x224 frame, clean exit, and absence of guest faults.
 

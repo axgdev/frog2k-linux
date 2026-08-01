@@ -197,6 +197,12 @@ SDCARD_SNES9X2005 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-snes9x2005
 SDCARD_SNES9X2005_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/snes9x2005-copyright
 SDCARD_SNES9X2002 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-snes9x2002
 SDCARD_SNES9X2002_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/snes9x2002-copyright.h
+SDCARD_STELLA2014 := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-stella2014
+SDCARD_STELLA2014_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/stella2014-license.txt
+SDCARD_GEARBOY := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gearboy
+SDCARD_GEARBOY_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/gearboy-LICENSE
+SDCARD_PCE_FAST := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-pce-fast
+SDCARD_PCE_FAST_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/pce-fast-COPYING
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -1618,7 +1624,7 @@ $(SDCARD_BOOT_OPTIONS): Makefile
 		printf '  Boot visual: %s, RGB565 color: %s, hold: %s ms.\n\n' \
 			'$(SF2000_BOOT_VISUAL)' '$(SF2000_BOOT_COLOR)' '$(SF2000_BOOT_HOLD_MS)'; \
 		printf 'Runtime controls:\n'; \
-		printf '  START+SELECT opens the pause/options menu while a core is running.\n'; \
+		printf '  START+SELECT opens the pause/options menu; START+RIGHT saves logs.\n'; \
 		printf '  Use Reset or Safe Shutdown from the home menu for ordered storage handling.\n'; \
 	} > '$@'
 
@@ -1654,6 +1660,12 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_SNES9X2005)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-snes9x2002 \
 		'$(SDCARD_SNES9X2002)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-stella2014 \
+		'$(SDCARD_STELLA2014)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-gearboy \
+		'$(SDCARD_GEARBOY)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-pce-fast \
+		'$(SDCARD_PCE_FAST)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
 		'$(SDCARD_QUICKNES_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/prosystem-LICENSE \
@@ -1662,6 +1674,12 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_SNES9X2005_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/snes9x2002-copyright.h \
 		'$(SDCARD_SNES9X2002_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/stella2014-license.txt \
+		'$(SDCARD_STELLA2014_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/gearboy-LICENSE \
+		'$(SDCARD_GEARBOY_LICENSE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/pce-fast-COPYING \
+		'$(SDCARD_PCE_FAST_LICENSE)'
 	touch '$@'
 
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -1674,10 +1692,16 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		sf2000/cores/sf2000-prosystem \
 		sf2000/cores/sf2000-snes9x2005 \
 		sf2000/cores/sf2000-snes9x2002 \
+		sf2000/cores/sf2000-stella2014 \
+		sf2000/cores/sf2000-gearboy \
+		sf2000/cores/sf2000-pce-fast \
 		sf2000/cores/licenses/quicknes-LICENSE \
 		sf2000/cores/licenses/prosystem-LICENSE \
 		sf2000/cores/licenses/snes9x2005-copyright \
-		sf2000/cores/licenses/snes9x2002-copyright.h > SHA256SUMS
+		sf2000/cores/licenses/snes9x2002-copyright.h \
+		sf2000/cores/licenses/stella2014-license.txt \
+		sf2000/cores/licenses/gearboy-LICENSE \
+		sf2000/cores/licenses/pce-fast-COPYING > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
@@ -1833,8 +1857,10 @@ $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
 
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
+	(sleep 5; printf 'sendkey ret-right 500\n'; sleep 1; \
+	printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey backspace-ret 500\n'; sleep 1; \
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
@@ -1863,7 +1889,11 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-frontend.log
 	awk '/sf2000-frontend: ROM load complete/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -q 'Kernel panic' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-frontend: frontend running START+SELECT opens pause and core options' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'sf2000-frontend: frontend running START+SELECT pauses; START+RIGHT saves logs' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -q 'source=logd log flush checkpoint reason=pre-core-launch' \
+		'$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
+	grep -q 'source=logd log flush checkpoint reason=START+RIGHT' \
+		'$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause GE fence complete pending=1' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -1884,7 +1914,8 @@ smoke-linux-frontend: run-linux-frontend
 run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey backspace-ret 500\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey left 100\n'; \
 		sleep 1; printf 'sendkey z 100\n'; sleep 6; \
@@ -1910,6 +1941,8 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-logd: RAM journal drained after frontend exit' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	awk '/sf2000-frontend: ROM load begin/{active=1} /sf2000-frontend: returned cleanly/{active=0} active && /name=hc15-write-op/{bad=1} END{exit bad}' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000-frontend: ROM load begin' '$(BUILD_DIR)'/logs/linux-gpsp.log
+	grep -q 'source=logd log flush checkpoint reason=pre-core-launch' \
+		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'sf2000-frontend: ROM load complete' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q '\[gpSP ROM\] size=4194304 buffer_mib=4 swapped=0 direct=0' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-gpsp.log
@@ -2000,7 +2033,8 @@ run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 5; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey backspace-ret 500\n'; sleep 1; \
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 3; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey down 100\n'; sleep 1; \

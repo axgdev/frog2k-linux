@@ -107,6 +107,8 @@ make smoke-linux-gpsp
 make smoke-linux-gpsp-smc
 make smoke-linux-frontend-lifecycle
 make smoke-linux-player
+make smoke-linux-frontend
+make smoke-linux-gpsp-real GPSP_REAL_ROM=/path/to/game.gba
 ```
 
 Read logs safely and summarize performance:
@@ -122,6 +124,13 @@ audio errors, pacing resets, sampled core/present time, presenter, JIT
 invalidation reasons, and cache-sync failures. Compare the same ROM, scene,
 duration, clock, and build. Capped FPS measures behavior; uncapped full-frame
 FPS measures capacity.
+
+When a physical core fails before it reaches clean shutdown, press START+RIGHT
+once and power-cycle only if necessary. The logger writes a `log flush
+checkpoint reason=START+RIGHT` record to `/loglinux.txt`; launch paths also
+write `reason=pre-core-launch` automatically. For UI corruption, START+UP
+writes `ui-diagnostic.bin`, whose source, GE, and CPU image hashes distinguish
+font/framebuffer corruption from a presentation mismatch.
 
 Outputs outside the repository are deliberate:
 

@@ -20,6 +20,8 @@
 #define PERFORMANCE_MARKER "/run/sf2000-performance-active"
 #define PERFORMANCE_READY_MARKER "/run/sf2000-performance-ready"
 #define PERFORMANCE_METRICS_PATH "/run/sf2000-frontend-metrics"
+#define LOG_FLUSH_REQUEST "/run/sf2000-log-flush-request"
+#define LOG_FLUSH_DONE "/run/sf2000-log-flush-done"
 #define LOG_PATH "/mnt/sd/loglinux.txt"
 #define LOG_BUFFER_SIZE (512u * 1024u)
 #define LOG_FLUSH_BYTES (128u * 1024u)
@@ -38,6 +40,8 @@ static unsigned performance_metric_records;
 static size_t performance_metric_bytes;
 static long ticks_per_second = 100;
 static unsigned mount_generation;
+static unsigned log_chord_keys;
+static unsigned log_chord_latched;
 
 static int stop_requested(void)
 {
@@ -102,6 +106,37 @@ static int sync_log(void)
 	if (flush_log() != 0)
 		return -1;
 	return log_fd < 0 ? 0 : fsync(log_fd);
+}
+
+/* A manual checkpoint is intentionally allowed during a performance session.
+ * Normal playback keeps FAT writes deferred, but START+RIGHT and the browser
+ * pre-launch boundary explicitly trade a small one-shot I/O cost for a log
+ * that survives a core which never reaches clean shutdown. */
+static int force_flush_log(void)
+{
+	if (log_fd < 0)
+		return -1;
+	if (log_used) {
+		if (write_all(log_fd, log_buffer, log_used) != 0)
+			return -1;
+		log_used = 0;
+	}
+	return fsync(log_fd);
+}
+
+static void append_record(const char *source, const char *payload,
+	size_t payload_length);
+
+static int checkpoint_log(const char *reason)
+{
+	char message[160];
+
+	if (!reason || !reason[0])
+		reason = "unspecified";
+	snprintf(message, sizeof(message), "log flush checkpoint reason=%s",
+		reason);
+	append_record("logd", message, strlen(message));
+	return force_flush_log();
 }
 
 static int performance_active(void)
@@ -350,12 +385,68 @@ static void drain_input_fds(int fds[INPUT_FDS])
 
 			if (length > 0)
 				append_record("input", line, (size_t)length);
+			if (event.type == EV_KEY &&
+					(event.code == BTN_START ||
+						event.code == BTN_DPAD_RIGHT)) {
+				unsigned bit = event.code == BTN_START ? 1u : 2u;
+
+				if (event.value)
+					log_chord_keys |= bit;
+				else {
+					log_chord_keys &= ~bit;
+					log_chord_latched = 0;
+				}
+				if (event.value && log_chord_keys == 3u &&
+						!log_chord_latched) {
+					log_chord_latched = 1;
+					if (checkpoint_log("START+RIGHT") != 0)
+						kmsg_line("START+RIGHT log flush failed\n");
+					else
+						kmsg_line("START+RIGHT log flush complete\n");
+				}
+			}
 		}
 		if (got < 0 && errno != EAGAIN && errno != EINTR) {
 			close(fds[i]);
 			fds[i] = -1;
 		}
 	}
+}
+
+static void service_flush_request(void)
+{
+	char reason[96];
+	ssize_t got;
+	int request;
+	int done;
+	int status = 0;
+
+	request = open(LOG_FLUSH_REQUEST, O_RDONLY | O_CLOEXEC);
+	if (request < 0)
+		return;
+	got = read(request, reason, sizeof(reason) - 1u);
+	close(request);
+	(void)unlink(LOG_FLUSH_REQUEST);
+	if (got < 0)
+		got = 0;
+	reason[got] = 0;
+	if (!got)
+		strcpy(reason, "unspecified");
+	if (checkpoint_log(reason) != 0)
+		status = -1;
+	done = open(LOG_FLUSH_DONE, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+		0644);
+	if (done >= 0) {
+		const char *result = status ? "error\n" : "ok\n";
+
+		(void)write_all(done, result, strlen(result));
+		(void)fsync(done);
+		close(done);
+	}
+	if (status)
+		kmsg_line("log flush checkpoint failed\n");
+	else
+		kmsg_line("log flush checkpoint complete\n");
 }
 
 static unsigned read_mount_generation(void)
@@ -528,6 +619,7 @@ int main(void)
 				append_record("kmsg", kmsg, (size_t)got);
 		}
 		drain_input_fds(input_fds);
+		service_flush_request();
 		now = monotonic_us();
 		if (active) {
 			/*

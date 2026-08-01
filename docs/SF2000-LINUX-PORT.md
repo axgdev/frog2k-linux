@@ -316,7 +316,11 @@ was flushed. This is distinct from the fixed DMA corruption: the card remains
 readable and a filesystem check clears the dirty state. Reset and Safe
 Shutdown ask init to stop and flush the logger, `sync()`, unmount `/mnt/sd`,
 and invoke the appropriate kernel path. START+SELECT opens the in-core pause
-menu.
+menu. START+RIGHT forces the logger to commit a checkpoint to
+`/loglinux.txt`; the same commit is performed automatically immediately before
+a player or libretro core is executed. The request is serviced by
+`sf2000-logd` outside the emulation loop, so early core failures still leave
+the launch boundary and preceding records on the card.
 
 ## Input, audio, and USB
 
