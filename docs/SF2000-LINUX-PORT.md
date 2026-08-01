@@ -42,11 +42,14 @@ Programs using `vfork()`/`exec()`, threads supported by the selected uClibc
 configuration, ordinary files, evdev, ALSA, and fbdev can be ported. Keep
 executables small: on NOMMU each program is allocated as a contiguous image,
 so a tiny dedicated helper starts much faster than a large multi-call binary.
-The integrated FCEUmm static PIE spans about 4.9 MiB, above the default 4 MiB
-buddy-allocation ceiling. The kernel therefore uses
-`ARCH_FORCE_MAX_ORDER=11`, permitting an 8 MiB allocation. This does not
-reserve 8 MiB: memory stays available to all processes until an executable
-requests a large contiguous image. The QEMU FCEUmm smoke guards this contract.
+Static PIE images are contiguous allocations on NOMMU. The packaged QPSX and
+MAME images are about 11 MiB and FB Alpha is about 20 MiB, so the kernel uses
+`ARCH_FORCE_MAX_ORDER=13`, permitting a 32 MiB allocation for the largest core
+plus its stack. This does not reserve 32 MiB: memory stays available to all
+processes until an executable requests a large contiguous image. The QEMU
+loader smokes and ELF audit guard this contract. Raising this ceiling is the
+general solution; per-core free-memory checks remain useful user feedback, but
+cannot make an image fit under a smaller buddy order.
 Static PIE relocation is performed by the kernel before entry. The loader
 accepts only symbol-free MIPS `R_MIPS_REL32` relocations and rejects
 `PT_INTERP`, malformed ranges, and unsupported relocation kinds.

@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SF2000 Linux maintainers <sf2000@example.invalid>
+Date: Sat, 1 Aug 2026 00:00:00 +0000
+Subject: [PATCH] sf2000 pcm: repeat last period while producer is starved
+
+SND0 stops consuming when its producer and consumer cursors meet.  On a
+slowly emulated frame this turns into an audible gap and the userspace ALSA
+client has to recover the stream.  Keep the DAC clock running by copying the
+last complete submitted period into the next ring position until userspace
+publishes new samples.  The repeat is only a continuity concealment path; a
+new application pointer immediately takes ownership again.
+
+This is preferable to injecting silence because the SF2000 amplifier's
+hardware fade makes a stop/start audible even when the userspace ring is
+otherwise healthy.
+---
+ sound/drivers/sf2000-pcm.c | 88 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 88 insertions(+)
+
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -73,6 +73,12 @@
+ 	bool running;
+ 	u16 target_producer;
+ 	u16 published_producer;
++	snd_pcm_uframes_t last_appl_ptr;
++	u16 concealment_end;
++	u16 concealment_bytes;
++	bool concealment_valid;
++	bool concealing;
++	u8 concealment[SF2000_PERIOD_MAX];
+ 	bool ever_armed;
+ };
+ 
+@@ -202,6 +208,62 @@
+ 		(void)sf2000_pcm_arm_if_pending(chip);
+ }
+ 
++static void sf2000_pcm_capture_concealment(struct sf2000_pcm *chip,
++		struct snd_pcm_runtime *runtime)
++{
++	size_t buffer_bytes = frames_to_bytes(runtime, runtime->buffer_size);
++	size_t end = (size_t)chip->target_producer << 4;
++	size_t period_bytes = frames_to_bytes(runtime, runtime->period_size);
++	size_t start;
++	size_t first;
++
++	if (!runtime->dma_area || !buffer_bytes || end >= buffer_bytes ||
++			period_bytes > sizeof(chip->concealment) ||
++			period_bytes > buffer_bytes)
++		return;
++	start = (end + buffer_bytes - period_bytes) % buffer_bytes;
++	first = buffer_bytes - start;
++	if (first > period_bytes)
++		first = period_bytes;
++	memcpy(chip->concealment, runtime->dma_area + start, first);
++	if (first < period_bytes)
++		memcpy(chip->concealment + first, runtime->dma_area,
++			period_bytes - first);
++	chip->concealment_bytes = period_bytes;
++	chip->concealment_valid = true;
++}
++
++static bool sf2000_pcm_repeat_concealment(struct sf2000_pcm *chip,
++		struct snd_pcm_runtime *runtime, u16 consumer)
++{
++	size_t buffer_bytes = frames_to_bytes(runtime, runtime->buffer_size);
++	size_t consumer_bytes = (size_t)consumer << 4;
++	size_t first;
++	u16 producer;
++
++	if (!chip->concealment_valid || !runtime->dma_area ||
++			!chip->concealment_bytes || !buffer_bytes ||
++			consumer_bytes >= buffer_bytes ||
++			chip->concealment_bytes > buffer_bytes)
++		return false;
++	first = buffer_bytes - consumer_bytes;
++	if (first > chip->concealment_bytes)
++		first = chip->concealment_bytes;
++	memcpy(runtime->dma_area + consumer_bytes, chip->concealment, first);
++	if (first < chip->concealment_bytes)
++		memcpy(runtime->dma_area, chip->concealment + first,
++			chip->concealment_bytes - first);
++	producer = (u16)(((consumer_bytes + chip->concealment_bytes) /
++			16) % (buffer_bytes / 16));
++	chip->concealment_end = producer;
++	chip->target_producer = producer;
++	chip->published_producer = producer;
++	chip->concealing = true;
++	dma_wmb();
++	writew(producer, chip->snd + SF2000_SND_DMA_POS);
++	return sf2000_pcm_arm_if_pending(chip);
++}
++
+ static bool sf2000_pcm_ack_events(struct sf2000_pcm *chip)
+ {
+ 	u32 ctl08 = readl(chip->snd + SF2000_SND_CTL08);
+@@ -263,6 +325,11 @@
+ 	size_t pos;
+ 	u16 consumer;
+ 	bool pending;
++	bool advanced = appl_ptr != chip->last_appl_ptr;
++
++	if (chip->concealing && !advanced)
++		return 0;
++	chip->last_appl_ptr = appl_ptr;
+ 
+ 	/*
+ 	 * SND0 packs two 16-byte DMA cursors into offset 0x38.  Software
+@@ -282,6 +349,11 @@
+ 	} else {
+ 		chip->published_producer = chip->target_producer;
+ 	}
++	if (snd_pcm_playback_hw_avail(runtime) >= runtime->period_size)
++		sf2000_pcm_capture_concealment(chip, runtime);
++	if (chip->concealing && chip->target_producer !=
++			chip->concealment_end)
++		chip->concealing = false;
+ 	dma_wmb();
+ 	writew(chip->published_producer, chip->snd + SF2000_SND_DMA_POS);
+ 	if (sf2000_pcm_arm_if_pending(chip) && chip->ever_armed)
+@@ -317,6 +389,15 @@
+ 
+ 	if (chip->irq < 0)
+ 		(void)sf2000_pcm_ack_events(chip);
++	if (chip->running && substream) {
++		u16 consumer = readw(chip->snd + SF2000_SND_DMA_POS + 2);
++		bool pending = snd_pcm_playback_hw_avail(substream->runtime) > 0;
++
++		if (!pending && chip->ever_armed &&
++				chip->target_producer == consumer)
++			(void)sf2000_pcm_repeat_concealment(chip,
++				substream->runtime, consumer);
++	}
+ 	sf2000_pcm_service_guard(chip);
+ 	rearmed = sf2000_pcm_arm_if_pending(chip);
+ 	if (rearmed && chip->ever_armed)
+@@ -401,8 +482,13 @@
+ 	writew(runtime->period_size, chip->snd + SF2000_SND_PERIOD);
+ 	writew(0, chip->snd + SF2000_SND_DMA_POS);
+ 	chip->last_period = 0;
++	chip->last_appl_ptr = READ_ONCE(runtime->control->appl_ptr);
+ 	chip->target_producer = 0;
+ 	chip->published_producer = 0;
++	chip->concealment_end = 0;
++	chip->concealment_bytes = 0;
++	chip->concealment_valid = false;
++	chip->concealing = false;
+ 	chip->ever_armed = false;
+ 	dev_info_once(chip->dev,
+ 		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",

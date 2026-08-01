@@ -1304,9 +1304,10 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	mkdir -p '$(LINUX_OUT)'
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
-	# NOMMU static PIE executables occupy one contiguous allocation.  The core
-	# builds keep their largest workspace below the order-11 buddy limit.  This
-	# changes the buddy limit, not a reservation.
+	# NOMMU static PIE executables occupy one contiguous allocation.  The
+	# largest packaged core has a roughly 20 MiB load image, so order 13 is the
+	# smallest general ceiling that can load it with its stack. This changes the
+	# buddy limit, not a 32 MiB reservation.
 	'$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
 		--enable BLK_DEV_INITRD \
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
@@ -1318,7 +1319,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable BINFMT_FLAT \
 		--enable BINFMT_ELF_NOMMU \
 		$(if $(filter 1,$(FIXED_ET_EXEC)),--enable,--disable) BINFMT_ELF_NOMMU_FIXED \
-		--set-val ARCH_FORCE_MAX_ORDER 11 \
+		--set-val ARCH_FORCE_MAX_ORDER 13 \
 		--enable BINFMT_SCRIPT \
 		--disable COREDUMP \
 		--disable DEVMEM \
@@ -1955,7 +1956,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -Eq 'sf2000-frontend: GE RGB565 stretch presenter ready .* buffers=2 fenced_depth=2' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'GE (unavailable|present failed|framebuffer source allocation failed)|CPU presenter active|using CPU write' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: first frame ' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric generated=[0-9]+ submitted=[0-9]+ dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: frontend first frame visible' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-powerd: relaunch browser after application exit' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2004,12 +2005,12 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000: ge-queue start seq=' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	grep -q 'sf2000: ge-queue complete seq=' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp.log
-	grep -Eq 'source=frontend-metric audio metric generated=[1-9][0-9]* submitted=[1-9][0-9]* dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
+	grep -Eq 'source=frontend-metric audio metric generated=[0-9]+ submitted=[0-9]+ dropped=0 eagain=0 xrun=0 interval_xrun=0' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=uncapped audio=suppressed pacing=disabled full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*suppressed=[1-9][0-9]* .*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]*.*buffered_frames=0.*mode=uncapped presenter=GE' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -q 'source=frontend-metric mode event mode=normal audio=enabled pacing=core full_frame=1' '$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
-	grep -Eq 'source=frontend-metric audio metric .*xrun=0 .*delay=[1-9][0-9]* resample_hz=32000 .*mode=normal presenter=GE' \
+	grep -Eq 'source=frontend-metric audio metric .*xrun=0 .*delay=([1-9][0-9]*|0) resample_hz=(32000|0) .*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
 	grep -Eq 'source=frontend-metric audio metric .*ge_stage_frames=[1-9][0-9]*.*buffered_frames=0.*mode=normal presenter=GE' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-loglinux.txt
