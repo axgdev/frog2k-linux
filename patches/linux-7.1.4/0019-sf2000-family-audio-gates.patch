@@ -1,0 +1,38 @@
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -37,6 +37,10 @@
+ #define SF2000_GPIO_R_DIR	0xf8
+ #define SF2000_PINMUX_R07	0x4e7
+ #define SF2000_AMP_R07		BIT(7)
++#define SF2000_GPIO_L_OUT	0x54
++#define SF2000_GPIO_L_DIR	0x58
++#define SF2000_PINMUX_L15	0x4af
++#define SF2000_AMP_L15		BIT(15)
+ #define SF2000_DMA_CHANNEL_MASK	GENMASK(17, 16)
+ #define SF2000_DMA_FORMAT_MASK	GENMASK(21, 20)
+ #define SF2000_DMA_MONO_PACK	BIT(24)
+@@ -109,6 +113,24 @@
+ static void sf2000_amp_enable(struct sf2000_pcm *chip, bool enable)
+ {
+ 	u32 value;
++	u32 lvalue;
++
++	/*
++	 * The family has two physical amplifier gates: SF2000 uses R07 and
++	 * GB300 uses L15. Linux cannot rely on the vendor bootloader's board
++	 * handoff marker, and swapped-screen units retain the board wiring, so
++	 * drive both documented active-low gates. Only the connected gate has
++	 * an amplifier behind it.
++	 */
++	writeb(0, chip->sys + SF2000_PINMUX_L15);
++	lvalue = readl(chip->sys + SF2000_GPIO_L_DIR);
++	writel(lvalue | SF2000_AMP_L15, chip->sys + SF2000_GPIO_L_DIR);
++	lvalue = readl(chip->sys + SF2000_GPIO_L_OUT);
++	if (enable)
++		lvalue &= ~SF2000_AMP_L15;
++	else
++		lvalue |= SF2000_AMP_L15;
++	writel(lvalue, chip->sys + SF2000_GPIO_L_OUT);
+ 
+ 	/* SF2000's mono amplifier enable is GPIO R07, active low. */
+ 	writeb(0, chip->sys + SF2000_PINMUX_R07);

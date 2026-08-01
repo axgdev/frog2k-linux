@@ -6,7 +6,7 @@ static char *argv[] = { path, 0 };
 static char env_home[] = "HOME=/";
 static char env_path[] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin";
 static char env_term[] = "TERM=linux";
-static char env_pad_profile[] = "SF2000_PAD_PROFILE=sf2000";
+static char env_pad_profile[] = "SF2000_PAD_PROFILE=auto";
 static char env_screen[] = "SF2000_SCREEN=0";
 static char env_heartbeat[] = "SF2000_HEARTBEAT=0";
 static char env_panel_probe[] = "SF2000_PANEL_PROBE=1";

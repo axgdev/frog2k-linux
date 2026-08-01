@@ -94,7 +94,7 @@ struct progress_log {
 };
 
 static char *const screen_argv[] = { "/usr/sbin/sf2000-screen", 0 };
-static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "sf2000", 0 };
+static char *const pad_argv[] = { "/usr/sbin/sf2000-pad", "auto", 0 };
 static char *const powerd_argv[] = { "/usr/sbin/sf2000-powerd", 0 };
 static char *const audio_argv[] = { "/usr/sbin/sf2000-audio", 0 };
 static char *const logd_argv[] = { "/usr/sbin/sf2000-logd", 0 };
@@ -107,7 +107,7 @@ static char *const init_envp[] = {
 	"HOME=/",
 	"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
 	"TERM=linux",
-	"SF2000_PAD_PROFILE=sf2000",
+	"SF2000_PAD_PROFILE=auto",
 	"SF2000_SCREEN=0",
 	"SF2000_HEARTBEAT=0",
 	0

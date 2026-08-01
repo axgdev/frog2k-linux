@@ -2558,9 +2558,27 @@ static int panel_init_sf2000_original_order(void)
 	panel_aux = panel_read_sf2000_aux_id();
 	progress_mark("screen-panel-id", 0x3fu, panel_id);
 	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
+	{
+		char panel_marker[32];
+
+		snprintf(panel_marker, sizeof(panel_marker), "0x%06x\n",
+			panel_id & 0xffffffu);
+		publish_marker("/run/sf2000-panel-id", panel_marker);
+	}
 	panel_apply_init_sequence(st7789_sf2000_init);
 	panel_restart_frame();
 	panel_cmd(ST7789_DISPON);
+	if ((panel_id & 0xffffffu) == 0x009306u) {
+		/* Vendor driver: SF2000-safe init first, then reset and GB300 panel. */
+		log_line("sf2000-screen: detected GB300 panel, restarting with 009306 init\n");
+		panel_reset();
+		panel_control_pinmux();
+		panel_config_outputs();
+		panel_apply_init_sequence(st7789_009306_init);
+		panel_cmd(ST7789_DISPON);
+		panel_restart_frame();
+		variant = &panel_variants[5];
+	}
 	snprintf(line, sizeof(line),
 		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
 		panel_id & 0xffffffu, panel_aux, variant->name);

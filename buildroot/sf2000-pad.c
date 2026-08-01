@@ -40,12 +40,14 @@
 #define GPIO_L_IN_OFF 0x50u
 #define GPIO_L_OUT_OFF 0x54u
 #define GPIO_L_DIR_OFF 0x58u
+#define GPIO_R_IN_OFF 0xb0u
 
 #define PIN_L23 23u
 #define PIN_L24 24u
 #define PIN_L25 25u
 #define PIN_L26 26u
 #define PIN_L27 27u
+#define PIN_R07 7u
 
 #define KEY_SHIFTER_BITS 16u
 #define KEY_SHIFTER_LOAD_SPINS 300u
@@ -61,8 +63,11 @@
 #define SYSTEM_CONFIG "/etc/sf2000.conf"
 #define USER_CONFIG "/mnt/sd/sf2000.conf"
 #define DEFAULT_STANDBY_POLL_MS 2000u
+#define BOARD_SCAN_POLLS 3u
+#define BOARD_GB300_KEY_MASK ((1u << KEY_SHIFTER_BITS) - 1u)
 
 enum pad_profile {
+	PAD_PROFILE_AUTO,
 	PAD_PROFILE_SF2000,
 	PAD_PROFILE_STOCK_BITS,
 };
@@ -298,7 +303,7 @@ static uint32_t scan_sf2000(void)
 	return raw_mask;
 }
 
-static uint32_t scan_stock_bits(void)
+static uint32_t scan_stock_bits_raw(void)
 {
 	uint32_t raw_mask = 0;
 	unsigned i;
@@ -328,7 +333,12 @@ static uint32_t scan_stock_bits(void)
 		delay_spins(KEY_SHIFTER_CLOCK_HIGH_SPINS);
 	}
 
-	return normalize_stock_bits(raw_mask);
+	return raw_mask;
+}
+
+static uint32_t scan_stock_bits(void)
+{
+	return normalize_stock_bits(scan_stock_bits_raw());
 }
 
 static uint32_t scan_buttons(enum pad_profile profile)
@@ -451,6 +461,8 @@ static void log_button_state(uint32_t mask)
 
 static enum pad_profile parse_profile(const char *name)
 {
+	if (!name || !strcmp(name, "auto"))
+		return PAD_PROFILE_AUTO;
 	if (name && (!strcmp(name, "stock-bits") || !strcmp(name, "gb300") ||
 			!strcmp(name, "dy12") || !strcmp(name, "dy14")))
 		return PAD_PROFILE_STOCK_BITS;
@@ -459,7 +471,69 @@ static enum pad_profile parse_profile(const char *name)
 
 static const char *profile_name(enum pad_profile profile)
 {
+	if (profile == PAD_PROFILE_AUTO)
+		return "auto";
 	return profile == PAD_PROFILE_STOCK_BITS ? "stock-bits" : "sf2000";
+}
+
+static enum pad_profile detect_board_profile(void)
+{
+	uint32_t sf_and = (1u << ARRAY_SIZE(buttons)) - 1u;
+	uint32_t sf_or = 0;
+	uint32_t gb_and = BOARD_GB300_KEY_MASK;
+	uint32_t gb_or = 0;
+	uint32_t l_in = mmio_read32(GPIO_L_IN_OFF);
+	uint32_t r_in = mmio_read32(GPIO_R_IN_OFF);
+	unsigned sf_score = 0;
+	unsigned gb_score = 0;
+	unsigned i;
+	enum pad_profile profile;
+	char line[192];
+
+	/* Match the bootloader fingerprint: three stable reads of each bus. */
+	for (i = 0; i < BOARD_SCAN_POLLS; i++) {
+		uint32_t raw = scan_sf2000();
+
+		sf_and &= raw;
+		sf_or |= raw;
+	}
+	for (i = 0; i < BOARD_SCAN_POLLS; i++) {
+		uint32_t raw = scan_stock_bits_raw();
+
+		gb_and &= raw;
+		gb_or |= raw;
+	}
+
+	if (gb_and == BOARD_GB300_KEY_MASK && gb_or == BOARD_GB300_KEY_MASK)
+		sf_score += 2u;
+	else if (gb_and == 0 && gb_or == 0)
+		gb_score += 2u;
+	else if (gb_or != BOARD_GB300_KEY_MASK)
+		gb_score++;
+	if (l_in & (1u << PIN_L27))
+		gb_score++;
+	else
+		sf_score++;
+	if (r_in & (1u << PIN_R07))
+		sf_score++;
+	else
+		gb_score++;
+
+	if (sf_score >= 2u && sf_score >= gb_score + 2u)
+		profile = PAD_PROFILE_SF2000;
+	else if (gb_score >= 2u && gb_score >= sf_score + 2u)
+		profile = PAD_PROFILE_STOCK_BITS;
+	else
+		profile = PAD_PROFILE_SF2000;
+
+	snprintf(line, sizeof(line),
+		"sf2000-pad: board detect profile=%s sf_score=%u gb_score=%u "
+		"sf_and=0x%03x sf_or=0x%03x gb_and=0x%04x gb_or=0x%04x "
+		"l27=%u r07=%u\n",
+		profile_name(profile), sf_score, gb_score, sf_and, sf_or,
+		gb_and, gb_or, (l_in >> PIN_L27) & 1u, (r_in >> PIN_R07) & 1u);
+	log_line(line);
+	return profile;
 }
 
 static int map_sysio(void)
@@ -531,6 +605,8 @@ int main(int argc, char **argv)
 
 	if (map_sysio() != 0)
 		return 1;
+	if (profile == PAD_PROFILE_AUTO)
+		profile = detect_board_profile();
 
 	uinput_fd = setup_uinput();
 	if (uinput_fd < 0)
