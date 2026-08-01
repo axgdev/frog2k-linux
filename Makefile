@@ -203,6 +203,45 @@ SDCARD_GEARBOY := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gearboy
 SDCARD_GEARBOY_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/gearboy-LICENSE
 SDCARD_PCE_FAST := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-pce-fast
 SDCARD_PCE_FAST_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/pce-fast-COPYING
+SDCARD_MUFROG_CORES := \
+	sf2000-gpsp-multicore \
+	sf2000-picodrive \
+	sf2000-qpsx \
+	sf2000-mame2000 \
+	sf2000-fbalpha2012 \
+	sf2000-a5200 \
+	sf2000-atari800lib \
+	sf2000-handy \
+	sf2000-race \
+	sf2000-beetle-cygne \
+	sf2000-gearcoleco \
+	sf2000-frodo \
+	sf2000-fake08 \
+	sf2000-bluemsx \
+	sf2000-snes9x2005-prosty \
+	sf2000-snes9x2002-prosty \
+	sf2000-gambatte-prosty \
+	sf2000-quicknes-prosty \
+	sf2000-fceumm-prosty
+SDCARD_MUFROG_LICENSES := \
+	gpsp-multicore-COPYING \
+	picodrive-COPYING \
+	qpsx-LICENSE \
+	fbalpha2012-COPYING \
+	a5200-License.txt \
+	atari800lib-COPYING \
+	handy-license.txt \
+	race-license.txt \
+	beetle-cygne-COPYING \
+	gearcoleco-LICENSE \
+	frodo-COPYING \
+	fake08-LICENSE.MD \
+	bluemsx-license.txt \
+	snes9x2005-prosty-copyright \
+	snes9x2002-prosty-copyright.h \
+	gambatte-prosty-COPYING \
+	quicknes-prosty-LICENSE \
+	fceumm-prosty-Copying
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -1647,7 +1686,8 @@ $(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
 $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/quicknes \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
-		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile
+		'$(FRONTEND_PROJECT)'/patches/mufrog \
+		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile
 	$(MAKE) -C '$(FRONTEND_PROJECT)' core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	rm -rf '$(dir $@)'
@@ -1666,6 +1706,11 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_GEARBOY)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-pce-fast \
 		'$(SDCARD_PCE_FAST)'
+	set -eu; \
+	for core in $(SDCARD_MUFROG_CORES); do \
+		cp '$(FRONTEND_PROJECT)'/build/core-packages/$$core \
+			'$(BUILD_DIR)/sdcard/sf2000/cores/'$$core; \
+	done
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
 		'$(SDCARD_QUICKNES_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/prosystem-LICENSE \
@@ -1680,6 +1725,11 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_GEARBOY_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/pce-fast-COPYING \
 		'$(SDCARD_PCE_FAST_LICENSE)'
+	set -eu; \
+	for license in $(SDCARD_MUFROG_LICENSES); do \
+		cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/$$license \
+			'$(BUILD_DIR)/sdcard/sf2000/cores/licenses/'$$license; \
+	done
 	touch '$@'
 
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -1701,7 +1751,9 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		sf2000/cores/licenses/snes9x2002-copyright.h \
 		sf2000/cores/licenses/stella2014-license.txt \
 		sf2000/cores/licenses/gearboy-LICENSE \
-		sf2000/cores/licenses/pce-fast-COPYING > SHA256SUMS
+		sf2000/cores/licenses/pce-fast-COPYING \
+		$(foreach core,$(SDCARD_MUFROG_CORES),sf2000/cores/$(core)) \
+		$(foreach license,$(SDCARD_MUFROG_LICENSES),sf2000/cores/licenses/$(license)) > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
