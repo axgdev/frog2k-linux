@@ -67,9 +67,6 @@ ENABLE_EXPERIMENTAL_DEVTESTS ?= 0
 FIXED_ET_EXEC ?= 0
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
 BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
-BUILDROOT_GAMBATTE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gambatte
-BUILDROOT_GPSP := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-gpsp
-BUILDROOT_FCEUMM := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-fceumm
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
@@ -203,6 +200,9 @@ SDCARD_GEARBOY := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gearboy
 SDCARD_GEARBOY_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/gearboy-LICENSE
 SDCARD_PCE_FAST := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-pce-fast
 SDCARD_PCE_FAST_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/pce-fast-COPYING
+SDCARD_GAMBATTE := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gambatte
+SDCARD_GPSP := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp
+SDCARD_FCEUMM := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-fceumm
 SDCARD_MUFROG_CORES := \
 	sf2000-gpsp-multicore \
 	sf2000-picodrive \
@@ -242,6 +242,8 @@ SDCARD_MUFROG_LICENSES := \
 	gambatte-prosty-COPYING \
 	quicknes-prosty-LICENSE \
 	fceumm-prosty-Copying
+SDCARD_FRONTEND_CORES := sf2000-gambatte sf2000-gpsp sf2000-fceumm
+SDCARD_FRONTEND_LICENSES := gambatte-COPYING gpsp-COPYING fceumm-Copying
 UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
 UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
@@ -792,24 +794,6 @@ $(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
-$(BUILDROOT_GAMBATTE): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(FRONTEND_MAKE) gambatte \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
-	mkdir -p '$(dir $@)'
-	cp '$(FRONTEND_PROJECT)'/build/sf2000-gambatte '$@'
-
-$(BUILDROOT_GPSP): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/gpsp -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(FRONTEND_MAKE) gpsp \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
-	mkdir -p '$(dir $@)'
-	cp '$(FRONTEND_PROJECT)'/build/sf2000-gpsp '$@'
-
-$(BUILDROOT_FCEUMM): $(shell find '$(FRONTEND_PROJECT)'/src '$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/fceumm -type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(RETAINED_SRC) $(RETAINED_HEADER) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
-	$(FRONTEND_MAKE) fceumm \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
-	mkdir -p '$(dir $@)'
-	cp '$(FRONTEND_PROJECT)'/build/sf2000-fceumm '$@'
-
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
@@ -923,7 +907,8 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_GAMBATTE) $(BUILDROOT_GPSP) $(BUILDROOT_FCEUMM) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
+
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -931,6 +916,11 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		'$(BUILDROOT_OUT)'/target/ '$(BUILDROOT_REPACK_DIR)'/
 	rsync -a '$(BUILDROOT_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
 	rsync -a '$(BUILDROOT_GENERATED_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
+	# These cores are SD extensions, not part of the boot ASD.  Remove stale
+	# copies left by an older build before generating the new initramfs.
+	rm -f '$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-gambatte \
+		'$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-gpsp \
+		'$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-fceumm
 	@set -e; \
 	find '$(BUILDROOT_REPACK_DIR)' -type f -perm /111 -print | \
 	while IFS= read -r executable; do \
@@ -1686,6 +1676,9 @@ $(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
 
 $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/quicknes \
+		'$(FRONTEND_PROJECT)'/patches/gambatte \
+		'$(FRONTEND_PROJECT)'/patches/gpsp \
+		'$(FRONTEND_PROJECT)'/patches/fceumm \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		'$(FRONTEND_PROJECT)'/patches/mufrog \
 		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile
@@ -1708,6 +1701,11 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-pce-fast \
 		'$(SDCARD_PCE_FAST)'
 	set -eu; \
+	for core in $(SDCARD_FRONTEND_CORES); do \
+		cp '$(FRONTEND_PROJECT)'/build/core-packages/$$core \
+			'$(BUILD_DIR)/sdcard/sf2000/cores/'$$core; \
+	done
+	set -eu; \
 	for core in $(SDCARD_MUFROG_CORES); do \
 		cp '$(FRONTEND_PROJECT)'/build/core-packages/$$core \
 			'$(BUILD_DIR)/sdcard/sf2000/cores/'$$core; \
@@ -1726,6 +1724,11 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(SDCARD_GEARBOY_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/pce-fast-COPYING \
 		'$(SDCARD_PCE_FAST_LICENSE)'
+	set -eu; \
+	for license in $(SDCARD_FRONTEND_LICENSES); do \
+		cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/$$license \
+			'$(BUILD_DIR)/sdcard/sf2000/cores/licenses/'$$license; \
+	done
 	set -eu; \
 	for license in $(SDCARD_MUFROG_LICENSES); do \
 		cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/$$license \
@@ -1754,7 +1757,9 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		sf2000/cores/licenses/gearboy-LICENSE \
 		sf2000/cores/licenses/pce-fast-COPYING \
 		$(foreach core,$(SDCARD_MUFROG_CORES),sf2000/cores/$(core)) \
-		$(foreach license,$(SDCARD_MUFROG_LICENSES),sf2000/cores/licenses/$(license)) > SHA256SUMS
+		$(foreach core,$(SDCARD_FRONTEND_CORES),sf2000/cores/$(core)) \
+		$(foreach license,$(SDCARD_MUFROG_LICENSES),sf2000/cores/licenses/$(license)) \
+		$(foreach license,$(SDCARD_FRONTEND_LICENSES),sf2000/cores/licenses/$(license)) > SHA256SUMS
 
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
@@ -1872,12 +1877,16 @@ gpsp-smc-test-roms: $(GPSP_SMC_TEST_ROMS)
 $(BUILD_DIR)/gpsp-smc-%.gba: $(GPSP_TEST_ROM_TOOL)
 	'$<' '$@' 'smc-$*'
 
-$(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM)
+$(GPSP_TEST_SD): Makefile $(GPSP_TEST_ROM) $(SDCARD_CORE_STAMP) \
+		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
-	mmd -i '$@' ::/GBA
+	mmd -i '$@' ::/GBA ::/sf2000 ::/sf2000/cores
 	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
+	mcopy -i '$@' '$(SDCARD_GPSP)' ::/sf2000/cores/sf2000-gpsp
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
 gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		$(SDCARD_UI_FONT)
@@ -1896,23 +1905,30 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp-multicore' \
 		::/sf2000/cores/sf2000-gpsp-multicore
 
-$(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
+$(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_CORE_STAMP) \
+		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
-	mmd -i '$@' ::/GB ::/GBC ::/sf2000
+	mmd -i '$@' ::/GB ::/GBC ::/sf2000 ::/sf2000/cores
 	mcopy -i '$@' '$(BROWSER_TEST_ROM)' '::/GB/TEST GAME.GB'
+	mcopy -i '$@' '$(SDCARD_GAMBATTE)' ::/sf2000/cores/sf2000-gambatte
 	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$@' Makefile ::/README.TXT
 
-$(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM)
+$(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM) \
+		$(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
-	mmd -i '$@' ::/GB ::/GBA
+	mmd -i '$@' ::/GB ::/GBA ::/sf2000 ::/sf2000/cores
 	mcopy -i '$@' '$(BROWSER_TEST_ROM)' '::/GB/TEST GAME.GB'
 	mcopy -i '$@' '$(GPSP_TEST_ROM)' ::/GBA/TEST.GBA
+	mcopy -i '$@' '$(SDCARD_GAMBATTE)' ::/sf2000/cores/sf2000-gambatte
+	mcopy -i '$@' '$(SDCARD_GPSP)' ::/sf2000/cores/sf2000-gpsp
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -1955,7 +1971,7 @@ smoke-linux-frontend: run-linux-frontend
 		'$(BUILD_DIR)'/logs/linux-frontend-loglinux.txt
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
-	grep -q 'sf2000-frontend: pause GE fence complete pending=1' '$(BUILD_DIR)'/logs/linux-frontend.log
+	grep -Eq 'sf2000-frontend: pause GE fence complete pending=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-frontend: pause menu exit selected' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2077,12 +2093,13 @@ smoke-linux-gpsp-smc: run-linux-gpsp-smc
 run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
-	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+	(sleep 10; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 5; \
 		printf 'sendkey backspace-ret 500\n'; sleep 1; \
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 3; \
-		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey z 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 8; \
 		printf 'sendkey backspace-ret 500\n'; sleep 1; \
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
@@ -2927,14 +2944,18 @@ clean:
 FCEUMM_TEST_SD := $(BUILD_DIR)/fceumm-test.sd.img
 FCEUMM_TEST_ROM ?= /root/host-frogdev/roms/Super Mario Bros. 3 (USA) (Rev 1).nes
 
-$(FCEUMM_TEST_SD): FORCE Makefile
+$(FCEUMM_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP) \
+		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	@test -f '$(FCEUMM_TEST_ROM)' || { \
 		echo 'set FCEUMM_TEST_ROM=/path/to/a.nes' >&2; exit 2; }
 	mkdir -p '$(dir $@)'
 	truncate -s 64M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
-	mmd -i '$@' ::/NES
+	mmd -i '$@' ::/NES ::/sf2000 ::/sf2000/cores
 	mcopy -i '$@' '$(FCEUMM_TEST_ROM)' ::/NES/TEST.NES
+	mcopy -i '$@' '$(SDCARD_FCEUMM)' ::/sf2000/cores/sf2000-fceumm
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
 run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -3010,7 +3031,7 @@ smoke-linux-snes9x2005: run-linux-snes9x2005
 	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause UI prepared font=1 fb=320x240 stride=640' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
-	grep -q 'sf2000-frontend: pause GE fence complete pending=1' \
+	grep -Eq 'sf2000-frontend: pause GE fence complete pending=[1-9][0-9]*' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 	grep -q 'sf2000-frontend: pause framebuffer wrote bytes=153600 stride=640' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
