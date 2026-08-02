@@ -1,0 +1,52 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] sound: use stereo S16 transport on GB300
+
+The stock GB300 audio path initializes SND0 with two S16 channels and
+duplicates the mono libretro mix into both slots. The Linux driver exposed
+only one channel, so a GB300 userspace client could produce a healthy DMA
+ring and still feed the external audio route the wrong transport format.
+
+Keep mono as the SF2000 contract, expose stereo only after the existing L27
+family fingerprint selects GB300, and select the corresponding SND0 DMA bit.
+Bit 25 is the HC15xx stereo selector; mono packing remains enabled only for
+the one-channel SF2000 stream.
+
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -56,3 +56,5 @@
+ #define SF2000_DMA_MONO_S16_LE	(SF2000_DMA_MONO_PACK | \
+ 	BIT(20) | SF2000_DMA_ENABLE)
++#define SF2000_DMA_STEREO_S16_LE	(BIT(25) | BIT(20) | \
++	SF2000_DMA_ENABLE)
+ #define SF2000_AUDIO_PLL_32K	0x0c000120
+@@ -452,7 +452,9 @@
+ static int sf2000_pcm_open(struct snd_pcm_substream *substream)
+ {
++	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+ 	int ret;
+ 
+ 	substream->runtime->hw = sf2000_pcm_hardware;
++	substream->runtime->hw.channels_max = chip->gb300 ? 2 : 1;
+ 	ret = snd_pcm_hw_constraint_step(substream->runtime, 0,
+ 		SNDRV_PCM_HW_PARAM_BUFFER_BYTES, 16);
+@@ -515,2 +515,4 @@
+ 	sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
+-		SF2000_DMA_CONFIG_MASK, SF2000_DMA_MONO_S16_LE);
++		SF2000_DMA_CONFIG_MASK,
++		runtime->channels == 2 ? SF2000_DMA_STEREO_S16_LE :
++		SF2000_DMA_MONO_S16_LE);
+@@ -533,5 +533,6 @@
+ 	dev_info_once(chip->dev,
+-		"DMA base=%pad bytes=%zu period=%lu config=%08x pll=%08x\n",
++		"DMA base=%pad bytes=%zu period=%lu channels=%u config=%08x pll=%08x\n",
+ 		&runtime->dma_addr, bytes, runtime->period_size,
++		runtime->channels,
+ 		readl(chip->snd + SF2000_SND_DMA_SIZE),
+ 		readl(chip->sys + SF2000_SYS_AUDIO_PLL));
+@@ -673,4 +673,5 @@
+ 	platform_set_drvdata(pdev, card);
+-	dev_info(dev, "32 kHz S16_LE mono PCM playback ready (%s) build=audio-route-v3 route=%s l27=%u l_in=%08x l_dir=%08x l_out=%08x r_dir=%08x r_out=%08x\n",
++	dev_info(dev, "32 kHz S16_LE PCM playback ready (%s) channels=%u build=audio-route-v3 route=%s l27=%u l_in=%08x l_dir=%08x l_out=%08x r_dir=%08x r_out=%08x\n",
+ 		chip->irq >= 0 ? "IRQ" : "polling",
++		chip->gb300 ? 2 : 1,
+ 		chip->gb300 ? "gb300_l15" : "sf2000_r07",
