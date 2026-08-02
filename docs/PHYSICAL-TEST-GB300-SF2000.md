@@ -4,13 +4,15 @@ The current family-compatible Linux ASD is:
 
 ```text
 build/sdcard/bios/bisrv.asd
-SHA256: 2bef8308dcf90a031d83f88a4e82deb36206c25010b4eae8ecd5e7e6ec8db7bd
 ```
 
 Copy that file to the normal firmware location on the SD card. Copy the
 contents of `build/sdcard/sf2000/cores/` and its `licenses/` directory as a
-matching set; the ASD and all cores were built together. `build/sdcard/SHA256SUMS`
-checks the complete generated set.
+matching set; the ASD and all cores were built together. The authoritative
+hashes are generated with each build in `build/sdcard/SHA256SUMS`; run
+`(cd build/sdcard && sha256sum -c SHA256SUMS)` before copying. Do not copy a
+hash from this document, because the artifact necessarily changes with the
+kernel or embedded root filesystem.
 
 ## GB300
 

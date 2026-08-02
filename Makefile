@@ -260,6 +260,8 @@ GPSP_SMC_TEST_ROMS := $(addprefix $(BUILD_DIR)/gpsp-,$(addsuffix .gba,$(GPSP_SMC
 GPSP_SMC_MODE ?= smc-ab
 GPSP_REAL_ROM ?=
 GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
+QPSX_REAL_IMAGE ?=
+QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
@@ -342,6 +344,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-snes9x2005 smoke-linux-snes9x2005 \
 	run-linux-snes9x2002 smoke-linux-snes9x2002 \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
+	qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
@@ -351,6 +354,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
+	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-gb300 \
 	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
@@ -851,7 +855,9 @@ $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(PIE_STAMP) $(BUILDROOT_T
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-buildroot-panel-probe-link: $(BUILDROOT_PANEL_FASTPROBE) Makefile
+buildroot-panel-probe-link: $(BUILDROOT_PANEL_PROBE_LINK)
+
+$(BUILDROOT_PANEL_PROBE_LINK): $(BUILDROOT_PANEL_FASTPROBE) Makefile
 	mkdir -p '$(dir $(BUILDROOT_PANEL_PROBE_LINK))'
 	ln -sf '$(BUILDROOT_PANEL_PROBE_TARGET)' '$(BUILDROOT_PANEL_PROBE_LINK)'
 
@@ -1905,6 +1911,23 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp-multicore' \
 		::/sf2000/cores/sf2000-gpsp-multicore
 
+qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
+		$(SDCARD_UI_FONT)
+	@test -n '$(QPSX_REAL_IMAGE)' || { \
+		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal raw PSX image' >&2; exit 2; }
+	@test -f '$(QPSX_REAL_IMAGE)' || { \
+		echo 'QPSX_REAL_IMAGE does not name a regular file' >&2; exit 2; }
+	mkdir -p '$(dir $(QPSX_REAL_TEST_SD))'
+	truncate -s 128M '$(QPSX_REAL_TEST_SD)'
+	mkfs.vfat -F 32 -n SFTEST '$(QPSX_REAL_TEST_SD)' >/dev/null
+	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores
+	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_REAL_IMAGE)' ::/PSX/TEST.BIN
+	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
+	mcopy -i '$(QPSX_REAL_TEST_SD)' \
+		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx' \
+		::/sf2000/cores/sf2000-qpsx
+
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_CORE_STAMP) \
 		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
 	mkdir -p '$(dir $@)'
@@ -2073,6 +2096,32 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	! grep -q 'GE doorbell while command queue busy' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault|core (load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
+
+run-linux-qpsx-real: qemu linux-buildroot-asd qpsx-real-test-sd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 25; printf 'quit\n') | \
+		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-real.log \
+		> '$(BUILD_DIR)'/logs/linux-qpsx-real.console 2>&1
+
+smoke-linux-qpsx-real: run-linux-qpsx-real
+	grep -q 'sf2000-browser: launch QPSX /mnt/sd/PSX/TEST.BIN' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	grep -q 'sf2000-frontend: core init complete' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	grep -q 'sf2000-frontend: ROM load complete' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	grep -Eq 'sf2000-frontend: first frame [0-9]+x[0-9]+ .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	awk '/sf2000-browser: launch QPSX/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
@@ -2753,6 +2802,37 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 	dd if='$(BUILD_DIR)'/sf2000-audio.wav bs=1 skip=44 2>/dev/null | \
+		od -An -v -td2 | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
+			END { exit !found }'
+
+run-linux-buildroot-audio-gb300: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	rm -f '$(BUILD_DIR)'/gb300-audio.wav
+	(sleep 6; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000,board-profile=gb300,audiodev=gb300wav \
+		$(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' \
+		-audiodev wav,id=gb300wav,path='$(BUILD_DIR)'/gb300-audio.wav \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.console 2>&1
+
+smoke-linux-buildroot-audio-gb300: run-linux-buildroot-audio-gb300
+	grep -Eq 'sf2000-pcm .*channels=2 .*route=gb300_l15' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+	grep -Eq 'sf2000-pcm .*DMA .*channels=2 config=0b11[0-9a-f]{4}' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+	grep -q 'sf2000-audio: ALSA PCM DMA tone active' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+	grep -q 'sf2000: audio guest DMA active' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.console
+	! grep -q 'sf2000-audio: ALSA PCM write failed' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+	test -s '$(BUILD_DIR)'/gb300-audio.wav
+	dd if='$(BUILD_DIR)'/gb300-audio.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
 			END { exit !found }'

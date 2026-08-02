@@ -15,7 +15,7 @@
 #define PERIODS 8u
 #define TONE_HZ 440u
 
-static int16_t samples[PERIOD_FRAMES];
+static int16_t samples[PERIOD_FRAMES * 2u];
 
 static void log_line(const char *line)
 {
@@ -74,7 +74,7 @@ static void param_set_interval(struct snd_pcm_hw_params *p, unsigned int n,
 	interval->integer = 1;
 }
 
-static int configure_pcm(int fd)
+static int configure_pcm(int fd, unsigned int channels)
 {
 	struct snd_pcm_hw_params hw;
 	struct snd_pcm_sw_params sw;
@@ -86,7 +86,7 @@ static int configure_pcm(int fd)
 		SNDRV_PCM_FORMAT_S16_LE);
 	param_set_mask(&hw, SNDRV_PCM_HW_PARAM_SUBFORMAT,
 		SNDRV_PCM_SUBFORMAT_STD);
-	param_set_interval(&hw, SNDRV_PCM_HW_PARAM_CHANNELS, 1);
+	param_set_interval(&hw, SNDRV_PCM_HW_PARAM_CHANNELS, channels);
 	param_set_interval(&hw, SNDRV_PCM_HW_PARAM_RATE, SAMPLE_RATE);
 	param_set_interval(&hw, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, PERIOD_FRAMES);
 	param_set_interval(&hw, SNDRV_PCM_HW_PARAM_PERIODS, PERIODS);
@@ -108,14 +108,18 @@ static int configure_pcm(int fd)
 	return ioctl(fd, SNDRV_PCM_IOCTL_PREPARE);
 }
 
-static void fill_tone(void)
+static void fill_tone(unsigned int channels)
 {
 	static uint32_t phase;
 	uint32_t step = (uint32_t)(((uint64_t)TONE_HZ << 32) / SAMPLE_RATE);
 	unsigned int i;
 
 	for (i = 0; i < PERIOD_FRAMES; i++) {
-		samples[i] = (phase & 0x80000000u) ? -4096 : 4096;
+		int16_t sample = (phase & 0x80000000u) ? -4096 : 4096;
+
+		samples[i * channels] = sample;
+		if (channels == 2u)
+			samples[i * channels + 1u] = sample;
 		phase += step;
 	}
 }
@@ -124,24 +128,34 @@ int main(void)
 {
 	int fd;
 	bool announced = false;
+	unsigned int channels = 2;
 
 	fd = open("/dev/snd/pcmC0D0p", O_WRONLY | O_CLOEXEC);
 	if (fd < 0) {
 		log_line("sf2000-audio: cannot open ALSA PCM\n");
 		return 1;
 	}
-	if (configure_pcm(fd) < 0) {
-		log_line("sf2000-audio: cannot configure ALSA PCM\n");
+	if (configure_pcm(fd, channels) < 0) {
+		/* SF2000 is physically mono; GB300 uses the vendor stereo path. */
 		close(fd);
-		return 1;
+		channels = 1;
+		fd = open("/dev/snd/pcmC0D0p", O_WRONLY | O_CLOEXEC);
+		if (fd < 0 || configure_pcm(fd, channels) < 0) {
+			log_line("sf2000-audio: cannot configure ALSA PCM\n");
+			if (fd >= 0)
+				close(fd);
+			return 1;
+		}
 	}
 
 	for (;;) {
 		ssize_t done;
 
-		fill_tone();
-		done = write(fd, samples, sizeof(samples));
-		if (done == (ssize_t)sizeof(samples)) {
+		size_t bytes = PERIOD_FRAMES * channels * sizeof(samples[0]);
+
+		fill_tone(channels);
+		done = write(fd, samples, bytes);
+		if (done == (ssize_t)bytes) {
 			if (!announced) {
 				log_line("sf2000-audio: ALSA PCM DMA tone active\n");
 				announced = true;

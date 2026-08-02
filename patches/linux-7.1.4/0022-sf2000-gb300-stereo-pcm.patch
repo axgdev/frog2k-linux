@@ -1,23 +1,25 @@
 From: SF2000 Linux <sf2000@localhost>
-Subject: [PATCH] sound: use stereo S16 transport on GB300
+Subject: [PATCH] sound: use the vendor stereo S16 transport on GB300
 
 The stock GB300 audio path initializes SND0 with two S16 channels and
 duplicates the mono libretro mix into both slots. The Linux driver exposed
 only one channel, so a GB300 userspace client could produce a healthy DMA
 ring and still feed the external audio route the wrong transport format.
 
-Keep mono as the SF2000 contract, expose stereo only after the existing L27
-family fingerprint selects GB300, and select the corresponding SND0 DMA bit.
-Bit 25 is the HC15xx stereo selector; mono packing remains enabled only for
-the one-channel SF2000 stream.
+Keep mono as the SF2000 contract and expose stereo only after the existing L27
+family fingerprint selects GB300.  The values below follow the actual
+libauddrv i2so_platform_hw_params register construction: bits 16..17 encode
+the channel count (zero based), bit 25 selects left alignment, bit 24 is set
+for the freerun path, bit 20 selects S16, and bit 27 enables DMA.  In
+particular, bit 25 is not a stereo selector.
 
 --- a/sound/drivers/sf2000-pcm.c
 +++ b/sound/drivers/sf2000-pcm.c
 @@ -56,3 +56,5 @@
  #define SF2000_DMA_MONO_S16_LE	(SF2000_DMA_MONO_PACK | \
  	BIT(20) | SF2000_DMA_ENABLE)
-+#define SF2000_DMA_STEREO_S16_LE	(BIT(25) | BIT(20) | \
-+	SF2000_DMA_ENABLE)
++#define SF2000_DMA_STEREO_S16_LE	(BIT(16) | SF2000_DMA_MONO_PACK | \
++	SF2000_DMA_LEFT_ALIGN | BIT(20) | SF2000_DMA_ENABLE)
  #define SF2000_AUDIO_PLL_32K	0x0c000120
 @@ -452,7 +452,9 @@
  static int sf2000_pcm_open(struct snd_pcm_substream *substream)

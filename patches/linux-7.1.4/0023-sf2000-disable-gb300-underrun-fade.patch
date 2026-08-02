@@ -1,0 +1,25 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] sound: keep the GB300 path out of SF2000 underrun fade
+
+The two boards share SND0 but not its output policy.  The working GB300 vendor
+route clears the i2so_platform fade policy; carrying SF2000's bit 6 in the
+SND0 I2S control register can leave valid stereo DMA silent behind the fade
+state.  Select the register value by physical board fingerprint while retaining
+the proven SF2000 value.
+
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -29,2 +29,4 @@
+ #define SF2000_SND_FADE		0x90
++#define SF2000_I2S_BASE		0x0000ff01
++#define SF2000_I2S_UNDERRUN_FADE BIT(6)
+ #define SF2000_SND08_STATUS_MASK	(BIT(16) | BIT(24) | BIT(27) | BIT(28))
+@@ -503,4 +505,5 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
+ 	sf2000_update_bits(chip->snd + SF2000_SND_CTL04,
+ 		BIT(0) | BIT(8), BIT(0) | BIT(8));
+-	writel(0x0000ff41, chip->snd + SF2000_SND_I2S_CTL);
++	writel(SF2000_I2S_BASE | (chip->gb300 ? 0 : SF2000_I2S_UNDERRUN_FADE),
++		chip->snd + SF2000_SND_I2S_CTL);
+ 	writeb(SF2000_VOLUME_90, chip->snd + SF2000_SND_FADE + 2);
+-- 
+2.51.0
