@@ -4,7 +4,7 @@ The current family-compatible Linux ASD is:
 
 ```text
 build/sdcard/bios/bisrv.asd
-SHA256: 19cc11ca4f54d180197fcc9e3046cc89d6e64450ed19ab05c35c4f30d4efc0ef
+SHA256: 3dab02973efe45458496eb47114489a389762feb559ffaf066be9eb450693ef5
 ```
 
 Copy that file to the normal firmware location on the SD card. Copy the
