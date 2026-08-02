@@ -67,6 +67,7 @@ ENABLE_EXPERIMENTAL_DEVTESTS ?= 0
 FIXED_ET_EXEC ?= 0
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
 BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
+BUILDROOT_JS2300 := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-js2300
 BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
 BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
 BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
@@ -203,6 +204,8 @@ SDCARD_PCE_FAST_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/pce-fast-CO
 SDCARD_GAMBATTE := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gambatte
 SDCARD_GPSP := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp
 SDCARD_FCEUMM := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-fceumm
+SDCARD_JS2300_CORE := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-js2300-core
+SDCARD_JS2300_SCRIPT := $(BUILD_DIR)/sdcard/sf2000/js2300-cores/chip8.js
 SDCARD_MUFROG_CORES := \
 	sf2000-gpsp-multicore \
 	sf2000-picodrive \
@@ -263,6 +266,8 @@ GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 QPSX_REAL_IMAGE ?=
 QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
+JS2300_TEST_SD := $(BUILD_DIR)/js2300-test.sd.img
+JS2300_UI_SMOKE_SCRIPT := $(FRONTEND_PROJECT)/tests/js2300-ui-smoke.js
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
@@ -340,6 +345,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
+	run-linux-js2300 smoke-linux-js2300 \
 	run-linux-gpsp smoke-linux-gpsp run-linux-fceumm smoke-linux-fceumm \
 	run-linux-snes9x2005 smoke-linux-snes9x2005 \
 	run-linux-snes9x2002 smoke-linux-snes9x2002 \
@@ -798,6 +804,16 @@ $(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
+$(BUILDROOT_JS2300): $(shell find '$(FRONTEND_PROJECT)'/src \
+		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
+		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
+		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
+		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	$(FRONTEND_MAKE) js2300-ui \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+	mkdir -p '$(dir $@)'
+	cp '$(FRONTEND_PROJECT)'/build/sf2000-js2300-ui '$@'
+
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
@@ -914,7 +930,7 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 	touch '$@'
 
 
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
+$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_JS2300) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
 	mkdir -p '$(dir $@)'
 	rm -rf '$(BUILDROOT_REPACK_DIR)'
 	mkdir -p '$(BUILDROOT_REPACK_DIR)'
@@ -1716,6 +1732,11 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		cp '$(FRONTEND_PROJECT)'/build/core-packages/$$core \
 			'$(BUILD_DIR)/sdcard/sf2000/cores/'$$core; \
 	done
+	mkdir -p '$(dir $(SDCARD_JS2300_SCRIPT))'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-js2300-core \
+		'$(SDCARD_JS2300_CORE)'
+	cp '$(FRONTEND_PROJECT)'/build/core-packages/js2300-cores/chip8.js \
+		'$(SDCARD_JS2300_SCRIPT)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/quicknes-LICENSE \
 		'$(SDCARD_QUICKNES_LICENSE)'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/licenses/prosystem-LICENSE \
@@ -1748,6 +1769,8 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 	cd '$(BUILD_DIR)/sdcard' && sha256sum bios/bisrv.asd \
 		firmware/linux.asd firmware/unifrog.bin sf2000.conf \
 		sf2000/ui.ttf sf2000/OFL.txt \
+		sf2000/js2300-cores/chip8.js \
+		sf2000/cores/sf2000-js2300-core \
 		sf2000/cores/sf2000-quicknes \
 		sf2000/cores/sf2000-prosystem \
 		sf2000/cores/sf2000-snes9x2005 \
@@ -1953,6 +1976,19 @@ $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM) \
 	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
+$(JS2300_TEST_SD): Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
+		$(SDCARD_UI_FONT) $(JS2300_UI_SMOKE_SCRIPT)
+	mkdir -p '$(dir $@)'
+	truncate -s 128M '$@'
+	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
+	mmd -i '$@' ::/CHIP8 ::/SCRIPTS ::/sf2000 ::/sf2000/cores
+	mcopy -i '$@' '$(SDCARD_JS2300_SCRIPT)' ::/CHIP8/TEST.JS
+	mcopy -i '$@' '$(JS2300_UI_SMOKE_SCRIPT)' ::/SCRIPTS/TEST.JS
+	mcopy -i '$@' '$(SDCARD_JS2300_CORE)' \
+		::/sf2000/cores/sf2000-js2300-core
+	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
+
 run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-right 500\n'; sleep 1; \
@@ -2008,6 +2044,51 @@ smoke-linux-frontend: run-linux-frontend
 	! grep -q 'storage-test=' '$(BUILD_DIR)'/logs/linux-frontend.log
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic|Data bus error|Oops\[#' \
 		'$(BUILD_DIR)'/logs/linux-frontend.log
+
+run-linux-js2300: qemu linux-buildroot-asd $(JS2300_TEST_SD)
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 12; printf 'sendkey backspace-ret 500\n'; sleep 2; \
+		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 3; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(JS2300_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-js2300-core.log \
+		> '$(BUILD_DIR)'/logs/linux-js2300-core.console 2>&1
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 1; printf 'sendkey x 100\n'; sleep 8; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(JS2300_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-js2300-ui.log \
+		> '$(BUILD_DIR)'/logs/linux-js2300-ui.console 2>&1
+	mcopy -o -i '$(JS2300_TEST_SD)' ::/loglinux.txt \
+		'$(BUILD_DIR)'/logs/linux-js2300-loglinux.txt
+
+smoke-linux-js2300: run-linux-js2300
+	grep -q 'sf2000-browser: launch JS2300 /mnt/sd/CHIP8/TEST.JS' \
+		'$(BUILD_DIR)'/logs/linux-js2300-core.log
+	grep -q 'sf2000-frontend: core init complete' \
+		'$(BUILD_DIR)'/logs/linux-js2300-core.log
+	grep -q 'sf2000-frontend: ROM load complete' \
+		'$(BUILD_DIR)'/logs/linux-js2300-core.log
+	grep -q 'sf2000-frontend: first frame 320x240' \
+		'$(BUILD_DIR)'/logs/linux-js2300-core.log
+	grep -q 'sf2000-browser: launch JS2300 UI /mnt/sd/SCRIPTS/TEST.JS' \
+		'$(BUILD_DIR)'/logs/linux-js2300-ui.log
+	grep -q 'ui smoke complete mode=extension' \
+		'$(BUILD_DIR)'/logs/linux-js2300-ui.log
+	grep -q 'js2300 runtime phase=entry_eval .*exception=0' \
+		'$(BUILD_DIR)'/logs/linux-js2300-ui.log
+	! grep -Eq 'page allocation failure|Kernel panic|Data bus error|fatal signal|core (init|load|run) timeout' \
+		'$(BUILD_DIR)'/logs/linux-js2300-core.log \
+		'$(BUILD_DIR)'/logs/linux-js2300-ui.log
+	@printf 'PASS smoke-linux-js2300\n'
 
 run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
