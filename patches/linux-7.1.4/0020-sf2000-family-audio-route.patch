@@ -1,0 +1,109 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] sound: select the physical family audio route
+
+SF2000 and GB300 share SND0 and the DAC, but they do not share the external
+audio control pin. The stock GB300 path uses L15 as an active-low amplifier
+gate and leaves R07, the SF2000/i2so mute pin, deasserted. Toggling both pins
+as if they were amplifier enables drives GB300 R07 into its mute state exactly
+when playback starts.
+
+The early board fingerprint is stable before the userspace input bridge takes
+ownership: GPIO L27 is low on SF2000 and high on GB300, including screen-swap
+variants. Record it at probe time, clear the stale GB300 R07 mute state, and
+only toggle the selected active-low gate during PCM playback.
+
+--- a/sound/drivers/sf2000-pcm.c
++++ b/sound/drivers/sf2000-pcm.c
+@@ -37,6 +37,7 @@
+ #define SF2000_GPIO_R_DIR	0xf8
+ #define SF2000_PINMUX_R07	0x4e7
+ #define SF2000_AMP_R07		BIT(7)
++#define SF2000_GPIO_L_IN	0x50
+ #define SF2000_GPIO_L_OUT	0x54
+ #define SF2000_GPIO_L_DIR	0x58
+ #define SF2000_PINMUX_L15	0x4af
+@@ -73,6 +74,7 @@
+ 	struct timer_list timer;
+ 	spinlock_t lock;
+ 	int irq;
++	bool gb300;
+ 	snd_pcm_uframes_t last_period;
+ 	bool running;
+ 	u16 target_producer;
+@@ -110,27 +112,43 @@
+ 	writel((old & ~mask) | (value & mask), reg);
+ }
+ 
++static void sf2000_clear_gb300_mute(struct sf2000_pcm *chip)
++{
++	u32 value;
++
++	if (!chip->gb300)
++		return;
++
++	/* R07 is the shared SF2000 mute hook; GB300 keeps it deasserted. */
++	writeb(0, chip->sys + SF2000_PINMUX_R07);
++	value = readl(chip->sys + SF2000_GPIO_R_DIR);
++	writel(value | SF2000_AMP_R07, chip->sys + SF2000_GPIO_R_DIR);
++	value = readl(chip->sys + SF2000_GPIO_R_OUT);
++	writel(value | SF2000_AMP_R07, chip->sys + SF2000_GPIO_R_OUT);
++}
++
+ static void sf2000_amp_enable(struct sf2000_pcm *chip, bool enable)
+ {
+ 	u32 value;
+ 	u32 lvalue;
+ 
+ 	/*
+-	 * The family has two physical amplifier gates: SF2000 uses active-low
+-	 * R07, while GB300 uses active-high L15. Linux cannot rely on the vendor
+-	 * handoff marker, and swapped-screen units retain the board wiring, so
+-	 * drive both documented gates. Only the connected gate has an
+-	 * amplifier behind it.
++	 * Both family gates are active-low. R07 is the SF2000 gate and L15 is
++	 * the GB300 gate. The board route was captured at probe time so a
++	 * screen-swapped unit still uses the gate belonging to its main board.
+ 	 */
+-	writeb(0, chip->sys + SF2000_PINMUX_L15);
+-	lvalue = readl(chip->sys + SF2000_GPIO_L_DIR);
+-	writel(lvalue | SF2000_AMP_L15, chip->sys + SF2000_GPIO_L_DIR);
+-	lvalue = readl(chip->sys + SF2000_GPIO_L_OUT);
+-	if (enable)
+-		lvalue |= SF2000_AMP_L15;
+-	else
+-		lvalue &= ~SF2000_AMP_L15;
+-	writel(lvalue, chip->sys + SF2000_GPIO_L_OUT);
++	if (chip->gb300) {
++		writeb(0, chip->sys + SF2000_PINMUX_L15);
++		lvalue = readl(chip->sys + SF2000_GPIO_L_DIR);
++		writel(lvalue | SF2000_AMP_L15, chip->sys + SF2000_GPIO_L_DIR);
++		lvalue = readl(chip->sys + SF2000_GPIO_L_OUT);
++		if (enable)
++			lvalue &= ~SF2000_AMP_L15;
++		else
++			lvalue |= SF2000_AMP_L15;
++		writel(lvalue, chip->sys + SF2000_GPIO_L_OUT);
++		return;
++	}
+ 
+ 	/* The SF2000 mono amplifier enable is GPIO R07, active low. */
+ 	writeb(0, chip->sys + SF2000_PINMUX_R07);
+@@ -619,6 +637,8 @@
+ 		goto err_card;
+ 	}
+ 	sf2000_apll_reset(chip);
++	chip->gb300 = !!(readl(chip->sys + SF2000_GPIO_L_IN) & BIT(27));
++	sf2000_clear_gb300_mute(chip);
+ 	sf2000_amp_enable(chip, false);
+ 	chip->irq = platform_get_irq_optional(pdev, 0);
+ 	if (chip->irq == -ENXIO)
+@@ -651,8 +671,9 @@
+ 	if (ret)
+ 		goto err_card;
+ 	platform_set_drvdata(pdev, card);
+-	dev_info(dev, "32 kHz S16_LE mono PCM playback ready (%s)\n",
+-		chip->irq >= 0 ? "IRQ" : "polling");
++	dev_info(dev, "32 kHz S16_LE mono PCM playback ready (%s) route=%s\n",
++		chip->irq >= 0 ? "IRQ" : "polling",
++		chip->gb300 ? "gb300_l15" : "sf2000_r07");
+ 	return 0;

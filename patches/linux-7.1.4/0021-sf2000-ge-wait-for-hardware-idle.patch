@@ -1,0 +1,58 @@
+From: SF2000 Linux <sf2000@localhost>
+Subject: [PATCH] misc: do not publish GE completion while hardware is busy
+
+The HC15xx completion interrupt can arrive a few instructions before the
+status BUSY bit clears. Treating the completion flag as final lets the next
+submit race the still-active engine; on real hardware the following sync then
+times out, which makes the frontend abandon GE and produces the C64 refresh
+line. Keep the existing interrupt wait, but require hardware idle before
+returning success and record the queue state when the bounded wait expires.
+
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -6,4 +6,5 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/fs.h>
+ #include <linux/interrupt.h>
++#include <linux/iopoll.h>
+ #include <linux/io.h>
+@@ -328,2 +328,4 @@
+ 		long waited;
++		int idle;
+ 		u32 first = readl(ge->regs + SF2000_GE_HQ_FIRST);
++		u32 status = readl(ge->regs + SF2000_GE_STATUS);
+@@ -331,9 +331,25 @@
+-		if (ctx->is_finish ||
+-		    (!(readl(ge->regs + SF2000_GE_STATUS) & SF2000_GE_STATUS_BUSY) &&
+-		     first == (ctx->phy_addr_start & ~1u)))
+-			return 0;
+-		waited = wait_for_completion_interruptible_timeout(&ge->done,
+-								   timeout);
+-		if (waited > 0)
+-			return 0;
+-		return waited < 0 ? -EINTR : -ETIMEDOUT;
++		if (ctx->is_finish) {
++			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
++				status, !(status & SF2000_GE_STATUS_BUSY),
++				10, jiffies_to_usecs(timeout));
++			if (!idle)
++				return 0;
++		} else if (!(status & SF2000_GE_STATUS_BUSY) &&
++			   first == (ctx->phy_addr_start & ~1u))
++			return 0;
++		waited = wait_for_completion_interruptible_timeout(&ge->done,
++								   timeout);
++		if (waited < 0)
++			return -EINTR;
++		if (waited > 0) {
++			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
++				status, !(status & SF2000_GE_STATUS_BUSY),
++				10, jiffies_to_usecs(waited));
++			if (!idle)
++				return 0;
++		}
++		dev_err_ratelimited(ge->dev,
++			"sync timeout status=%08x first=%08x producer=%08x finish=%u\n",
++			status, readl(ge->regs + SF2000_GE_HQ_FIRST),
++			ctx->phy_addr_start, ctx->is_finish);
++		return -ETIMEDOUT;
