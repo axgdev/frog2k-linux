@@ -18,20 +18,20 @@
 +	u32 lvalue;
 +
 +	/*
-+	 * The family has two physical amplifier gates: SF2000 uses R07 and
-+	 * GB300 uses L15. Linux cannot rely on the vendor bootloader's board
++	 * The family has two physical amplifier gates: SF2000 uses active-low
++	 * R07, while GB300 uses active-high L15. Linux cannot rely on the vendor
 +	 * handoff marker, and swapped-screen units retain the board wiring, so
-+	 * drive both documented active-low gates. Only the connected gate has
-+	 * an amplifier behind it.
++	 * drive both documented gates. Only the connected gate has an
++	 * amplifier behind it.
 +	 */
 +	writeb(0, chip->sys + SF2000_PINMUX_L15);
 +	lvalue = readl(chip->sys + SF2000_GPIO_L_DIR);
 +	writel(lvalue | SF2000_AMP_L15, chip->sys + SF2000_GPIO_L_DIR);
 +	lvalue = readl(chip->sys + SF2000_GPIO_L_OUT);
 +	if (enable)
-+		lvalue &= ~SF2000_AMP_L15;
-+	else
 +		lvalue |= SF2000_AMP_L15;
++	else
++		lvalue &= ~SF2000_AMP_L15;
 +	writel(lvalue, chip->sys + SF2000_GPIO_L_OUT);
  
  	/* SF2000's mono amplifier enable is GPIO R07, active low. */

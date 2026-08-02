@@ -345,6 +345,8 @@ static int panel_te_rising = 1;
 static unsigned panel_te_rearms;
 static int panel_rgb_vsync_enabled = 1;
 static uint32_t panel_rgb_clock_word = 0xb6060606u;
+/* The RGB handoff must retain the panel-specific MADCTL selected at probe. */
+static uint8_t panel_runtime_madctl = 0x70u;
 static void panel_set_window(void);
 static void panel_restart_frame(void);
 static void panel_te_service_sample(void);
@@ -2578,10 +2580,14 @@ static int panel_init_sf2000_original_order(void)
 		panel_cmd(ST7789_DISPON);
 		panel_restart_frame();
 		variant = &panel_variants[5];
+		panel_runtime_madctl = 0x28u;
+	} else {
+		panel_runtime_madctl = 0x70u;
 	}
 	snprintf(line, sizeof(line),
-		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s\n",
-		panel_id & 0xffffffu, panel_aux, variant->name);
+		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s madctl=0x%02x\n",
+		panel_id & 0xffffffu, panel_aux, variant->name,
+		panel_runtime_madctl);
 	log_line(line);
 	append_file_log(line);
 	return 0;
@@ -4040,7 +4046,7 @@ static void panel_apply_sync_profile(
 		panel_apply_init_sequence(st7789_sf2000_init);
 	} else {
 		panel_cmd(ST7789_MADCTL);
-		panel_data(profile->madctl);
+		panel_data(panel_runtime_madctl);
 		panel_cmd(ST7789_TEON);
 		panel_data(0x00);
 		panel_cmd(ST7789_COLMOD);
