@@ -64,6 +64,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_ADDR 0xa7a00000u
 #define RAW_DIAG_ADDR 0xa7a10000u
 #define LIVE_HANDOFF_ADDR 0xa7a2f000u
+#define DIRECT_HANDOFF_TRACE_ADDR 0xa6820000u
 #define PROGRESS_MAGIC 0x52504653u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
@@ -328,6 +329,24 @@ static int log_tried;
 static volatile struct progress_log * const progress_log =
 	(volatile struct progress_log *)PROGRESS_ADDR;
 static volatile u32 * const live_handoff = (volatile u32 *)LIVE_HANDOFF_ADDR;
+static volatile u32 * const direct_handoff_trace =
+	(volatile u32 *)DIRECT_HANDOFF_TRACE_ADDR;
+
+/*
+ * The direct ASD handoff has no UART on the physical device.  Keep a small,
+ * monotonic C-side breadcrumb chain beside the bootloader's retained handoff
+ * record.  The address is the KSEG1 base of the handoff diagnostic area and
+ * is outside the kernel/DTB load window, so these words survive both a failed
+ * warm handoff and the quick-powercycle log recovery path.  Each marker is
+ * written before its value; a torn pair is therefore visible as an incomplete
+ * stage instead of a false success.
+ */
+static void direct_handoff_trace_mark(u32 offset, u32 marker, u32 value)
+{
+	direct_handoff_trace[offset / sizeof(u32)] = marker;
+	direct_handoff_trace[offset / sizeof(u32) + 1u] = value;
+	__asm__ volatile("sync" ::: "memory");
+}
 
 static u32 le16(const u8 *p)
 {
@@ -1421,11 +1440,13 @@ void linux_loader_main(void)
 	uintptr dtb_dest;
 	u32 entry;
 
+	direct_handoff_trace_mark(0xf0u, 0x4c435254u, 1u); /* LCRT */
 	clear_bss();
 	disable_interrupts();
 	/* Keep filesystem recovery from hiding proof that the loader started. */
 	backlight_stage_mark("loader-entry", 1);
 	bootlog_init();
+	direct_handoff_trace_mark(0xf8u, 0x4c4c4f47u, log_ready ? 1u : 0u);
 	progress_reset();
 	progress_set_live_log_sector();
 	bootlog_wdt_state();
@@ -1451,6 +1472,7 @@ void linux_loader_main(void)
 			&load_min, &load_max) != 0) {
 		loader_panic("linux-loader: cannot map embedded kernel");
 	}
+	direct_handoff_trace_mark(0x100u, 0x4c454c46u, (u32)load_min);
 
 	payload_end = align_up((uintptr)linux_dtb_end, 0x10000u);
 	dtb_dest = align_up(load_max, 0x10000u);
@@ -1464,6 +1486,8 @@ void linux_loader_main(void)
 		(u32)dtb_dest);
 	setup_system_mapping_for_linux();
 	reset_exception_base_for_linux();
+	direct_handoff_trace_mark(0x108u, 0x4c4d4150u,
+		mmio_read32(MAPPING_REG)); /* LMAP */
 	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
 	/* Evict dirty aliases before replacing RAM with the new ELF image. */
@@ -1478,6 +1502,8 @@ void linux_loader_main(void)
 	disable_interrupts();
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);
+	direct_handoff_trace_mark(0x110u, 0x4c4a4d50u, entry); /* LJMP */
+	direct_handoff_trace_mark(0x118u, 0x4c445442u, (u32)dtb_dest); /* LDTB */
 	bootlog_wdt_arm("loader-watchdog-armed");
 	set_scpu_clock_918();
 	write_status(0);
