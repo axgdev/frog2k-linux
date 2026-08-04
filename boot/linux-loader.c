@@ -341,8 +341,34 @@ static volatile u32 * const direct_handoff_trace =
  * written before its value; a torn pair is therefore visible as an incomplete
  * stage instead of a false success.
  */
+static void direct_handoff_trace_invalidate_line(u32 offset)
+{
+	uintptr cached;
+
+	/*
+	 * The trace is written through KSEG1, but a warm handoff can leave a
+	 * dirty KSEG0 line for the same physical address in the old image.  The
+	 * HC15xx's full index sweep is not a sufficient ownership boundary for
+	 * this alias: the first cache sweep performed by the incoming loader can
+	 * write that old line back over a newly written retained breadcrumb.
+	 * Invalidate the exact cached alias immediately before each KSEG1 write.
+	 */
+	cached = ((DIRECT_HANDOFF_TRACE_ADDR + offset) & 0x1fffffffu) |
+		KSEG0_BASE;
+	__asm__ volatile(
+		".set push\n\t"
+		".set mips32\n\t"
+		"cache 0x11, 0(%0)\n\t"
+		"sync\n\t"
+		".set pop"
+		:
+		: "r"(cached)
+		: "memory");
+}
+
 static void direct_handoff_trace_mark(u32 offset, u32 marker, u32 value)
 {
+	direct_handoff_trace_invalidate_line(offset);
 	direct_handoff_trace[offset / sizeof(u32)] = marker;
 	direct_handoff_trace[offset / sizeof(u32) + 1u] = value;
 	__asm__ volatile("sync" ::: "memory");
