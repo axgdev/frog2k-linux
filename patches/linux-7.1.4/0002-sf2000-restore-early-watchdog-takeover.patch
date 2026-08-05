@@ -1,0 +1,258 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Date: Wed, 5 Aug 2026 00:00:00 +0100
+Subject: [PATCH] mips: sf2000: restore early boot ownership
+
+The Linux 7.1 migration retained the SF2000 watchdog and progress helpers,
+but dropped every setup_arch call which made the kernel adopt the loader's
+eight-second watchdog.  It also restored an unconditional MIPS CM probe that
+the established SF2000 path intentionally skipped.  A fast QEMU boot reached
+userspace before the deadline, while physical hardware reset with the retained
+log ending at loader-watchdog-armed.
+
+The NuttX bootloader also legitimately leaves Cause.IV set after using its
+vectored interrupt table.  The forced MIPS32r1 Linux profile does not install
+the corresponding special interrupt vector, so the first pending timer IRQ
+otherwise branches back into the discarded loader at 0x80001000.  Clear IV
+and the inherited IntCtl vector spacing before Linux enables interrupts, then
+retain a checkpoint around that boundary.
+
+Restore the platform setup contract, skip the inapplicable CM probe, and make
+the existing early checkpoints update retained RAM and pet WDT0 without doing
+framebuffer, GPIO, or UART I/O.  Add coarse start_kernel checkpoints so both a
+slow boot and any future early hang leave a precise retained boundary.
+---
+ arch/mips/kernel/setup.c | 38 ++++++++++++++++++++++++++++----------
+ arch/mips/kernel/traps.c | 10 ++++++++++
+ init/main.c              | 22 ++++++++++++++++++++++
+ 3 files changed, 60 insertions(+), 10 deletions(-)
+
+diff --git a/arch/mips/kernel/setup.c b/arch/mips/kernel/setup.c
+--- a/arch/mips/kernel/setup.c
++++ b/arch/mips/kernel/setup.c
+@@ -660,14 +660,12 @@ void sf2000_visible_stage_nolog(const char *name, unsigned int pulses)
+ void sf2000_visible_tick(const char *name)
+ {
+ 	/*
+-	 * The individual trap/TLB checkpoints were useful while establishing
+-	 * the first HC15xx NOMMU exception path. They run before the normal
+-	 * clock and console contracts exist, and each checkpoint used to touch
+-	 * retained RAM, GPIO and UART. Keep the call sites as zero-cost
+-	 * documentation, but do not put diagnostic I/O on every production boot.
+-	 * Coarse visible stages and the retained loader journal remain active.
++	 * Keep early checkpoints cheap: retained RAM plus the watchdog pet, with
++	 * no framebuffer, GPIO or UART side effects.  The loader's watchdog is
++	 * already running when Linux enters and setup_arch must take ownership
++	 * before slower physical hardware reaches its deadline.
+ 	 */
+-	(void)name;
++	sf2000_progress_mark(name, 2, 0);
+ }
+ 
+ /*
+@@ -1360,31 +1358,49 @@ static inline void prefill_possible_map(void) {}
+ 
+ void __init setup_arch(char **cmdline_p)
+ {
++	sf2000_restart_init();
++	sf2000_watchdog_arm("early-watchdog-armed");
++	sf2000_watchdog_test_hang();
++	sf2000_progress_mark("mips-setup-entry", 1, 3);
+ 	cpu_probe();
+-	mips_cm_probe();
++	sf2000_visible_tick("mips-after-cpu-probe");
++
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		mips_cm_probe();
++	sf2000_visible_tick("mips-after-cm-probe");
++
+ 	prom_init();
++	sf2000_visible_tick("mips-after-prom-init");
+ 
+ 	setup_early_fdc_console();
+ #ifdef CONFIG_EARLY_PRINTK
+ 	setup_early_printk();
+ #endif
++	sf2000_visible_tick("mips-after-early-console");
+ 	cpu_report();
+ 	if (IS_ENABLED(CONFIG_CPU_R4X00_BUGS64))
+ 		check_bugs64_early();
++	sf2000_visible_tick("mips-after-cpu-report");
+ 
+ 	arch_mem_init(cmdline_p);
++	sf2000_visible_tick("mips-after-arch-mem-init");
+ 	dmi_setup();
+ 
+ 	resource_init();
+ 	plat_smp_setup();
+ 	prefill_possible_map();
++	sf2000_visible_tick("mips-after-resource-init");
+ 
+ 	cpu_cache_init();
++	sf2000_visible_tick("mips-after-cpu-cache-init");
+ 	pagetable_init();
++	sf2000_visible_tick("mips-after-pagetable-init");
+ 
+ 	memblock_dump_all();
++	sf2000_visible_tick("mips-after-memblock-dump");
+ 
+ 	setup_rng_seed();
++	sf2000_visible_tick("mips-after-rng-seed");
+ }
+ 
+ unsigned long kernelsp[NR_CPUS];
+diff --git a/arch/mips/kernel/traps.c b/arch/mips/kernel/traps.c
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -2299,6 +2299,16 @@ void per_cpu_trap_init(bool is_boot_cpu)
+ 	configure_hwrena();
+ 	sf2000_trap_tick("percpu-after-hwrena");
+ 
++	/* NuttX uses Cause.IV while its vectored IRQ table is active.  Linux's
++	 * forced MIPS32r1 profile deliberately uses the general 0x180 vector,
++	 * so never inherit the previous image's special interrupt mode. */
++	if (IS_ENABLED(CONFIG_MIPS_SF2000)) {
++		change_c0_intctl(0x3e0, 0);
++		back_to_back_c0_hazard();
++		clear_c0_cause(CAUSEF_IV);
++		back_to_back_c0_hazard();
++	}
++	sf2000_trap_tick("percpu-after-cause-normalize");
+ 	configure_exception_vector();
+ 	sf2000_trap_tick("percpu-after-vector");
+ 
+diff --git a/init/main.c b/init/main.c
+--- a/init/main.c
++++ b/init/main.c
+@@ -190,6 +190,10 @@ static void sf2000_init_value(const char *name, unsigned int value)
+ 
+ 	sf2000_progress_mark(name, 5, value);
+ }
++#else
++static inline void sf2000_before_irq_enable(void) { }
++static inline void sf2000_after_irq_enable(void) { }
++static inline void sf2000_init_mark(const char *name) { (void)name; }
+ #endif
+ 
+ /*
+@@ -1105,12 +1105,17 @@ void start_kernel(void)
+ 	char *command_line;
+ 	char *after_dashes;
+ 
++	/* The direct loader has already armed WDT0.  Retain the earliest C
++	 * boundary before setup_arch takes formal ownership of it. */
++	sf2000_init_mark("start-kernel-entry");
+ 	set_task_stack_end_magic(&init_task);
+ 	smp_setup_processor_id();
+ 	debug_objects_early_init();
+ 	init_vmlinux_build_id();
++	sf2000_init_mark("start-after-build-id");
+ 
+ 	cgroup_init_early();
++	sf2000_init_mark("start-after-cgroup-early");
+ 
+ 	local_irq_disable();
+ 	early_boot_irqs_disabled = true;
+@@ -1123,6 +1128,7 @@ void start_kernel(void)
+ 	page_address_init();
+ 	pr_notice("%s", linux_banner);
+ 	setup_arch(&command_line);
++	sf2000_init_mark("start-after-setup-arch");
+ 	mm_core_init_early();
+ 	/* Static keys and static calls are needed by LSMs */
+ 	jump_label_init();
+@@ -1132,6 +1138,7 @@ void start_kernel(void)
+ 	setup_command_line(command_line);
+ 	setup_nr_cpu_ids();
+ 	setup_per_cpu_areas();
++	sf2000_init_mark("start-after-percpu-areas");
+ 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
+ 	early_numa_node_init();
+ 	boot_cpu_hotplug_init();
+@@ -1150,6 +1157,7 @@ void start_kernel(void)
+ 	if (extra_init_args)
+ 		parse_args("Setting extra init args", extra_init_args,
+ 			   NULL, 0, -1, -1, NULL, set_init_arg);
++	sf2000_init_mark("start-after-parse-args");
+ 
+ 	/* Architectural and non-timekeeping rng init, before allocator init */
+ 	random_init_early(command_line);
+@@ -1163,6 +1171,7 @@ void start_kernel(void)
+ 	sort_main_extable();
+ 	trap_init();
+ 	mm_core_init();
++	sf2000_init_mark("start-after-mm-core-init");
+ 	maple_tree_init();
+ 	poking_init();
+ 	ftrace_init();
+@@ -1176,6 +1185,7 @@ void start_kernel(void)
+ 	 * time - but meanwhile we still have a functioning scheduler.
+ 	 */
+ 	sched_init();
++	sf2000_init_mark("start-after-sched-init");
+ 
+ 	if (WARN(!irqs_disabled(),
+ 		 "Interrupts were enabled *very* early, fixing it\n"))
+@@ -1208,6 +1218,7 @@ void start_kernel(void)
+ 	/* init some links before init_ISA_irqs() */
+ 	early_irq_init();
+ 	init_IRQ();
++	sf2000_init_mark("start-after-init-irq");
+ 	tick_init();
+ 	rcu_init_nohz();
+ 	timers_init();
+@@ -1217,6 +1228,7 @@ void start_kernel(void)
+ 	vdso_setup_data_pages();
+ 	timekeeping_init();
+ 	time_init();
++	sf2000_init_mark("start-after-time-init");
+ 
+ 	/* This must be after timekeeping is initialized */
+ 	random_init();
+@@ -1231,9 +1243,12 @@ void start_kernel(void)
+ 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
+ 
+ 	early_boot_irqs_disabled = false;
++	sf2000_before_irq_enable();
+ 	local_irq_enable();
++	sf2000_after_irq_enable();
+ 
+ 	kmem_cache_init_late();
++	sf2000_init_mark("start-after-kmem-cache-late");
+ 
+ 	/*
+ 	 * HACK ALERT! This is early. We're enabling the console before
+@@ -1241,6 +1256,7 @@ void start_kernel(void)
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
++	sf2000_init_mark("start-after-console-init");
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+@@ -1270,6 +1286,7 @@ void start_kernel(void)
+ 		late_time_init();
+ 	sched_clock_init();
+ 	calibrate_delay();
++	sf2000_init_mark("start-after-calibrate-delay");
+ 
+ 	arch_cpu_finalize_init();
+ 
+@@ -1283,6 +1300,7 @@ void start_kernel(void)
+ 	time_ns_init();
+ 	key_init();
+ 	security_init();
++	sf2000_init_mark("start-after-security-init");
+ 	dbg_late_init();
+ 	net_ns_init();
+ 	vfs_caches_init();
+@@ -1303,6 +1321,7 @@ void start_kernel(void)
+ 	kcsan_init();
+ 
+ 	/* Do the rest non-__init'ed, we're now alive */
++	sf2000_init_mark("start-before-rest-init");
+ 	rest_init();
+ 
+ 	/*
+-- 
+2.50.1

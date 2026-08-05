@@ -321,7 +321,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all help check check-linux-early-handoff memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -399,7 +399,15 @@ help:
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
-	memory-layout-audit
+	memory-layout-audit check-linux-early-handoff
+
+check-linux-early-handoff:
+	grep -Fq 'sf2000_watchdog_arm("early-watchdog-armed")' $(LINUX_PATCHES)
+	grep -Fq 'if (!IS_ENABLED(CONFIG_MIPS_SF2000))' $(LINUX_PATCHES)
+	grep -Fq 'sf2000_init_mark("start-after-setup-arch")' $(LINUX_PATCHES)
+	grep -Fq 'sf2000_before_irq_enable();' $(LINUX_PATCHES)
+	grep -Fq 'clear_c0_cause(CAUSEF_IV);' $(LINUX_PATCHES)
+	grep -Fq 'change_c0_intctl(0x3e0, 0);' $(LINUX_PATCHES)
 
 check-vendor: check test-ge-utils test-ge-matrix test-ge-queue
 
@@ -2562,7 +2570,7 @@ run-linux-buildroot-rom:
 smoke-linux-buildroot-rom:
 	$(MAKE) ROOTFS=buildroot \
 		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
-	grep -q 'sf2000: uart: .*sf2000: watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-rom.log
