@@ -1455,7 +1455,7 @@ static void jump_to_kernel(u32 entry, uintptr dtb)
 		: "$4", "$5", "$6", "$7", "memory");
 }
 
-void linux_loader_main(void)
+void linux_loader_main_impl(void)
 {
 	const struct elf32_ehdr *eh;
 	usize kernel_size;
