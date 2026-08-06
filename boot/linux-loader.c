@@ -25,12 +25,16 @@ typedef unsigned long uintptr;
 #define UART_LSR_THRE 0x20
 /* HC15xx primary-cache contract (NuttX sf2000_sdio.c): 16-byte lines, two
  * ways, 0x4000-byte index span (32 KiB total).  Config1 is unreliable on
- * this core, so the I-cache invalidate sweep uses these fixed values: a
+ * this core, so every cache operation uses fixed values.  The D-cache is
+ * flushed by per-line Hit_Writeback_Inv_D (cache 0x15) over the exact
+ * copied range: this is the proven HC15xx writeback (boot_handoff.S,
+ * bootlog084).  The vendor ROM routine (0x810032f4) does not reliably
+ * write a whole payload back, and an index writeback sweep is not a
+ * sufficient ownership boundary - all three loaders that relied on those
+ * left stale RAM behind (runs 110/112: ri-insn-data=0x00000001 at
+ * 0x80667d3c).  The I-cache is invalidated by an index sweep: a
  * contiguous 0x8000-byte KSEG0 sweep at 16-byte steps visits every
- * (set, way) once (the second 0x4000 carries the bit-14 way select).  The
- * D-cache is not swept by index: the Index Writeback Invalidate op is
- * unreliable here, so freshly copied images are flushed with the vendor ROM
- * hit-writeback routine (0x810032f4) instead. */
+ * (set, way) once (the second 0x4000 carries the bit-14 way select). */
 #define CACHE_LINE 16u
 #define CACHE_INDEX_SPAN 0x4000u
 #define CACHE_WAY_SPAN 0x4000u
@@ -81,7 +85,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-08-06 rom-flush-handoff"
+#define LOADER_BUILD_TAG "2026-08-06 hit-writeback-flush"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1304,6 +1308,68 @@ static void zero_bytes(u8 *dst, usize len)
 		*dst++ = 0;
 }
 
+static void cache_flush_line(uintptr addr)
+{
+	__asm__ volatile(
+		".set push\n\t"
+		".set mips32\n\t"
+		"cache 0x15, 0(%0)\n\t"
+		"cache 0x10, 0(%0)\n\t"
+		".set pop"
+		:
+		: "r"(addr)
+		: "memory");
+}
+
+static void cache_flush_range(uintptr addr, usize len)
+{
+	uintptr p;
+	uintptr end;
+
+	if (len == 0)
+		return;
+
+	p = addr & ~(uintptr)(CACHE_LINE - 1u);
+	end = align_up(addr + len, CACHE_LINE);
+	for (; p < end; p += CACHE_LINE)
+		cache_flush_line(p);
+
+	__asm__ volatile("sync" ::: "memory");
+}
+
+static void cache_writeback_dcache_indices(void)
+{
+	uintptr p;
+
+	/*
+	 * Evict dirty aliases from the low window before the copy replaces
+	 * RAM with the new ELF image.  Match the HC15xx ROM cache handoff
+	 * contract: sweep the 0x4000-byte index span and issue each index
+	 * operation twice (one per way).  Note: this encodes the ROM's
+	 * way-selection model, while the I-cache sweep below uses the
+	 * bit-14 way-select model over a 0x8000 span - the two op classes
+	 * disagree on this core, and the per-line hit-writeback above is
+	 * way-agnostic precisely because of that.  This runs before the
+	 * copy, so it cannot disturb the loader's own still-running data in
+	 * any way that matters: every dirty line is written back to RAM, and
+	 * the loader's subsequent cached accesses simply refetch the same
+	 * bytes.
+	 */
+	for (p = KSEG0_BASE; p < KSEG0_BASE + CACHE_INDEX_SPAN;
+			p += CACHE_LINE) {
+		__asm__ volatile(
+			".set push\n\t"
+			".set mips32\n\t"
+			"cache 0x01, 0(%0)\n\t"
+			"cache 0x01, 0(%0)\n\t"
+			".set pop"
+			:
+			: "r"(p)
+			: "memory");
+	}
+	__asm__ volatile("sync" ::: "memory");
+}
+
 static void cache_invalidate_icache_indices(void)
 {
 	uintptr p;
@@ -1503,21 +1569,20 @@ void linux_loader_main_impl(void)
 		mmio_read32(MAPPING_REG)); /* LMAP */
 	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
+	/* Evict dirty aliases before replacing RAM with the new ELF image. */
+	cache_writeback_dcache_indices();
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
 	/* The cached ELF stores left the kernel image dirty in the D-cache.
-	 * Flush the copied ranges with the vendor ROM hit-writeback routine
-	 * (the same call used for the bootlog sector and by the NuttX
-	 * bootloader's handoff): it is geometry-independent and proven on this
-	 * core, where a full fixed-geometry index writeback sweep still left
-	 * pre-copy RAM in place (run 110: ri-insn-data=0x00000001 at
-	 * 0x80667d3c). */
-	if (rom_handoff_present()) {
-		rom_cache_flush((void *)load_min, (usize)(load_max - load_min));
-		rom_cache_flush((void *)dtb_dest, (usize)dtb_size);
-		__asm__ volatile("sync" ::: "memory");
-	}
+	 * Flush the copied ranges with a per-line Hit_Writeback_Inv_D
+	 * (cache 0x15): this is the proven HC15xx writeback (boot_handoff.S,
+	 * bootlog084).  The vendor ROM routine (0x810032f4) does not reliably
+	 * write a whole payload back, and a full index writeback sweep is not
+	 * a sufficient ownership boundary - both left stale RAM behind on this
+	 * core (runs 110/112: ri-insn-data=0x00000001 at 0x80667d3c). */
+	cache_flush_range(load_min, (usize)(load_max - load_min));
+	cache_flush_range(dtb_dest, dtb_size);
 	/* Remove every possible warm-boot I-cache alias, not only hit aliases. */
 	cache_invalidate_icache_indices();
 	disable_interrupts();
