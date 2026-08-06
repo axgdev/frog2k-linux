@@ -23,8 +23,10 @@ typedef unsigned long uintptr;
 #define UART_THR 0
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
-#define CACHE_LINE 16u
+#define CACHE_LINE 32u
+/* Primary cache way-select lives in bit 14; sweep both ways to fully clear. */
 #define PRIMARY_CACHE_INDEX_SPAN 0x4000u
+#define PRIMARY_CACHE_WAY_SPAN 0x4000u
 #define PINMUX_R05 0xb88004e5u
 #define PINMUX_L25 0xb88004b9u
 #define GPIO_L_OUT 0xb8800054u
@@ -1289,48 +1291,101 @@ static void cache_flush_range(uintptr addr, usize len)
 	__asm__ volatile("sync" ::: "memory");
 }
 
+/*
+ * Blast the whole primary cache by index, decoding the real geometry from
+ * CP0 Config1 exactly like Linux's blast_dcache/blast_icache.  A fixed 0x4000
+ * sweep only covers a 16 KB / 2-way layout; the HC15xx reports a larger, more
+ * associative cache, so a stale I-cache line (the one that faulted in
+ * copy_creds) lives in a way the fixed sweep never reached.  Issuing the index
+ * op for every (way, set) is the only reliable way to clear it.
+ */
 static void cache_writeback_dcache_indices(void)
 {
-	uintptr p;
+	unsigned int config1, linesz, sets, ways, waysize, ws_inc, ws, addr;
 
-	/*
-	 * Match the HC15xx ROM cache handoff at 0x810031d4.  Config1 is not a
-	 * reliable description of this implementation's index space: the ROM
-	 * sweeps 0x4000 bytes and issues each index operation twice (one per
-	 * way).  Use that observed hardware contract instead of deriving the
-	 * loader handoff from Linux's synthetic Config1 description.
-	 */
-	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN;
-			p += CACHE_LINE) {
-		__asm__ volatile(
-			".set push\n\t"
-			".set mips32\n\t"
-			"cache 0x01, 0(%0)\n\t"
-			"cache 0x01, 0(%0)\n\t"
-			".set pop"
-			:
-			: "r"(p)
-			: "memory");
+	__asm__ volatile(".set push\n\t.set mips32\n\tmfc0 %0, $16, 1\n\t"
+		".set pop" : "=r"(config1));
+	if (!(config1 & 0x80000000u) || !((config1 >> 10) & 0x7u)) {
+		uintptr p;
+		for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN +
+				PRIMARY_CACHE_WAY_SPAN; p += CACHE_LINE) {
+			__asm__ volatile(".set push\n\t.set mips32\n\t"
+				"cache 0x01, 0(%0)\n\tcache 0x01, 0(%0)\n\t"
+				".set pop" : : "r"(p) : "memory");
+		}
+		__asm__ volatile("sync" ::: "memory");
+		return;
 	}
+	linesz = 2u << ((config1 >> 10) & 0x7u);
+	sets = 32u << (((config1 >> 13) + 1u) & 0x7u);
+	ways = 1u + ((config1 >> 7) & 0x7u);
+	waysize = sets * linesz;
+	ws_inc = waysize / ways;
+	uart_puts("linux-loader: dcache config1=");
+	uart_hex(config1);
+	uart_puts(" line=");
+	uart_hex(linesz);
+	uart_puts(" sets=");
+	uart_hex(sets);
+	uart_puts(" ways=");
+	uart_hex(ways);
+	uart_puts("\n");
+	progress_mark("l1dconf", 0x4c, config1);
+	progress_mark("l1dline", 0x4c, linesz);
+	progress_mark("l1dsets", 0x4c, sets);
+	progress_mark("l1dways", 0x4c, ways);
+	for (ws = 0; ws < waysize; ws += ws_inc)
+		for (addr = KSEG0_BASE; addr < KSEG0_BASE + waysize;
+				addr += linesz) {
+			__asm__ volatile(".set push\n\t.set mips32\n\t"
+				"cache 0x01, 0(%0)\n\t.set pop"
+				: : "r"(addr | ws) : "memory");
+		}
 	__asm__ volatile("sync" ::: "memory");
 }
 
 static void cache_invalidate_icache_indices(void)
 {
-	uintptr p;
+	unsigned int config1, linesz, sets, ways, waysize, ws_inc, ws, addr;
 
-	for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN;
-			p += CACHE_LINE) {
-		__asm__ volatile(
-			".set push\n\t"
-			".set mips32\n\t"
-			"cache 0x00, 0(%0)\n\t"
-			"cache 0x00, 0(%0)\n\t"
-			".set pop"
-			:
-			: "r"(p)
-			: "memory");
+	__asm__ volatile(".set push\n\t.set mips32\n\tmfc0 %0, $16, 1\n\t"
+		".set pop" : "=r"(config1));
+	if (!(config1 & 0x80000000u) || !((config1 >> 19) & 0x7u)) {
+		uintptr p;
+		for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN +
+				PRIMARY_CACHE_WAY_SPAN; p += CACHE_LINE) {
+			__asm__ volatile(".set push\n\t.set mips32\n\t"
+				"cache 0x00, 0(%0)\n\tcache 0x00, 0(%0)\n\t"
+				".set pop" : : "r"(p) : "memory");
+		}
+		__asm__ volatile("sync" ::: "memory");
+		return;
 	}
+	linesz = 2u << ((config1 >> 19) & 0x7u);
+	sets = 32u << (((config1 >> 22) + 1u) & 0x7u);
+	ways = 1u + ((config1 >> 16) & 0x7u);
+	waysize = sets * linesz;
+	ws_inc = waysize / ways;
+	uart_puts("linux-loader: icache config1=");
+	uart_hex(config1);
+	uart_puts(" line=");
+	uart_hex(linesz);
+	uart_puts(" sets=");
+	uart_hex(sets);
+	uart_puts(" ways=");
+	uart_hex(ways);
+	uart_puts("\n");
+	progress_mark("l1iconf", 0x4c, config1);
+	progress_mark("l1iline", 0x4c, linesz);
+	progress_mark("l1isets", 0x4c, sets);
+	progress_mark("l1iways", 0x4c, ways);
+	for (ws = 0; ws < waysize; ws += ws_inc)
+		for (addr = KSEG0_BASE; addr < KSEG0_BASE + waysize;
+				addr += linesz) {
+			__asm__ volatile(".set push\n\t.set mips32\n\t"
+				"cache 0x00, 0(%0)\n\t.set pop"
+				: : "r"(addr | ws) : "memory");
+		}
 	__asm__ volatile("sync" ::: "memory");
 }
 
