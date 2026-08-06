@@ -759,6 +759,7 @@ $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 	touch '$@'
 
 $(PIE_STAMP): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
 	test -f '$(PIE_SYSROOT)/rcrt1.o'
 	test -f "$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o)"
 	touch '$@'
@@ -1047,10 +1048,10 @@ $(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
 		if test -e '$@' && ! test "$$patch" -nt '$@'; then \
 			continue; \
 		fi; \
-		if patch -d '$(LINUX_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
+		if patch --batch --forward -d '$(LINUX_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'applying %s\n' "$$patch"; \
-			patch -d '$(LINUX_SRC)' -p1 < "$$patch"; \
-		elif patch -d '$(LINUX_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
+			patch --batch --forward -d '$(LINUX_SRC)' -p1 < "$$patch" || exit 1; \
+		elif patch --batch -d '$(LINUX_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
 			printf 'already applied %s\n' "$$patch"; \
 		else \
 			printf 'cannot apply %s; run make linux-reextract for a clean kernel tree\n' "$$patch" >&2; \

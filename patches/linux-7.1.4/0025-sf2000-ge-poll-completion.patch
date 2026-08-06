@@ -1,0 +1,103 @@
+[PATCH] sf2000: ge: poll GE completion instead of waiting on the IRQ
+
+The HC15xx completion interrupt is an accelerator, not the contract:
+the sysint cascade does not deliver it on every boot path (on the
+physical SF2000 the GE line shows 0 interrupts while the engine still
+finishes nodes and sets STATUS.DONE).  With the IRQ silent, every
+HCGE_SYNC_TIMEOUT waits on the completion until -ETIMEDOUT, and the
+latched STATUS_BUSY bit then makes the submit path skip the doorbell,
+so the engine stops receiving work, the GMA never latches its
+descriptor, and the panel samples an invalid RGB stream (moving static).
+
+The vendor firmware and the NuttX bootloader both poll STATUS instead:
+the engine sets DONE and advances HQ_FIRST to the producer when it
+consumes a node.  Follow that contract here:
+
+  - HCGE_SYNC_TIMEOUT polls for DONE / HQ_FIRST reaching the producer
+    (or phy_addr_min across a wrap) and only falls back to the
+    completion IRQ as an accelerator.
+  - HCGE_SUBMIT drains the previous node by polling the same signals
+    and clears the latched STATUS (write-one-to-clear) before
+    publishing, so a missed IRQ cannot wedge the busy gate.
+
+Signed-off-by: SF2000 Linux Port <sf2000@localhost>
+---
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -334,7 +334,6 @@
+ 		unsigned long timeout = msecs_to_jiffies(arg ? arg : 1000);
+ 		long waited;
+ 		int idle;
+-		u32 first = readl(ge->regs + SF2000_GE_HQ_FIRST);
+ 		u32 status = readl(ge->regs + SF2000_GE_STATUS);
+ 
+ 		if (ctx->is_finish) {
+@@ -343,9 +342,29 @@
+ 				10, jiffies_to_usecs(timeout));
+ 			if (!idle)
+ 				return 0;
+-		} else if (!(status & SF2000_GE_STATUS_BUSY) &&
+-			   first == (ctx->phy_addr_start & ~1u))
+-			return 0;
++		} else {
++			/*
++			 * The completion IRQ is an accelerator, not the contract:
++			 * the HC15xx sysint cascade does not deliver it on every
++			 * boot path, which previously wedged sync forever even
++			 * though the engine had finished the node.  Follow the
++			 * vendor and NuttX poll contract: the published node is
++			 * done once the engine has consumed it (HQ_FIRST reaches
++			 * the producer, or returns to phy_addr_min across a wrap)
++			 * or set the DONE completion bit.
++			 */
++			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
++				status,
++				(status & SF2000_GE_STATUS_DONE) ||
++				readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++					(ctx->phy_addr_start & ~1u) ||
++				(SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
++				 readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++					ctx->phy_addr_min),
++				10, jiffies_to_usecs(timeout));
++			if (!idle)
++				return 0;
++		}
+ 		waited = wait_for_completion_interruptible_timeout(&ge->done,
+ 								   timeout);
+ 		if (waited < 0)
+@@ -402,6 +421,35 @@
+ 			return -EINVAL;
+ 		mutex_lock(&ge->submit_lock);
+ 		/*
++		 * Drain the previous node before publishing.  The completion IRQ
++		 * (which normally clears the latched STATUS) is not delivered on
++		 * every HC15xx boot, so a stale BUSY bit would make the busy gate
++		 * below skip the doorbell and wedge the queue.  The engine sets
++		 * DONE and advances HQ_FIRST to the producer when it consumes a
++		 * node (vendor/NuttX poll contract); clear the latched status the
++		 * way the IRQ handler would once that has happened.
++		 */
++		{
++			u32 drain;
++
++			if (readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
++					drain,
++					(drain & SF2000_GE_STATUS_DONE) ||
++					readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++						(ctx->phy_addr_start & ~1u) ||
++					(SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
++					 readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++						ctx->phy_addr_min),
++					10, 250 * USEC_PER_MSEC)) {
++				mutex_unlock(&ge->submit_lock);
++				return -EBUSY;
++			}
++			/* STATUS is write-one-to-clear on HC15xx. */
++			drain = readl(ge->regs + SF2000_GE_STATUS);
++			if (drain)
++				writel(drain, ge->regs + SF2000_GE_STATUS);
++		}
++		/*
+ 		 * Follow the vendor ring contract.  The producer's low bit records a
+ 		 * wrap, point_wrap_addr terminates the old tail, and the IRQ moves
+ 		 * HQ_FIRST back to phy_addr_min only after that tail is consumed.

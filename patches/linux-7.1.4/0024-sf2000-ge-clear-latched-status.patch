@@ -1,0 +1,39 @@
+From: opencode <opencode@local>
+Subject: [PATCH] sf2000: ge: clear latched status and prime idle queue on reset
+
+HC15xx leaves the GE status register latched across reset. Clear the
+write-one-to-clear completion status and publish an empty queue before the
+first Linux submission takes ownership of the engine.
+
+---
+ drivers/misc/sf2000-ge.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/misc/sf2000-ge.c b/drivers/misc/sf2000-ge.c
+--- a/drivers/misc/sf2000-ge.c
++++ b/drivers/misc/sf2000-ge.c
+@@ -29,6 +29,7 @@
+ #define SF2000_GE_CTRL_HQ_IRQ	BIT(17)
+ #define SF2000_GE_START_HQ	BIT(1)
+ #define SF2000_GE_STATUS_BUSY	BIT(31)
++#define SF2000_GE_STATUS_DONE	BIT(0)
+ 
+ #define SF2000_GE_NODE_ADDR(value)	((value) & ~1u)
+ #define SF2000_GE_NODE_WRAP(value)	((value) & 1u)
+@@ -168,11 +169,16 @@
+ static void sf2000_ge_hw_reset(struct sf2000_ge *ge)
+ {
+ 	u32 value = readl(ge->sys + SF2000_SYS_RESET);
++	u32 base = (u32)ge->queue_dma + sizeof(struct hcge_cmdq_node_ctx);
+ 
+ 	sf2000_ge_clock_enable(ge);
+ 	writel(value | SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
+ 	udelay(10);
+ 	writel(value & ~SF2000_SYS_GE_RESET, ge->sys + SF2000_SYS_RESET);
++
++	writel(SF2000_GE_STATUS_DONE, ge->regs + SF2000_GE_STATUS);
++	writel(base, ge->regs + SF2000_GE_HQ_FIRST);
++	writel(base, ge->regs + SF2000_GE_HQ_LAST);
+ }
+ 
+ /*
