@@ -1,0 +1,28 @@
+From: SF2000 boot project <sf2000@localhost>
+Subject: sf2000: pin L1 cache line size and board cache geometry in Kconfig
+
+The HC15xx core uses 128-byte L1 cache lines and a board-provided (no-op)
+secondary cache ops table.  The MIPS_SF2000 target previously relied on
+MIPS_GENERIC_KERNEL being enabled for the defconfig to select
+MIPS_L1_CACHE_SHIFT_7 and BOARD_SCACHE; the config stamp recipe disables
+MIPS_GENERIC_KERNEL and enables MIPS_SF2000, so a config regeneration
+silently fell back to the 32-byte default (MIPS_L1_CACHE_SHIFT=5) and
+dropped BOARD_SCACHE.  On the physical device a kernel built with the
+wrong line-size assumption leaves stale cache lines over kernel text,
+which surfaces as Reserved Instruction faults (ri-insn-data 0x00000001)
+at random text addresses during early boot.
+
+Select the correct geometry from the MIPS_SF2000 target itself so any
+future regeneration from any defconfig base produces a working kernel.
+
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -260,6 +260,8 @@
+ 	select IRQ_MIPS_CPU
+ 	select MIPS_GENERIC
+ 	select MACH_GENERIC_CORE
++	select BOARD_SCACHE
++	select MIPS_L1_CACHE_SHIFT_7
+ 	select NO_EXCEPT_FILL
+ 	select SYS_HAS_CPU_MIPS32_R1
+ 	select SYS_SUPPORTS_32BIT_KERNEL

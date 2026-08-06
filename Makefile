@@ -1583,6 +1583,13 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable FB_SIMPLE
 	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
+	# The HC15xx core has 128-byte L1 lines and a board cache-ops table.
+	# MIPS_SF2000 selects both in the kernel Kconfig; assert the regenerated
+	# config kept them so future defconfig/scripts/config drift cannot
+	# silently produce a kernel that faults on device with stale text lines
+	# (Reserved Instruction at a valid text address).
+	grep -q '^CONFIG_MIPS_L1_CACHE_SHIFT=7$$' '$(LINUX_OUT)/.config'
+	grep -q '^CONFIG_BOARD_SCACHE=y$$' '$(LINUX_OUT)/.config'
 	touch '$@'
 
 $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
