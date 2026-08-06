@@ -951,6 +951,40 @@ static void bootlog_wdt_arm(const char *name)
 	bootlog_flush();
 }
 
+static void bootlog_wdt_disarm(const char *name)
+{
+	bootlog_init();
+	if (log_ready) {
+		bootlog_puts("wdt disarm before count=");
+		bootlog_hex(mmio_read32(WDT0_COUNT));
+		bootlog_puts(" conf=");
+		bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+		bootlog_puts("\n");
+		bootlog_flush();
+	}
+
+	/*
+	 * Linux does not feed WDT0.  Leaving it armed here would reset the box
+	 * ~8s into boot, long before it reaches the menu.  Disable it; the
+	 * kernel re-affirms ownership via its late_initcall takeover once early
+	 * boot has clearly succeeded.  A genuine early-boot hang therefore
+	 * stalls instead of rebooting, which is the desired behaviour for linux.
+	 */
+	mmio_write8(WDT0_CONF, 0);
+	progress_mark(name, 3, 0);
+
+	bootlog_init();
+	if (!log_ready)
+		return;
+
+	bootlog_puts("wdt disarmed conf=");
+	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
+	bootlog_puts(" name=");
+	bootlog_puts(name);
+	bootlog_puts("\n");
+	bootlog_flush();
+}
+
 static void bootlog_ebase(u32 before, u32 after)
 {
 	bootlog_init();
@@ -1585,7 +1619,7 @@ void linux_loader_main_impl(void)
 	print_kernel_jump(entry, dtb_dest);
 	direct_handoff_trace_mark(0x110u, 0x4c4a4d50u, entry); /* LJMP */
 	direct_handoff_trace_mark(0x118u, 0x4c445442u, (u32)dtb_dest); /* LDTB */
-	bootlog_wdt_arm("loader-watchdog-armed");
+	bootlog_wdt_disarm("loader-watchdog-disarmed");
 	set_scpu_clock_918();
 	write_status(0);
 	jump_to_kernel(entry, dtb_dest);
