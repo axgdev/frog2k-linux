@@ -25,9 +25,12 @@ typedef unsigned long uintptr;
 #define UART_LSR_THRE 0x20
 /* HC15xx primary-cache contract (NuttX sf2000_sdio.c): 16-byte lines, two
  * ways, 0x4000-byte index span (32 KiB total).  Config1 is unreliable on
- * this core, so every cache sweep uses these fixed values; a contiguous
- * 0x8000-byte KSEG0 sweep at 16-byte steps visits every (set, way) once
- * (the second 0x4000 carries the bit-14 way select). */
+ * this core, so the I-cache invalidate sweep uses these fixed values: a
+ * contiguous 0x8000-byte KSEG0 sweep at 16-byte steps visits every
+ * (set, way) once (the second 0x4000 carries the bit-14 way select).  The
+ * D-cache is not swept by index: the Index Writeback Invalidate op is
+ * unreliable here, so freshly copied images are flushed with the vendor ROM
+ * hit-writeback routine (0x810032f4) instead. */
 #define CACHE_LINE 16u
 #define CACHE_INDEX_SPAN 0x4000u
 #define CACHE_WAY_SPAN 0x4000u
@@ -78,7 +81,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-08-06 fixed-geometry-sweep"
+#define LOADER_BUILD_TAG "2026-08-06 rom-flush-handoff"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1301,25 +1304,6 @@ static void zero_bytes(u8 *dst, usize len)
 		*dst++ = 0;
 }
 
-/* Full index writeback-invalidate of the primary D-cache using the fixed
- * HC15xx geometry above.  Run 108's fault (garbage instruction fetch at
- * 0x806679b0, set 0x39b, way 1) came from 32-byte-stride sweeps that never
- * visited odd-indexed lines, leaving freshly copied kernel image lines dirty
- * in the D-cache while RAM still held pre-copy contents. */
-static void cache_writeback_dcache_indices(void)
-{
-	uintptr p;
-
-	uart_puts("linux-loader: dcache index sweep\n");
-	for (p = KSEG0_BASE; p < KSEG0_BASE + CACHE_TOTAL_SPAN;
-			p += CACHE_LINE) {
-		__asm__ volatile(".set push\n\t.set mips32\n\t"
-			"cache 0x01, 0(%0)\n\tcache 0x01, 0(%0)\n\t"
-			".set pop" : : "r"(p) : "memory");
-	}
-	__asm__ volatile("sync" ::: "memory");
-}
-
 static void cache_invalidate_icache_indices(void)
 {
 	uintptr p;
@@ -1519,15 +1503,21 @@ void linux_loader_main_impl(void)
 		mmio_read32(MAPPING_REG)); /* LMAP */
 	log_status_handoff();
 	bootlog_stage("loader-jump", 2);
-	/* Evict dirty aliases before replacing RAM with the new ELF image. */
-	cache_writeback_dcache_indices();
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	/* The cached ELF stores above left D-cache lines dirty; write the whole
-	 * cache back by index so the kernel's first I-fill reads RAM, never
-	 * stale D-cache contents. */
-	cache_writeback_dcache_indices();
+	/* The cached ELF stores left the kernel image dirty in the D-cache.
+	 * Flush the copied ranges with the vendor ROM hit-writeback routine
+	 * (the same call used for the bootlog sector and by the NuttX
+	 * bootloader's handoff): it is geometry-independent and proven on this
+	 * core, where a full fixed-geometry index writeback sweep still left
+	 * pre-copy RAM in place (run 110: ri-insn-data=0x00000001 at
+	 * 0x80667d3c). */
+	if (rom_handoff_present()) {
+		rom_cache_flush((void *)load_min, (usize)(load_max - load_min));
+		rom_cache_flush((void *)dtb_dest, (usize)dtb_size);
+		__asm__ volatile("sync" ::: "memory");
+	}
 	/* Remove every possible warm-boot I-cache alias, not only hit aliases. */
 	cache_invalidate_icache_indices();
 	disable_interrupts();
