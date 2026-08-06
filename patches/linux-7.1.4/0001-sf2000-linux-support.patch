@@ -760,7 +760,7 @@ index 1ae6d0c0e..f0b2435ff 100644
  #include <asm/fw/fw.h>
  
  #ifdef CONFIG_MIPS_ELF_APPENDED_DTB
-@@ -74,6 +75,601 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
+@@ -74,6 +75,620 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
  static const char builtin_cmdline[] __initconst = "";
  #endif
  
@@ -1224,6 +1224,25 @@ index 1ae6d0c0e..f0b2435ff 100644
 +		SF2000_WDT_BOOT_USEC);
 +	sf2000_progress_mark(name, 3, SF2000_WDT_BOOT_COUNT);
 +}
++
++static void sf2000_watchdog_disarm(void)
++{
++	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
++		return;
++	*SF2000_WDT_CONF_KSEG1 = 0;
++}
++
++static int __init sf2000_watchdog_takeover(void)
++{
++	/* The bootloader leaves WDT0 owned by the payload.  The linux-loader
++	 * arms it as an early-boot safety net; once early boot has clearly
++	 * succeeded there is nothing petting it, so disarm to avoid a spurious
++	 * reset.  A genuine early-boot hang still trips the armed watchdog
++	 * before this point. */
++	sf2000_watchdog_disarm();
++	return 0;
++}
++late_initcall(sf2000_watchdog_takeover);
 +
 +static int __init sf2000_builtin_cmdline_has(const char *needle)
 +{
