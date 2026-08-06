@@ -23,10 +23,15 @@ typedef unsigned long uintptr;
 #define UART_THR 0
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
-#define CACHE_LINE 32u
-/* Primary cache way-select lives in bit 14; sweep both ways to fully clear. */
-#define PRIMARY_CACHE_INDEX_SPAN 0x4000u
-#define PRIMARY_CACHE_WAY_SPAN 0x4000u
+/* HC15xx primary-cache contract (NuttX sf2000_sdio.c): 16-byte lines, two
+ * ways, 0x4000-byte index span (32 KiB total).  Config1 is unreliable on
+ * this core, so every cache sweep uses these fixed values; a contiguous
+ * 0x8000-byte KSEG0 sweep at 16-byte steps visits every (set, way) once
+ * (the second 0x4000 carries the bit-14 way select). */
+#define CACHE_LINE 16u
+#define CACHE_INDEX_SPAN 0x4000u
+#define CACHE_WAY_SPAN 0x4000u
+#define CACHE_TOTAL_SPAN (CACHE_INDEX_SPAN + CACHE_WAY_SPAN)
 #define PINMUX_R05 0xb88004e5u
 #define PINMUX_L25 0xb88004b9u
 #define GPIO_L_OUT 0xb8800054u
@@ -73,7 +78,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-07-15 vendor-cache-sweep"
+#define LOADER_BUILD_TAG "2026-08-06 fixed-geometry-sweep"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1296,130 +1301,39 @@ static void zero_bytes(u8 *dst, usize len)
 		*dst++ = 0;
 }
 
-static void cache_flush_line(uintptr addr)
-{
-	__asm__ volatile(
-		".set push\n\t"
-		".set mips32\n\t"
-		"cache 0x15, 0(%0)\n\t"
-		"cache 0x10, 0(%0)\n\t"
-		".set pop"
-		:
-		: "r"(addr)
-		: "memory");
-}
-
-static void cache_flush_range(uintptr addr, usize len)
-{
-	uintptr p;
-	uintptr end;
-
-	if (len == 0)
-		return;
-
-	p = addr & ~(uintptr)(CACHE_LINE - 1u);
-	end = align_up(addr + len, CACHE_LINE);
-	for (; p < end; p += CACHE_LINE)
-		cache_flush_line(p);
-
-	__asm__ volatile("sync" ::: "memory");
-}
-
-/*
- * Blast the whole primary cache by index, decoding the real geometry from
- * CP0 Config1 exactly like Linux's blast_dcache/blast_icache.  A fixed 0x4000
- * sweep only covers a 16 KB / 2-way layout; the HC15xx reports a larger, more
- * associative cache, so a stale I-cache line (the one that faulted in
- * copy_creds) lives in a way the fixed sweep never reached.  Issuing the index
- * op for every (way, set) is the only reliable way to clear it.
- */
+/* Full index writeback-invalidate of the primary D-cache using the fixed
+ * HC15xx geometry above.  Run 108's fault (garbage instruction fetch at
+ * 0x806679b0, set 0x39b, way 1) came from 32-byte-stride sweeps that never
+ * visited odd-indexed lines, leaving freshly copied kernel image lines dirty
+ * in the D-cache while RAM still held pre-copy contents. */
 static void cache_writeback_dcache_indices(void)
 {
-	unsigned int config1, linesz, sets, ways, waysize, ws_inc, ws, addr;
+	uintptr p;
 
-	__asm__ volatile(".set push\n\t.set mips32\n\tmfc0 %0, $16, 1\n\t"
-		".set pop" : "=r"(config1));
-	if (!(config1 & 0x80000000u) || !((config1 >> 10) & 0x7u)) {
-		uintptr p;
-		for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN +
-				PRIMARY_CACHE_WAY_SPAN; p += CACHE_LINE) {
-			__asm__ volatile(".set push\n\t.set mips32\n\t"
-				"cache 0x01, 0(%0)\n\tcache 0x01, 0(%0)\n\t"
-				".set pop" : : "r"(p) : "memory");
-		}
-		__asm__ volatile("sync" ::: "memory");
-		return;
+	uart_puts("linux-loader: dcache index sweep\n");
+	for (p = KSEG0_BASE; p < KSEG0_BASE + CACHE_TOTAL_SPAN;
+			p += CACHE_LINE) {
+		__asm__ volatile(".set push\n\t.set mips32\n\t"
+			"cache 0x01, 0(%0)\n\tcache 0x01, 0(%0)\n\t"
+			".set pop" : : "r"(p) : "memory");
 	}
-	linesz = 2u << ((config1 >> 10) & 0x7u);
-	sets = 32u << (((config1 >> 13) + 1u) & 0x7u);
-	ways = 1u + ((config1 >> 7) & 0x7u);
-	waysize = sets * linesz;
-	ws_inc = waysize / ways;
-	uart_puts("linux-loader: dcache config1=");
-	uart_hex(config1);
-	uart_puts(" line=");
-	uart_hex(linesz);
-	uart_puts(" sets=");
-	uart_hex(sets);
-	uart_puts(" ways=");
-	uart_hex(ways);
-	uart_puts("\n");
-	progress_mark("l1dconf", 0x4c, config1);
-	progress_mark("l1dline", 0x4c, linesz);
-	progress_mark("l1dsets", 0x4c, sets);
-	progress_mark("l1dways", 0x4c, ways);
-	for (ws = 0; ws < waysize; ws += ws_inc)
-		for (addr = KSEG0_BASE; addr < KSEG0_BASE + waysize;
-				addr += linesz) {
-			__asm__ volatile(".set push\n\t.set mips32\n\t"
-				"cache 0x01, 0(%0)\n\t.set pop"
-				: : "r"(addr | ws) : "memory");
-		}
 	__asm__ volatile("sync" ::: "memory");
 }
 
 static void cache_invalidate_icache_indices(void)
 {
-	unsigned int config1, linesz, sets, ways, waysize, ws_inc, ws, addr;
+	uintptr p;
 
-	__asm__ volatile(".set push\n\t.set mips32\n\tmfc0 %0, $16, 1\n\t"
-		".set pop" : "=r"(config1));
-	if (!(config1 & 0x80000000u) || !((config1 >> 19) & 0x7u)) {
-		uintptr p;
-		for (p = KSEG0_BASE; p < KSEG0_BASE + PRIMARY_CACHE_INDEX_SPAN +
-				PRIMARY_CACHE_WAY_SPAN; p += CACHE_LINE) {
-			__asm__ volatile(".set push\n\t.set mips32\n\t"
-				"cache 0x00, 0(%0)\n\tcache 0x00, 0(%0)\n\t"
-				".set pop" : : "r"(p) : "memory");
-		}
-		__asm__ volatile("sync" ::: "memory");
-		return;
+	/* Index Invalidate (0x00) over every (set, way) of the same fixed
+	 * primary I-cache, so a warm-boot alias can never shadow freshly copied
+	 * kernel code. */
+	uart_puts("linux-loader: icache index sweep\n");
+	for (p = KSEG0_BASE; p < KSEG0_BASE + CACHE_TOTAL_SPAN;
+			p += CACHE_LINE) {
+		__asm__ volatile(".set push\n\t.set mips32\n\t"
+			"cache 0x00, 0(%0)\n\tcache 0x00, 0(%0)\n\t"
+			".set pop" : : "r"(p) : "memory");
 	}
-	linesz = 2u << ((config1 >> 19) & 0x7u);
-	sets = 32u << (((config1 >> 22) + 1u) & 0x7u);
-	ways = 1u + ((config1 >> 16) & 0x7u);
-	waysize = sets * linesz;
-	ws_inc = waysize / ways;
-	uart_puts("linux-loader: icache config1=");
-	uart_hex(config1);
-	uart_puts(" line=");
-	uart_hex(linesz);
-	uart_puts(" sets=");
-	uart_hex(sets);
-	uart_puts(" ways=");
-	uart_hex(ways);
-	uart_puts("\n");
-	progress_mark("l1iconf", 0x4c, config1);
-	progress_mark("l1iline", 0x4c, linesz);
-	progress_mark("l1isets", 0x4c, sets);
-	progress_mark("l1iways", 0x4c, ways);
-	for (ws = 0; ws < waysize; ws += ws_inc)
-		for (addr = KSEG0_BASE; addr < KSEG0_BASE + waysize;
-				addr += linesz) {
-			__asm__ volatile(".set push\n\t.set mips32\n\t"
-				"cache 0x00, 0(%0)\n\t.set pop"
-				: : "r"(addr | ws) : "memory");
-		}
 	__asm__ volatile("sync" ::: "memory");
 }
 
@@ -1610,8 +1524,10 @@ void linux_loader_main_impl(void)
 	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	cache_flush_range(load_min, (usize)(load_max - load_min));
-	cache_flush_range(dtb_dest, dtb_size);
+	/* The cached ELF stores above left D-cache lines dirty; write the whole
+	 * cache back by index so the kernel's first I-fill reads RAM, never
+	 * stale D-cache contents. */
+	cache_writeback_dcache_indices();
 	/* Remove every possible warm-boot I-cache alias, not only hit aliases. */
 	cache_invalidate_icache_indices();
 	disable_interrupts();
