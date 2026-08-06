@@ -11,8 +11,15 @@ GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
 QEMU_BIN := /tmp/sf2000-qemu/qemu-10.2.2/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
-QEMU_CPU ?= 4Km
+# The SF2000 kernel is built for MIPS32r1 but deliberately uses MIPS32r2 CP0
+# features (IntCtl/EBase select-1, ehb) in per_cpu_trap_init(); the 4Km model
+# (r1 only) raises Reserved Instruction on those and traps forever.  The 24Kc
+# (r2) is also the sf2000 machine's own default CPU.
+QEMU_CPU ?= 24Kc
 QEMU_CPU_ARGS := $(if $(QEMU_CPU),-cpu $(QEMU_CPU),)
+# Extra -M sf2000,key=val machine options, e.g. ,ge-no-irq=on for the
+# no-completion-IRQ regression boot that forces the GE poll path.
+QEMU_MACHINE_ARGS ?=
 QEMU_ROM_CPU ?=
 QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
@@ -325,7 +332,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
-	smoke-linux-buildroot-asd run-linux-buildroot-storage \
+	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq run-linux-buildroot-storage \
 	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
 	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
 smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
@@ -396,7 +403,8 @@ help:
 		'make linux-buildroot-asd   build the physical-device artifact' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
-		'make smoke-linux-buildroot-asd  boot the artifact in QEMU'
+		'make smoke-linux-buildroot-asd  boot the artifact in QEMU' \
+		'make smoke-linux-buildroot-ge-no-irq  boot with the GE completion IRQ suppressed'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
 	memory-layout-audit check-linux-early-handoff
@@ -1854,7 +1862,7 @@ run-linux-asd: qemu linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	SF2000_TRACE_PC='$(SF2000_TRACE_PC)' \
 	SF2000_TRACE_SDIO='$(SF2000_TRACE_SDIO)' \
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000$(QEMU_MACHINE_ARGS) $(QEMU_CPU_ARGS) -kernel '$(LINUX_ASD)' \
 		-append '$(LINUX_CMDLINE)' \
 		$(QEMU_SD_ARGS) \
 		-display none -serial none -monitor none \
@@ -2317,6 +2325,19 @@ smoke-linux-buildroot-asd:
 	grep -q '18818600.serial: ttyS0 .*irq = 17' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'unexpected IRQ' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Boot with the graphics-engine completion IRQ suppressed (the physical device
+# can deliver 0 GE IRQs through the sysint cascade).  The engine still completes
+# queues and latches STATUS.DONE, so the kernel must reach screen-ready through
+# the HCGE poll path; a regression to IRQ-only completion waits would stall here.
+smoke-linux-buildroot-ge-no-irq:
+	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-no-irq=on' \
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
+	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-sync-ok' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -qE 'sync timeout|ETIMEDOUT|completion.*timeout|timed out' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
