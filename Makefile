@@ -328,7 +328,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot \
+.PHONY: all help check check-linux-early-handoff memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot physical-linux-asd \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -401,6 +401,7 @@ help:
 		'make check                 fast host-side regression suite' \
 		'make check-vendor          source/vendor GE parity tests' \
 		'make linux-buildroot-asd   build the physical-device artifact' \
+		'make physical-linux-asd    explicit alias for the physical buildroot ASD' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU' \
@@ -1818,7 +1819,14 @@ $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 $(LINUX_ROM_SD_IMAGE): $(LINUX_ASD) $(QEMU_MKSD)
 	'$(QEMU_MKSD)' '$(LINUX_ASD)' '$@' fat32
 
-ifeq ($(SDCARD_ASD_SYNC),1)
+ifeq ($(ROOTFS),tiny)
+# The tiny image is intentionally diagnostic-only.  Never let a bare
+# `make linux-asd` overwrite the physical SD-card artifact with a menu-less
+# initramfs, even when SDCARD_ASD_SYNC is inherited from the normal command
+# line configuration.
+linux-asd: $(LINUX_ASD)
+	@echo "diagnostic ASD: tiny rootfs; refusing to update build/sdcard artifacts"
+else ifeq ($(SDCARD_ASD_SYNC),1)
 linux-asd: $(LINUX_ASD) $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_CHECKSUMS)
 	cmp '$(LINUX_ASD)' '$(SDCARD_LINUX_ASD)'
@@ -1834,6 +1842,13 @@ linux-buildroot:
 
 linux-buildroot-asd:
 	$(MAKE) ROOTFS=buildroot linux-asd
+
+# The SD-card artifact must contain the Buildroot userspace/menu.  Keep this
+# explicit alias next to the historical target so a bare `make linux-asd`
+# (which intentionally defaults to the tiny diagnostic rootfs) cannot be
+# mistaken for a physical-device build.
+physical-linux-asd:
+	$(MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=1 linux-asd
 
 ifeq ($(SDCARD_ASD_SYNC),1)
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
