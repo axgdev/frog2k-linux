@@ -85,7 +85,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-08-06 hit-writeback-flush"
+#define LOADER_BUILD_TAG "2026-08-07 uncached-kseg1-verify-repair"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1277,6 +1277,15 @@ static uintptr to_kseg0(u32 addr)
 	return (uintptr)(addr | KSEG0_BASE);
 }
 
+static uintptr to_kseg1(u32 addr)
+{
+	if ((addr & 0xe0000000u) == KSEG1_BASE)
+		return (uintptr)addr;
+	if ((addr & 0xe0000000u) == KSEG0_BASE)
+		return (uintptr)((addr & 0x1fffffffu) | KSEG1_BASE);
+	return (uintptr)(addr | KSEG1_BASE);
+}
+
 static int blob_range_valid(const u8 *blob, usize blob_size, u32 off, u32 len)
 {
 	(void)blob;
@@ -1308,20 +1317,11 @@ static void zero_bytes(u8 *dst, usize len)
 		*dst++ = 0;
 }
 
-static void cache_flush_line(uintptr addr)
-{
-	__asm__ volatile(
-		".set push\n\t"
-		".set mips32\n\t"
-		"cache 0x15, 0(%0)\n\t"
-		"cache 0x10, 0(%0)\n\t"
-		".set pop"
-		:
-		: "r"(addr)
-		: "memory");
-}
-
-static void cache_flush_range(uintptr addr, usize len)
+/* Drop any D-cache line that aliases the freshly copied image without
+ * writing it back: RAM already holds the uncached-copied image, and a stale
+ * alias from a previous image must never be written over it.  Hit_Invalidate_D
+ * (0x11) operates on the line containing the address only if present. */
+static void cache_invalidate_dcache_range(uintptr addr, usize len)
 {
 	uintptr p;
 	uintptr end;
@@ -1331,9 +1331,41 @@ static void cache_flush_range(uintptr addr, usize len)
 
 	p = addr & ~(uintptr)(CACHE_LINE - 1u);
 	end = align_up(addr + len, CACHE_LINE);
-	for (; p < end; p += CACHE_LINE)
-		cache_flush_line(p);
+	for (; p < end; p += CACHE_LINE) {
+		__asm__ volatile(
+			".set push\n\t"
+			".set mips32\n\t"
+			"cache 0x11, 0(%0)\n\t"
+			".set pop"
+			:
+			: "r"(p)
+			: "memory");
+	}
+	__asm__ volatile("sync" ::: "memory");
+}
 
+/* Drop any I-cache line aliasing the copied image so the first kernel
+ * instruction fetch reads RAM, not a warm-boot alias. */
+static void cache_invalidate_icache_range(uintptr addr, usize len)
+{
+	uintptr p;
+	uintptr end;
+
+	if (len == 0)
+		return;
+
+	p = addr & ~(uintptr)(CACHE_LINE - 1u);
+	end = align_up(addr + len, CACHE_LINE);
+	for (; p < end; p += CACHE_LINE) {
+		__asm__ volatile(
+			".set push\n\t"
+			".set mips32\n\t"
+			"cache 0x10, 0(%0)\n\t"
+			".set pop"
+			:
+			: "r"(p)
+			: "memory");
+	}
 	__asm__ volatile("sync" ::: "memory");
 }
 
@@ -1385,6 +1417,95 @@ static void cache_invalidate_icache_indices(void)
 			".set pop" : : "r"(p) : "memory");
 	}
 	__asm__ volatile("sync" ::: "memory");
+}
+
+static void verify_repair_range(uintptr dst_kseg1, const u8 *src, usize len)
+{
+	usize off;
+	u32 repairs = 0;
+	u32 first = 0xffffffffu;
+	const u8 *src_kseg1 = (const u8 *)to_kseg1((u32)(uintptr)src);
+
+	/* Read both sides through the uncached alias: this is the ground truth
+	 * of what the kernel will fetch.  If the uncached copy worked there is
+	 * nothing to do; any difference here means a copy bug or a stale
+	 * alias, and the correct word is written back through KSEG1 so RAM is
+	 * repaired before the jump.  The source is read through KSEG1 as well
+	 * (matching the copy) so a warm-boot stale alias of the loader's own
+	 * image can never feed a wrong "expected" word into a repair.  A
+	 * nonzero repair count is logged as a breadcrumb and on UART so a
+	 * silent handoff can never mask a flush failure again. */
+	for (off = 0; off + 4u <= len; off += 4u) {
+		volatile u32 *ram = (volatile u32 *)(dst_kseg1 + off);
+		u32 want = le32(src_kseg1 + off);
+		u32 got = *ram;
+
+		if (got != want) {
+			*ram = want;
+			if (repairs == 0)
+				first = (u32)(dst_kseg1 + off);
+			repairs++;
+		}
+	}
+	/* Repair any sub-word tail bytes (copies are not word-aligned). */
+	for (; off < len; off++) {
+		volatile u8 *ram = (volatile u8 *)(dst_kseg1 + off);
+		u8 want = src_kseg1[off];
+
+		if (*ram != want) {
+			*ram = want;
+			if (repairs == 0)
+				first = (u32)(dst_kseg1 + off);
+			repairs++;
+		}
+	}
+
+	if (repairs != 0) {
+		progress_mark("loader-verify-repairs", 0x4d, repairs);
+		uart_puts("linux-loader: VERIFY REPAIRED ");
+		uart_hex(repairs);
+		uart_puts(" words first=");
+		uart_hex(first);
+		uart_puts("\n");
+	}
+}
+
+static void verify_repair_linux_elf(const u8 *blob)
+{
+	const struct elf32_ehdr *eh = (const struct elf32_ehdr *)blob;
+	const struct elf32_phdr *ph;
+	u16 i;
+
+	ph = (const struct elf32_phdr *)(blob + eh->e_phoff);
+	for (i = 0; i < eh->e_phnum; i++) {
+		uintptr dst;
+		usize zero_len;
+		usize done;
+
+		if (ph[i].p_type != PT_LOAD)
+			continue;
+
+		dst = to_kseg1(ph[i].p_paddr != 0 ? ph[i].p_paddr : ph[i].p_vaddr);
+		verify_repair_range(dst, blob + ph[i].p_offset, ph[i].p_filesz);
+
+		/* The .bss tail must read back as zero. */
+		zero_len = ph[i].p_memsz - ph[i].p_filesz;
+		done = 0;
+		while (done + 4u <= zero_len) {
+			volatile u32 *ram = (volatile u32 *)(dst +
+				ph[i].p_filesz + done);
+			if (*ram != 0)
+				*ram = 0;
+			done += 4u;
+		}
+		while (done < zero_len) {
+			volatile u8 *ram = (volatile u8 *)(dst +
+				ph[i].p_filesz + done);
+			if (*ram != 0)
+				*ram = 0;
+			done++;
+		}
+	}
 }
 
 static int valid_elf(const struct elf32_ehdr *eh, usize blob_size)
@@ -1471,15 +1592,25 @@ static void copy_linux_elf(const u8 *blob)
 	 * record is copied with memmove semantics.  Linux emits LOAD records in
 	 * ascending address order, so walking them backwards preserves every
 	 * unread source byte.
+	 *
+	 * Both source and destination are addressed through the uncached KSEG1
+	 * alias: every byte store reaches RAM directly, so the handoff never
+	 * depends on a D-cache writeback (the per-line Hit_Writeback_Inv_D and
+	 * the vendor ROM routine both left stale RAM on this core - runs
+	 * 110/112/114 fetched pre-copy words as instructions).  The NuttX
+	 * bootloader's own handoff copies payloads through uncached KSEG1 for
+	 * the same reason.
 	 */
 	for (i = eh->e_phnum; i-- != 0;) {
 		uintptr dst;
+		uintptr src;
 
 		if (ph[i].p_type != PT_LOAD)
 			continue;
 
-		dst = to_kseg0(ph[i].p_paddr != 0 ? ph[i].p_paddr : ph[i].p_vaddr);
-		copy_overlap((u8 *)dst, blob + ph[i].p_offset, ph[i].p_filesz);
+		dst = to_kseg1(ph[i].p_paddr != 0 ? ph[i].p_paddr : ph[i].p_vaddr);
+		src = to_kseg1((u32)(uintptr)(blob + ph[i].p_offset));
+		copy_overlap((u8 *)dst, (const u8 *)src, ph[i].p_filesz);
 		zero_bytes((u8 *)(dst + ph[i].p_filesz),
 			ph[i].p_memsz - ph[i].p_filesz);
 	}
@@ -1571,20 +1702,28 @@ void linux_loader_main_impl(void)
 	bootlog_stage("loader-jump", 2);
 	/* Evict dirty aliases before replacing RAM with the new ELF image. */
 	cache_writeback_dcache_indices();
-	copy_forward((u8 *)dtb_dest, linux_dtb_start, dtb_size);
+	copy_forward((u8 *)to_kseg1((u32)dtb_dest), linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	/* The cached ELF stores left the kernel image dirty in the D-cache.
-	 * Flush the copied ranges with a per-line Hit_Writeback_Inv_D
-	 * (cache 0x15): this is the proven HC15xx writeback (boot_handoff.S,
-	 * bootlog084).  The vendor ROM routine (0x810032f4) does not reliably
-	 * write a whole payload back, and a full index writeback sweep is not
-	 * a sufficient ownership boundary - both left stale RAM behind on this
-	 * core (runs 110/112: ri-insn-data=0x00000001 at 0x80667d3c). */
-	cache_flush_range(load_min, (usize)(load_max - load_min));
-	cache_flush_range(dtb_dest, dtb_size);
-	/* Remove every possible warm-boot I-cache alias, not only hit aliases. */
+	/* The uncached KSEG1 stores above wrote the image straight to RAM, so
+	 * there is no dirty D-cache line to write back.  Verify the readback
+	 * through the uncached alias (ground truth for the kernel's first
+	 * fetch) and repair any mismatch - a nonzero count means a copy or
+	 * flush bug and is logged, never silently masked. */
+	verify_repair_linux_elf(linux_vmlinux_start);
+	verify_repair_range(to_kseg1((u32)dtb_dest), linux_dtb_start, dtb_size);
+
+	/* The only remaining coherence hazards are stale aliases left in the
+	 * caches by a previous image (warm reset): invalidate the exact copied
+	 * ranges in both the D-cache (Hit_Invalidate_D, 0x11 - no writeback,
+	 * RAM already holds the image) and the I-cache (Hit_Invalidate_I,
+	 * 0x10), then clear the whole primary I-cache by index so no
+	 * warm-boot alias can shadow kernel code. */
+	cache_invalidate_dcache_range(load_min, (usize)(load_max - load_min));
+	cache_invalidate_dcache_range(dtb_dest, dtb_size);
 	cache_invalidate_icache_indices();
+	cache_invalidate_icache_range(load_min, (usize)(load_max - load_min));
+	cache_invalidate_icache_range(dtb_dest, dtb_size);
 	disable_interrupts();
 	backlight_stage_mark("loader-jump", 2);
 	print_kernel_jump(entry, dtb_dest);

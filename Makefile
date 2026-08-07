@@ -332,7 +332,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
-	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq run-linux-buildroot-storage \
+	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq smoke-linux-buildroot-stale-ram run-linux-buildroot-storage \
 	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
 	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
 smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
@@ -404,7 +404,8 @@ help:
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU' \
-		'make smoke-linux-buildroot-ge-no-irq  boot with the GE completion IRQ suppressed'
+		'make smoke-linux-buildroot-ge-no-irq  boot with the GE completion IRQ suppressed' \
+		'make smoke-linux-buildroot-stale-ram  boot with stale garbage prefill in RAM'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
 	memory-layout-audit check-linux-early-handoff
@@ -2345,6 +2346,23 @@ smoke-linux-buildroot-ge-no-irq:
 	grep -q 'name=screen-ge-sync-ok' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -qE 'sync timeout|ETIMEDOUT|completion.*timeout|timed out' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Boot with the kernel load window (KSEG0 0x80600000-0x80c00000) prefilled
+# with the stale word 0x61006441 (a COP1 instruction) -- the physical-device
+# warm-boot condition behind runs 108/110/112/113/114, where RAM in the load
+# window still holds garbage from a previous image.  A loader that leaves any
+# gap in its copy+flush leaves that word executable and the kernel faults;
+# the uncached-KSEG1 loader must overwrite the whole window and reach
+# screen-ready with no Reserved Instruction.
+smoke-linux-buildroot-stale-ram:
+	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',stale-ram=on' \
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
+	grep -q 'sf2000: stale-ram=on: prefilled' '$(BUILD_DIR)'/logs/linux-asd.console
+	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -qE 'ri-insn-data|ri-epc' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage:
 	$(MAKE) ROOTFS=buildroot \
