@@ -556,8 +556,8 @@ int hcge_open(hcge_context **pctx);
 int hcge_open_context(hcge_context *ctx);
 void hcge_close_context(hcge_context *ctx);
 void hcge_close(hcge_context *ctx);
-void hcge_hw_reset(hcge_context *ctx);
-void hcge_reset(struct hcge_context *ctx);
+int hcge_hw_reset(hcge_context *ctx);
+int hcge_reset(struct hcge_context *ctx);
 
 //this api for directfb, only directfb used
 void hcge_check_state(hcge_state  *state, HCGEAccelerationMask  accel);

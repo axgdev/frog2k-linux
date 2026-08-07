@@ -69,6 +69,8 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 
 #define GMA_MMIO_PHYS 0x18808000u
 #define GMA_MMIO_SIZE 0x1000u
+#define GE_MMIO_PHYS 0x18806000u
+#define GE_MMIO_SIZE 0x1000u
 #define GMA_CTL 0x300u
 #define GMA_CTL_HW 0xb00u
 #define GMA_DMBA 0x304u
@@ -288,9 +290,11 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 
 static volatile uint8_t *gma_ram_mapping;
 static volatile uint8_t *gma_mapping;
+static volatile uint8_t *ge_mapping;
 static volatile uint8_t *sysio_mapping;
 #define gma_ram (gma_ram_mapping ? gma_ram_mapping : KSEG1ADDR(GMA_RAM_PHYS))
 #define gma (gma_mapping ? gma_mapping : KSEG1ADDR(GMA_MMIO_PHYS))
+#define ge (ge_mapping ? ge_mapping : KSEG1ADDR(GE_MMIO_PHYS))
 #define sysio (sysio_mapping ? sysio_mapping : KSEG1ADDR(SYSIO_PHYS))
 static volatile int stopping;
 static int application_paused;
@@ -769,6 +773,43 @@ static void append_file_log(const char *line)
 	close(fd);
 }
 
+static void ge_trace_state(unsigned attempt, const char *stage,
+		uint32_t render_phys, uint32_t dst_phys, uint16_t sample)
+{
+	volatile uint8_t *regs;
+	uint32_t status;
+	uint32_t first;
+	uint32_t last;
+	char line[192];
+
+	if (!display_ge || !ge_mapping || attempt > 4u)
+		return;
+
+	/* HCGE_GET_GE_REGISTER returns the physical GE base (0x18806000), not a
+	 * userspace pointer.  Use the separately mapped /dev/mem alias here.  Keep
+	 * these reads observational: the screen service must never poke GE state
+	 * while diagnosing a failed presentation. */
+	regs = ge;
+	status = mmio_read32(regs, 0x08u);
+	first = mmio_read32(regs, 0x10u);
+	last = mmio_read32(regs, 0x14u);
+	snprintf(line, sizeof(line),
+		"sf2000-screen: ge-state attempt=%u stage=%s status=%08x first=%08x last=%08x src=%08x dst=%08x sample=%04x\\n",
+		attempt, stage, status, first, last, render_phys, dst_phys,
+		sample);
+	/* Keep normal submit/sync snapshots in retained progress only.  Emitting
+	 * every one to /dev/kmsg feeds the screen service's own kmsg reader and
+	 * changes the timing being diagnosed.  Failure snapshots are rare and are
+	 * useful in the Linux log. */
+	if (strcmp(stage, "verify-fail") == 0 ||
+	    strcmp(stage, "cpu-fallback") == 0 ||
+	    strcmp(stage, "sync-fail") == 0)
+		log_line(line);
+	progress_mark("screen-ge-status", 0x3fu, status);
+	progress_mark("screen-ge-hq-first", 0x3fu, first);
+	progress_mark("screen-ge-hq-last", 0x3fu, last);
+}
+
 static void backlight_set(int on);
 
 static void watchdog_pet(void)
@@ -1094,6 +1135,10 @@ static void map_regions_direct(void)
 {
 	gma_ram_mapping = KSEG1ADDR(GMA_RAM_PHYS);
 	gma_mapping = KSEG1ADDR(GMA_MMIO_PHYS);
+	/* A Linux userspace process must not dereference the physical GE address
+	 * when /dev/mem is unavailable.  Existing direct mappings remain available
+	 * for the legacy GMA/SYSIO path; GE diagnostics simply stay disabled. */
+	ge_mapping = NULL;
 	sysio_mapping = KSEG1ADDR(SYSIO_PHYS);
 	log_line("sf2000-screen: using direct MMIO mappings\n");
 }
@@ -3354,6 +3399,8 @@ static void ge_copy_render_to_scanout(void)
 		return;
 	if (!display_ge) {
 		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
+		/* The scanout surface is a DMA target even in direct-fb mode. */
+		(void)cacheflush(scanout_cpu, FRAME_BYTES, BCACHE);
 		return;
 	}
 	if (!render_phys)
@@ -3397,12 +3444,18 @@ static void ge_copy_render_to_scanout(void)
 		progress_mark(submitted ? "screen-ge-submit-ok" :
 			"screen-ge-submit-fail", 0x3fu, attempt);
 	if (submitted) {
-		if (trace_attempt)
+		if (trace_attempt) {
 			progress_mark("screen-ge-sync", 0x3fu, attempt);
+			ge_trace_state(attempt, "submitted", render_phys,
+				GMA_FRAME_PHYS, scanout_cpu[0]);
+		}
 		sync_ret = hcge_engine_sync(display_ge);
-		if (trace_attempt)
+		if (trace_attempt) {
 			progress_mark(sync_ret == 0 ? "screen-ge-sync-ok" :
 				"screen-ge-sync-fail", 0x3fu, (uint32_t)sync_ret);
+			ge_trace_state(attempt, sync_ret == 0 ? "synced" : "sync-fail",
+				render_phys, GMA_FRAME_PHYS, scanout_cpu[0]);
+		}
 		/* SIGTERM interrupts HCGE_SYNC_TIMEOUT with -EINTR.  That is the
 		 * normal shutdown path, not a failed frame to be copied and retried.
 		 * Returning here prevents an interrupted handoff from becoming a
@@ -3446,15 +3499,40 @@ static void ge_copy_render_to_scanout(void)
 			progress_mark(verified ? "screen-ge-verify-ok" :
 				"screen-ge-verify-fail", 0x3fu,
 				verified ? attempt : verify_detail);
+			ge_trace_state(attempt, verified ? "verify-ok" : "verify-fail",
+				render_phys, GMA_FRAME_PHYS, dst[0]);
 		}
 	}
+	if (submitted && sync_ret != 0) {
+		/* A timeout means HC15xx did not prove that it consumed the node;
+		 * it may still be touching the destination.  Reset through the kernel
+		 * ioctl before the CPU fallback so a late GE write cannot overwrite the
+		 * cache-flushed scanout surface.  The EINTR shutdown case returned above
+		 * and must not reset hardware while ownership is being relinquished. */
+		if (hcge_reset(display_ge) != 0) {
+			progress_mark("screen-ge-sync-reset-fail", 0x3fu,
+				(uint32_t)sync_ret);
+			log_line("sf2000-screen: GE reset failed; leaving scanout unchanged\\n");
+			return;
+		}
+		progress_mark("screen-ge-sync-reset", 0x3fu, (uint32_t)sync_ret);
+	}
 	if (!submitted || sync_ret != 0 || !verified) {
-	cpu_fallback:
-		{
-			char line[144];
+	cpu_fallback:			{
+				char line[144];
+				uint16_t fallback_sample;
 
-			memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
-			display_ge_failures++;
+				memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
+				/* Make the CPU recovery visible to the active GMA DMA reader.
+				 * Without this writeback, a cached /dev/mem mapping can leave the
+				 * fallback only in the CPU cache and the panel keeps scanning the
+				 * inherited bootloader/zero surface. */
+				(void)cacheflush(scanout_cpu, FRAME_BYTES, BCACHE);
+				fallback_sample = scanout_cpu[0];
+				ge_trace_state(attempt, "cpu-fallback", render_phys,
+					GMA_FRAME_PHYS, fallback_sample);
+				display_ge_failures++;
+
 			/*
 			 * Logging every fallback feeds our own /dev/kmsg reader and
 			 * creates an unbounded render/fail loop.  Preserve the first
@@ -4560,13 +4638,15 @@ int main(int argc, char **argv, char **envp)
 	if (fd < 0) {
 		map_regions_direct();
 		progress_mark("screen-map-direct", 0x3fu, SCREEN_TAG);
-	} else {
-		if (map_region(fd, &gma_ram_mapping, GMA_RAM_PHYS,
-				GMA_RAM_SIZE, "gma-ram") != 0 ||
-				map_region(fd, &gma_mapping, GMA_MMIO_PHYS,
-					GMA_MMIO_SIZE, "gma") != 0 ||
-				map_region(fd, &sysio_mapping, SYSIO_PHYS,
-					SYSIO_SIZE, "sysio") != 0) {
+	} else {			if (map_region(fd, &gma_ram_mapping, GMA_RAM_PHYS,
+					GMA_RAM_SIZE, "gma-ram") != 0 ||
+					map_region(fd, &gma_mapping, GMA_MMIO_PHYS,
+						GMA_MMIO_SIZE, "gma") != 0 ||
+					map_region(fd, &ge_mapping, GE_MMIO_PHYS,
+						GE_MMIO_SIZE, "ge") != 0 ||
+					map_region(fd, &sysio_mapping, SYSIO_PHYS,
+						SYSIO_SIZE, "sysio") != 0) {
+
 			close(fd);
 			map_regions_direct();
 			progress_mark("screen-map-fallback", 0x3fu, SCREEN_TAG);

@@ -419,23 +419,29 @@ void hcge_close(hcge_context *ctx)
 	free(ctx);
 }
 
-void hcge_hw_reset(hcge_context *ctx)
+int hcge_hw_reset(hcge_context *ctx)
 {
-	if (hcge_context_fd(ctx) >= 0)
-		(void)ioctl(ctx->ge_fd, HCGE_RESET, 0);
+	if (hcge_context_fd(ctx) < 0)
+		return -EINVAL;
+	return ioctl(ctx->ge_fd, HCGE_RESET, 0) < 0 ? -errno : 0;
 }
 
-void hcge_reset(hcge_context *ctx)
+int hcge_reset(hcge_context *ctx)
 {
+	int ret;
+
 	if (!ctx)
-		return;
-	hcge_hw_reset(ctx);
+		return -EINVAL;
+	ret = hcge_hw_reset(ctx);
+	if (ret)
+		return ret;
 	if (ctx->nd_ctx)
 		memset(ctx->nd_ctx, 0, 680u);
 	ctx->blit_direct = false;
 	ctx->clip_en = false;
 	ctx->msk_en = false;
 	ctx->matrix_en = false;
+	return 0;
 }
 
 int hcge_engine_sync(hcge_context *ctx)
