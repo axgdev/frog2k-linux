@@ -2379,7 +2379,7 @@ smoke-linux-buildroot-ge-no-irq:
 smoke-linux-buildroot-ge-verify-reset:
 	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-fault-dest=on' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
-	grep -q 'sf2000: ge fault-dest: skipped RGB565 blit 4 destination write' '$(BUILD_DIR)'/logs/linux-asd.console
+	grep -q 'sf2000: ge fault-dest: skipped RGB565 blit 4 destination write' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-verify-fail' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-verify-reset' '$(BUILD_DIR)'/logs/linux-asd.log

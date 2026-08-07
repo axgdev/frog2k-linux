@@ -741,23 +741,31 @@ static uint16_t rgb565(unsigned r, unsigned g, unsigned b)
 
 static void log_line(const char *line)
 {
-	static int kmsg_fd = -2;
 	char record[256];
 	size_t len = strlen(line);
+	int fd;
 
-	if (kmsg_fd == -2)
-		kmsg_fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	/*
+	 * /dev/kmsg ratelimits each open fd to 10 records per 5s and fails
+	 * excess writes with EBUSY.  A long-lived fd therefore silences the
+	 * screen service after its first ten diagnostics (run 133 lost every
+	 * display-handoff record after "guarded panel init done" this way).
+	 * The browser's per-message open is never limited; use the same
+	 * pattern so the retained log always sees the handoff instrumentation.
+	 */
 	if (len > sizeof(record) - 4u)
 		len = sizeof(record) - 4u;
 	record[0] = '<';
 	record[1] = '6';
 	record[2] = '>';
 	memcpy(record + 3, line, len);
-	if (kmsg_fd >= 0) {
-		if (write(kmsg_fd, record, len + 3u) >= 0)
+	fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		if (write(fd, record, len + 3u) >= 0) {
+			close(fd);
 			return;
-		close(kmsg_fd);
-		kmsg_fd = -1;
+		}
+		close(fd);
 	}
 	(void)write(STDERR_FILENO, line, len);
 }
@@ -771,6 +779,48 @@ static void append_file_log(const char *line)
 		return;
 	(void)write(fd, line, strlen(line));
 	close(fd);
+}
+
+static void log_display_state(const char *phase)
+{
+	char line[256];
+
+	/*
+	 * The retained progress marks at 0x07a00000 are volatile: a physical
+	 * power cycle between runs discards the complete display-handoff
+	 * record.  These few kmsg lines survive through logd into loglinux.txt
+	 * and let two physical runs (bootloader-handoff versus direct boot)
+	 * be compared register-for-register.  Keep them observational; every
+	 * register here is safe to read on the physical SF2000.
+	 */
+	snprintf(line, sizeof(line),
+		"sf2000-screen: disp-state %s gctl=%08x gctlhw=%08x dmba=%08x dmbahw=%08x linebuf=%08x vmode=%08x vctrl=%08x vrgb=%08x vt2=%08x clk=%08x lcd=%08x rgbsrc=%08x src0=%08x\n",
+		phase,
+		mmio_read32(gma, GMA_CTL),
+		mmio_read32(gma, GMA_CTL_HW),
+		mmio_read32(gma, GMA_DMBA),
+		mmio_read32(gma, GMA_DMBA_HW),
+		mmio_read32(gma, GMA_LINEBUF),
+		mmio_read32(gma, VOU_HD_MODE),
+		mmio_read32(gma, VOU_HD_CTRL),
+		mmio_read32(gma, VOU_RGB_ENABLE),
+		mmio_read32(gma, VOU_HD_TIMING2),
+		mmio_read32(sysio, SYS_CLK_CTR_OFF),
+		mmio_read32(sysio, SYS_LCD_SETUP_OFF),
+		mmio_read32(sysio, SYS_RGB_SOURCE_OFF),
+		mmio_read32(sysio, SYS_VIDEO_SRC0_OFF));
+	log_line(line);
+}
+
+static void log_raster_wait(const char *result, uint32_t expected_dmba,
+		unsigned elapsed_ms, uint32_t ctl_hw, uint32_t dmba_hw)
+{
+	char line[160];
+
+	snprintf(line, sizeof(line),
+		"sf2000-screen: raster-wait %s expected=%08x ms=%u ctlhw=%08x dmbahw=%08x\n",
+		result, expected_dmba, elapsed_ms, ctl_hw, dmba_hw);
+	log_line(line);
 }
 
 static void ge_trace_state(unsigned attempt, const char *stage,
@@ -2149,9 +2199,11 @@ static int panel_wait_gma_raster(uint32_t expected_dmba)
 
 	if (elapsed == 200u || stopping) {
 		progress_mark("screen-raster-wait-fail", 0x3fu, dmba_hw);
+		log_raster_wait("fail", expected_dmba, elapsed, ctl_hw, dmba_hw);
 		return -1;
 	}
 	progress_mark("screen-raster-wait-ok", 0x3fu, dmba_hw);
+	log_raster_wait("ok", expected_dmba, elapsed, ctl_hw, dmba_hw);
 	return 0;
 }
 
@@ -4315,9 +4367,16 @@ static int condition_native_scanout(void)
 	progress_mark("screen-native-hold-dmba", 0x3fu,
 		mmio_read32(gma, GMA_DMBA_HW));
 	if (stopping || rearmed < CONDITIONING_TE_EDGES) {
+		char line[128];
+
 		progress_mark("screen-native-hold-fail", 0x3fu, rearmed);
+		snprintf(line, sizeof(line),
+			"sf2000-screen: te-condition fail rearmed=%u stopping=%d\n",
+			rearmed, stopping ? 1 : 0);
+		log_line(line);
 		return -1;
 	}
+	log_line("sf2000-screen: te-condition done, TE streaming stopped\n");
 
 	/*
 	 * The physical log77 interrupt count was about twice the panel frame rate,
@@ -4410,6 +4469,8 @@ static void run_direct_console(unsigned *frame)
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		/* Preserve the working direct frame and retained failure snapshot. */
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		log_line("sf2000-screen: rgb-handoff abort: first GMA raster latch failed\n");
+		log_display_state("latch1-fail");
 		goto handoff_complete;
 	}
 	/*
@@ -4431,6 +4492,7 @@ static void run_direct_console(unsigned *frame)
 	panel_commit_rgb_handoff();
 	rgb_active = 1;
 	mark_hc15_display_state(1);
+	log_display_state("rgb-commit");
 	/*
 	 * Diagnostic descriptor changes must finish before the continuous kernel
 	 * synchronizer starts.  This was reversed in the failed log75 build, so
@@ -4458,9 +4520,12 @@ static void run_direct_console(unsigned *frame)
 	if (condition_native_scanout() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu,
 			SCREEN_TAG);
+		log_line("sf2000-screen: rgb-handoff abort: TE conditioning failed, TE streaming left active\n");
+		log_display_state("cond-fail");
 		goto handoff_complete;
 	}
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
+	log_display_state("handoff-done");
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	performance_mark("screen-rgb-ready-us", performance_begin_us);
 	log_gma_ready();
@@ -4705,6 +4770,7 @@ int main(int argc, char **argv, char **envp)
 			progress_mark("screen-map-devmem-ok", 0x3fu, SCREEN_TAG);
 		}
 	}
+	log_display_state("inherited");
 	map_framebuffer_device();
 	ge_display_open();
 	/* Userspace polls L08 for TE; prevent the inherited IRQ from starving
