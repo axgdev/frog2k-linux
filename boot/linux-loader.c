@@ -23,19 +23,28 @@ typedef unsigned long uintptr;
 #define UART_THR 0
 #define UART_LSR 5
 #define UART_LSR_THRE 0x20
-/* HC15xx primary-cache contract (NuttX sf2000_sdio.c): 16-byte lines, two
- * ways, 0x4000-byte index span (32 KiB total).  Config1 is unreliable on
- * this core, so every cache operation uses fixed values.  The D-cache is
- * flushed by per-line Hit_Writeback_Inv_D (cache 0x15) over the exact
- * copied range: this is the proven HC15xx writeback (boot_handoff.S,
- * bootlog084).  The vendor ROM routine (0x810032f4) does not reliably
- * write a whole payload back, and an index writeback sweep is not a
- * sufficient ownership boundary - all three loaders that relied on those
- * left stale RAM behind (runs 110/112: ri-insn-data=0x00000001 at
- * 0x80667d3c).  The I-cache is invalidated by an index sweep: a
- * contiguous 0x8000-byte KSEG0 sweep at 16-byte steps visits every
- * (set, way) once (the second 0x4000 carries the bit-14 way select). */
-#define CACHE_LINE 16u
+/* HC15xx primary-cache contract: 32-byte lines, two ways, 512 sets per
+ * way, 0x4000-byte index span per way (32 KiB total), way select in bit
+ * 14.  This is the fixed-geometry contract of the proven
+ * vendor-cache-sweep loader (runs 107/111) and matches the device CP0
+ * Config1 (0x00d96c9e: IL=DL=3 -> 32-byte lines, IS=DS=3 -> 512 sets,
+ * IA=DA=1 -> 2 ways); the kernel's own Config1 probe mis-decodes this
+ * silicon as 16-byte lines, so the loader must not trust that decode.
+ * The D-cache ownership boundary is a per-line Hit_Writeback_Inv_D
+ * (cache 0x15) over the exact copied range after a cached KSEG0 copy:
+ * this is the only sequence proven to boot linux on the physical device.
+ * A cached copy is essential - every load-window line is then present
+ * and dirty with the *fresh* image, so any later writeback (the loader's
+ * or the kernel's own cache init) writes fresh data, never a stale
+ * warm-boot alias.  An uncached KSEG1 copy leaves warm-boot stale
+ * aliases in the D-cache that the kernel's cache init then writes back
+ * over the fresh RAM (runs 115/116: stale text fetch, corrupt initramfs
+ * /init ENOEXEC).  The vendor ROM routine (0x810032f4) and index
+ * writeback sweeps alone are not sufficient ownership boundaries (runs
+ * 110/112).  The I-cache is cleared by an index sweep: a contiguous
+ * 0x8000-byte KSEG0 sweep at 32-byte steps visits every (set, way)
+ * exactly once (the second 0x4000 carries the bit-14 way select). */
+#define CACHE_LINE 32u
 #define CACHE_INDEX_SPAN 0x4000u
 #define CACHE_WAY_SPAN 0x4000u
 #define CACHE_TOTAL_SPAN (CACHE_INDEX_SPAN + CACHE_WAY_SPAN)
@@ -85,7 +94,7 @@ typedef unsigned long uintptr;
 #define PROGRESS_NAME_LEN 32u
 #define PROGRESS_DUMP_ENTRIES PROGRESS_ENTRIES
 #define PROGRESS_LIVE_MAGIC 0x4c495645u
-#define LOADER_BUILD_TAG "2026-08-07 uncached-kseg1-verify-repair"
+#define LOADER_BUILD_TAG "2026-08-07 cached-copy-hit-wb-flush"
 #define BOOTLOG_SD_WRITE 1
 
 typedef unsigned long long u64;
@@ -1321,6 +1330,44 @@ static void zero_bytes(u8 *dst, usize len)
  * writing it back: RAM already holds the uncached-copied image, and a stale
  * alias from a previous image must never be written over it.  Hit_Invalidate_D
  * (0x11) operates on the line containing the address only if present. */
+/* Per-line Hit_Writeback_Inv_D (0x15) then Hit_Invalidate_I (0x10): the
+ * proven post-copy flush (boot_handoff.S, loader runs 107/111).  The 0x15
+ * writes every line the cached copy dirtied back to RAM and invalidates
+ * it; the 0x10 drops the matching I-cache aliases.  Hit ops are
+ * geometry-agnostic: they act on the line containing the address. */
+static void cache_flush_line(uintptr addr)
+{
+	__asm__ volatile(
+		".set push\n\t"
+		".set mips32\n\t"
+		"cache 0x15, 0(%0)\n\t"
+		"cache 0x10, 0(%0)\n\t"
+		".set pop"
+		:
+		: "r"(addr)
+		: "memory");
+}
+
+static void cache_flush_range(uintptr addr, usize len)
+{
+	uintptr p;
+	uintptr end;
+
+	if (len == 0)
+		return;
+
+	p = addr & ~(uintptr)(CACHE_LINE - 1u);
+	end = align_up(addr + len, CACHE_LINE);
+	for (; p < end; p += CACHE_LINE)
+		cache_flush_line(p);
+
+	__asm__ volatile("sync" ::: "memory");
+}
+
+/* Discard (never write back) any line aliasing the freshly flushed image:
+ * RAM already holds the correct bytes after cache_flush_range, and a stale
+ * alias from a previous boot must not survive to be written back by the
+ * kernel's own cache init.  Belt-and-braces after the proven 0x15 flush. */
 static void cache_invalidate_dcache_range(uintptr addr, usize len)
 {
 	uintptr p;
@@ -1376,16 +1423,12 @@ static void cache_writeback_dcache_indices(void)
 	/*
 	 * Evict dirty aliases from the low window before the copy replaces
 	 * RAM with the new ELF image.  Match the HC15xx ROM cache handoff
-	 * contract: sweep the 0x4000-byte index span and issue each index
-	 * operation twice (one per way).  Note: this encodes the ROM's
-	 * way-selection model, while the I-cache sweep below uses the
-	 * bit-14 way-select model over a 0x8000 span - the two op classes
-	 * disagree on this core, and the per-line hit-writeback above is
-	 * way-agnostic precisely because of that.  This runs before the
-	 * copy, so it cannot disturb the loader's own still-running data in
-	 * any way that matters: every dirty line is written back to RAM, and
-	 * the loader's subsequent cached accesses simply refetch the same
-	 * bytes.
+	 * contract: sweep the 0x4000-byte index span (all 512 sets) at the
+	 * fixed 32-byte line size and issue each index operation twice (one
+	 * per way).  This runs before the copy, so it cannot disturb the
+	 * loader's own still-running data in any way that matters: every
+	 * dirty line is written back to RAM, and the loader's subsequent
+	 * cached accesses simply refetch the same bytes.
 	 */
 	for (p = KSEG0_BASE; p < KSEG0_BASE + CACHE_INDEX_SPAN;
 			p += CACHE_LINE) {
@@ -1608,8 +1651,18 @@ static void copy_linux_elf(const u8 *blob)
 		if (ph[i].p_type != PT_LOAD)
 			continue;
 
-		dst = to_kseg1(ph[i].p_paddr != 0 ? ph[i].p_paddr : ph[i].p_vaddr);
-		src = to_kseg1((u32)(uintptr)(blob + ph[i].p_offset));
+		/* Cached KSEG0 stores, exactly like the proven vendor-cache-sweep
+		 * loader: every byte the copy touches lands in a D-cache line that
+		 * is present and dirty with the *fresh* image.  The subsequent
+		 * per-line Hit_Writeback_Inv_D (cache 0x15) then reaches RAM for
+		 * every line - and any line that was NOT present (a warm-boot
+		 * alias, or a line the copy missed) is either updated by a store
+		 * or discarded by the invalidates that follow.  An uncached KSEG1
+		 * copy writes RAM but leaves warm-boot stale aliases in the
+		 * D-cache; the kernel's cache init then writes those aliases back
+		 * over the fresh image (runs 115/116). */
+		dst = to_kseg0(ph[i].p_paddr != 0 ? ph[i].p_paddr : ph[i].p_vaddr);
+		src = to_kseg0((u32)(uintptr)(blob + ph[i].p_offset));
 		copy_overlap((u8 *)dst, (const u8 *)src, ph[i].p_filesz);
 		zero_bytes((u8 *)(dst + ph[i].p_filesz),
 			ph[i].p_memsz - ph[i].p_filesz);
@@ -1702,23 +1755,25 @@ void linux_loader_main_impl(void)
 	bootlog_stage("loader-jump", 2);
 	/* Evict dirty aliases before replacing RAM with the new ELF image. */
 	cache_writeback_dcache_indices();
-	copy_forward((u8 *)to_kseg1((u32)dtb_dest), linux_dtb_start, dtb_size);
+	copy_forward((u8 *)to_kseg0((u32)dtb_dest), linux_dtb_start, dtb_size);
 	copy_linux_elf(linux_vmlinux_start);
 
-	/* The uncached KSEG1 stores above wrote the image straight to RAM, so
-	 * there is no dirty D-cache line to write back.  Verify the readback
-	 * through the uncached alias (ground truth for the kernel's first
-	 * fetch) and repair any mismatch - a nonzero count means a copy or
-	 * flush bug and is logged, never silently masked. */
+	/* The proven ownership boundary: per-line Hit_Writeback_Inv_D (0x15)
+	 * over the exact copied ranges writes every line the cached copy
+	 * dirtied back to RAM and invalidates it (bootlog084, runs 107/111).
+	 * Then verify the readback through the uncached alias (ground truth
+	 * for the kernel's first fetch) and repair any mismatch - a nonzero
+	 * count means a copy or flush bug and is logged, never silently
+	 * masked. */
+	cache_flush_range(load_min, (usize)(load_max - load_min));
+	cache_flush_range(dtb_dest, dtb_size);
 	verify_repair_linux_elf(linux_vmlinux_start);
 	verify_repair_range(to_kseg1((u32)dtb_dest), linux_dtb_start, dtb_size);
 
-	/* The only remaining coherence hazards are stale aliases left in the
-	 * caches by a previous image (warm reset): invalidate the exact copied
-	 * ranges in both the D-cache (Hit_Invalidate_D, 0x11 - no writeback,
-	 * RAM already holds the image) and the I-cache (Hit_Invalidate_I,
-	 * 0x10), then clear the whole primary I-cache by index so no
-	 * warm-boot alias can shadow kernel code. */
+	/* Belt-and-braces: discard (never write back) any residual D-cache
+	 * alias in the copied ranges, then clear the whole primary I-cache by
+	 * index and hit-invalidate the exact ranges so no warm-boot alias can
+	 * shadow kernel code or data. */
 	cache_invalidate_dcache_range(load_min, (usize)(load_max - load_min));
 	cache_invalidate_dcache_range(dtb_dest, dtb_size);
 	cache_invalidate_icache_indices();
