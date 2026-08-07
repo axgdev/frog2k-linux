@@ -2371,6 +2371,24 @@ smoke-linux-buildroot-ge-no-irq:
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -qE 'sync timeout|ETIMEDOUT|completion.*timeout|timed out' '$(BUILD_DIR)'/logs/linux-asd.log
 
+# Complete one optimized RGB565 GE blit without writing its destination.  This
+# reproduces run 131's physical symptom: HC15xx reports sync completion, but
+# the scanout sample is wrong.  The screen service must reset GE, verify that
+# the independent GMA raster remains valid, repair scanout on the CPU, and
+# still reach screen-ready.
+smoke-linux-buildroot-ge-verify-reset:
+	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-fault-dest=on' \
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
+	grep -q 'sf2000: ge fault-dest: skipped RGB565 blit 4 destination write' '$(BUILD_DIR)'/logs/linux-asd.console
+	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-verify-fail' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-verify-reset' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-reset-ctl-before' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-reset-ctl-after' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'name=screen-ge-verify-reset-fail' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'name=screen-ge-reset-gma-invalid' '$(BUILD_DIR)'/logs/linux-asd.log
+
 # Boot with the kernel load window (KSEG0 0x80600000-0x80c00000) prefilled
 # with the stale word 0x61006441 (a COP1 instruction) -- the physical-device
 # warm-boot condition behind runs 108/110/112/113/114, where RAM in the load

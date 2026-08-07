@@ -3503,19 +3503,69 @@ static void ge_copy_render_to_scanout(void)
 				render_phys, GMA_FRAME_PHYS, dst[0]);
 		}
 	}
-	if (submitted && sync_ret != 0) {
-		/* A timeout means HC15xx did not prove that it consumed the node;
-		 * it may still be touching the destination.  Reset through the kernel
-		 * ioctl before the CPU fallback so a late GE write cannot overwrite the
-		 * cache-flushed scanout surface.  The EINTR shutdown case returned above
-		 * and must not reset hardware while ownership is being relinquished. */
-		if (hcge_reset(display_ge) != 0) {
-			progress_mark("screen-ge-sync-reset-fail", 0x3fu,
-				(uint32_t)sync_ret);
+	if (submitted && (sync_ret != 0 || !verified)) {
+		int reset_ret;
+		uint32_t reset_gma_dmba_before = mmio_read32(gma, GMA_DMBA_HW);
+
+		/* A timeout does not prove that HC15xx stopped touching memory.  A
+		 * completed-but-wrong node is also unsafe to preserve: run 131 showed
+		 * the recurring fourth node report completion while leaving one scanout
+		 * sample at zero.  Reset both cases before the CPU fallback so a stale
+		 * GE context cannot overwrite the repaired surface or poison the next
+		 * queue submission.  The reset is scoped to GE; the already-latched GMA
+		 * raster continues scanning the destination while the queue is repaired.
+		 * The EINTR shutdown case returned above and must not reset hardware while
+		 * ownership is being relinquished. */
+		progress_mark("screen-ge-reset-ctl-before", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+		progress_mark("screen-ge-reset-dmba-before", 0x3fu,
+			reset_gma_dmba_before);
+		reset_ret = hcge_reset(display_ge);
+		progress_mark("screen-ge-reset-ctl-after", 0x3fu,
+			mmio_read32(gma, GMA_CTL_HW));
+		{
+			uint32_t reset_gma_ctl_hw = 0u;
+			uint32_t reset_gma_dmba_hw = 0u;
+			unsigned gma_wait;
+
+			/* GMA mirrors latch at a VOU boundary and may lag the GE reset by
+			 * a few milliseconds.  Poll briefly before treating a valid raster
+			 * as lost; never wait indefinitely in the presentation path. */
+			for (gma_wait = 0; gma_wait < 20u; gma_wait++) {
+				reset_gma_ctl_hw = mmio_read32(gma, GMA_CTL_HW);
+				reset_gma_dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
+				if (reset_ret != 0 ||
+				    ((reset_gma_ctl_hw & 1u) &&
+				     (reset_gma_dmba_hw == reset_gma_dmba_before ||
+				      reset_gma_dmba_hw == gma_desc_phys)))
+					break;
+				sleep_ms(1u);
+			}
+			progress_mark("screen-ge-reset-wait-ms", 0x3fu,
+				gma_wait);
+			progress_mark("screen-ge-reset-ctl-after", 0x3fu,
+				reset_gma_ctl_hw);
+			progress_mark("screen-ge-reset-dmba-after", 0x3fu,
+				reset_gma_dmba_hw);
+			if (reset_ret == 0 &&
+			    (!(reset_gma_ctl_hw & 1u) ||
+			     (reset_gma_dmba_hw != reset_gma_dmba_before &&
+			      reset_gma_dmba_hw != gma_desc_phys))) {
+				progress_mark("screen-ge-reset-gma-invalid", 0x3fu,
+					reset_gma_dmba_hw);
+				log_line("sf2000-screen: GE reset changed active GMA; leaving scanout unchanged\\n");
+				return;
+			}
+		}
+		if (reset_ret != 0) {
+			progress_mark(sync_ret != 0 ? "screen-ge-sync-reset-fail" :
+				"screen-ge-verify-reset-fail", 0x3fu,
+				(uint32_t)reset_ret);
 			log_line("sf2000-screen: GE reset failed; leaving scanout unchanged\\n");
 			return;
 		}
-		progress_mark("screen-ge-sync-reset", 0x3fu, (uint32_t)sync_ret);
+		progress_mark(sync_ret != 0 ? "screen-ge-sync-reset" :
+			"screen-ge-verify-reset", 0x3fu,				(sync_ret != 0 ? (uint32_t)sync_ret : verify_detail));
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
 	cpu_fallback:			{
