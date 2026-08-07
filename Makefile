@@ -142,6 +142,15 @@ BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SR
 # parallel and each child waits for tokens the parent still holds.  Drop the
 # jobserver and give each frontend invocation its own -j budget.
 FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' -C '$(FRONTEND_PROJECT)'
+# The kernel build, the frontend core-packages (20 nested libretro core
+# makes), and the linux-buildroot/physical-linux-asd wrappers all recurse into
+# make trees of their own.  They must not inherit the outer jobserver either:
+# GNU make 4.3 deadlocks nested makes that share one token pool (the frontend
+# hit exactly this with `make buildroot -jN`), so give every stage a private
+# -j budget.  Without this, `make -j9 physical-linux-asd` hangs with the kernel
+# make blocked before syncconfig while core sub-makes wait for tokens the
+# parent still holds (observed 19 minutes of zero progress on device builds).
+ISOLATED_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)'
 ifeq ($(ROOTFS),tiny)
 ROOTFS_SUFFIX :=
 ROOTFS_CPIO := $(INITRAMFS)
@@ -1333,7 +1342,7 @@ $(LINUX_MODE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		Makefile $(LINUX_CMDLINE_STAMP) $(LINUX_MODE_STAMP) | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
-	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
+	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
 	# NOMMU static PIE executables occupy one contiguous allocation.  The
 	# largest packaged core has a roughly 20 MiB load image, so order 13 is the
@@ -1583,7 +1592,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable FB \
 		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
 		--enable FB_SIMPLE
-	$(MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
+	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
 	# The HC15xx core has 128-byte L1 lines and a board cache-ops table.
 	# MIPS_SF2000 selects both in the kernel Kconfig; assert the regenerated
@@ -1595,7 +1604,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	touch '$@'
 
 $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
-	$(MAKE) -j'$(JOBS)' -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
+	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 	# The loader consumes only allocated ELF sections.  Keeping DWARF in the
 	# embedded image wastes most of RAM and makes relocation overlap needlessly
@@ -1730,7 +1739,7 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		'$(FRONTEND_PROJECT)'/patches/mufrog \
 		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile
-	$(MAKE) -C '$(FRONTEND_PROJECT)' core-packages \
+	$(FRONTEND_MAKE) core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	rm -rf '$(dir $@)'
 	mkdir -p '$(dir $@)/licenses'
@@ -1838,17 +1847,17 @@ linux-asd: $(LINUX_ASD)
 endif
 
 linux-buildroot:
-	$(MAKE) ROOTFS=buildroot linux
+	$(ISOLATED_MAKE) ROOTFS=buildroot linux
 
 linux-buildroot-asd:
-	$(MAKE) ROOTFS=buildroot linux-asd
+	$(ISOLATED_MAKE) ROOTFS=buildroot linux-asd
 
 # The SD-card artifact must contain the Buildroot userspace/menu.  Keep this
 # explicit alias next to the historical target so a bare `make linux-asd`
 # (which intentionally defaults to the tiny diagnostic rootfs) cannot be
 # mistaken for a physical-device build.
 physical-linux-asd:
-	$(MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=1 linux-asd
+	$(ISOLATED_MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=1 linux-asd
 
 ifeq ($(SDCARD_ASD_SYNC),1)
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -1861,12 +1870,12 @@ sdcard-linux:
 endif
 
 sdcard-buildroot:
-	$(MAKE) ROOTFS=buildroot sdcard-linux
+	$(ISOLATED_MAKE) ROOTFS=buildroot sdcard-linux
 
 linux-rom-sd: $(LINUX_ROM_SD_IMAGE)
 
 linux-buildroot-rom-sd:
-	$(MAKE) ROOTFS=buildroot linux-rom-sd
+	$(ISOLATED_MAKE) ROOTFS=buildroot linux-rom-sd
 
 run-linux: qemu linux
 	mkdir -p '$(BUILD_DIR)'/logs
