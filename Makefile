@@ -2394,6 +2394,11 @@ smoke-linux-buildroot-ge-verify-cpu-fallback:
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-verify-fail' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-present-fail' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-band-mask' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'value=0x000000ff name=screen-ge-band-mask' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-band-count' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-node-words' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-node-hash' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'GE present failed .*sync=0 verify=0' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'copied on CPU' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-cpu-only' '$(BUILD_DIR)'/logs/linux-asd.log

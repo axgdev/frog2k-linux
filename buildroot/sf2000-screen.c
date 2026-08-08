@@ -3491,6 +3491,53 @@ static int ge_prepare_scanout(void)
 	return 0;
 }
 
+/*
+ * Destination-band mismatch map for a completed-but-wrong GE node.  A
+ * successful fence with a stale destination (physical verify detail
+ * 0x03430000) leaves only 16 sample points; this probe turns it into a region
+ * map so a physical failure can be narrowed to "the engine wrote band 0..N
+ * but not the rest" versus "no write at all".  Each band is a horizontal
+ * slice of the 320x240 frame; a band is dirty if any pixel differs between
+ * the render source and the scanout destination.  Runs only on the
+ * verify-fail path, never on the present path.  The ~150 KB uncached
+ * read may land inside the handoff critical section when the first
+ * present fails, but the panel is already broken at that point and the
+ * probe is strictly observational (read-only) -- it must never be moved
+ * onto the successful present path.
+ */
+#define GE_BAND_COUNT 8u
+
+static void ge_probe_destination_bands(const uint16_t *src,
+				       uint32_t *band_mask)
+{
+	const uint16_t *dst = (const uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	unsigned rows_per_band = HEIGHT / GE_BAND_COUNT;
+	uint32_t mask = 0;
+	unsigned band;
+
+	for (band = 0; band < GE_BAND_COUNT; band++) {
+		unsigned y0 = band * rows_per_band;
+		unsigned y1 = y0 + rows_per_band;
+		int dirty = 0;
+		unsigned y;
+
+		for (y = y0; y < y1 && !dirty; y++) {
+			unsigned row = y * WIDTH;
+			unsigned x;
+
+			for (x = 0; x < WIDTH; x++) {
+				if (dst[row + x] != src[row + x]) {
+					dirty = 1;
+					break;
+				}
+			}
+		}
+		if (dirty)
+			mask |= 1u << band;
+	}
+	*band_mask = mask;
+}
+
 static void ge_copy_render_to_scanout(void)
 {
 	hcge_state *state;
@@ -3638,6 +3685,48 @@ static void ge_copy_render_to_scanout(void)
 	cpu_fallback:			{
 				char line[144];
 				uint16_t fallback_sample;
+
+				/* A completed-but-wrong node is the physical failure mode.
+				 * Probe the destination bands and the exact node words
+				 * BEFORE the CPU repair overwrites the stale scanout, so
+				 * the evidence survives in the retained progress log. */
+				if (sync_ret == 0 && !verified) {
+					uint32_t band_mask = 0;
+					const uint32_t *last_node = NULL;
+					unsigned last_words = 0;
+					uint32_t last_hash = 0;
+					unsigned word;
+
+					ge_probe_destination_bands(render_cpu,
+						&band_mask);
+					if (hcge_linux_last_node(&last_node,
+						&last_words, &last_hash) == 0) {
+						progress_mark("screen-ge-node-words",
+							0x3fu, last_words);
+						progress_mark("screen-ge-node-hash",
+							0x3fu, last_hash);
+						/* Persist the actual node words as progress marks:
+						 * the retained log (lognNN.txt) is the only medium
+						 * that survives a physical power cycle, and the
+						 * whole point of the capture is a word-for-word
+						 * diff against the vendor node format.  A hash
+						 * alone cannot be diffed.  The failing present
+						 * node is only a handful of words. */
+						for (word = 0; word < last_words && word < 16u;
+						     word++) {
+							char name[PROGRESS_NAME_LEN];
+
+							snprintf(name, sizeof(name),
+								"screen-ge-node-w%u", word);
+							progress_mark(name, 0x3fu,
+								last_node[word]);
+						}
+					}
+					progress_mark("screen-ge-band-mask", 0x3fu,
+						band_mask);
+					progress_mark("screen-ge-band-count", 0x3fu,
+						GE_BAND_COUNT);
+				}
 
 				memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
 				/* Make the CPU recovery visible to the active GMA DMA reader.

@@ -464,6 +464,47 @@ int hcge_set_clock(hcge_context *ctx, unsigned int selector)
 		-errno : 0;
 }
 
+/*
+ * Last-node capture for physical GE diagnostics.  The screen service
+ * records the exact words it fed the engine so a completed-but-wrong node
+ * (sync success, destination stale -- the physical HC15xx failure mode
+ * behind verify detail 0x03430000) can be diffed word-for-word against the
+ * vendor node format.  Capture only the direct submit path; batched work is
+ * collapsed into one submit by hcge_batch_end and captured there too.
+ */
+static uint32_t hcge_last_node[HCGE_NODE_MAX_WORDS];
+static unsigned hcge_last_node_words;
+static uint32_t hcge_last_node_hash;
+
+static void hcge_capture_last_node(const uint32_t *node, unsigned int words)
+{
+	unsigned int i;
+
+	if (words > HCGE_NODE_MAX_WORDS)
+		words = HCGE_NODE_MAX_WORDS;
+	memcpy(hcge_last_node, node, (size_t)words * sizeof(*node));
+	hcge_last_node_words = words;
+	hcge_last_node_hash = 2166136261u;
+	for (i = 0; i < words; i++) {
+		hcge_last_node_hash ^= node[i];
+		hcge_last_node_hash *= 16777619u;
+	}
+}
+
+int hcge_linux_last_node(const uint32_t **node, unsigned int *words,
+	uint32_t *hash)
+{
+	if (!node || !words)
+		return -EINVAL;
+	if (!hcge_last_node_words)
+		return -ENODATA;
+	*node = hcge_last_node;
+	*words = hcge_last_node_words;
+	if (hash)
+		*hash = hcge_last_node_hash;
+	return 0;
+}
+
 int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
 		      unsigned int words)
 {
@@ -489,15 +530,21 @@ int hcge_linux_submit(hcge_context *ctx, const uint32_t *node,
 	}
 	submit.data = (uint32_t)(uintptr_t)node;
 	submit.length = (uint32_t)(words * sizeof(*node));
-	if (ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) == 0)
+	if (ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) == 0) {
+		hcge_capture_last_node(node, words);
 		return 0;
+	}
 	error = errno;
 	if (error != EBUSY)
 		return -error;
 	/* A busy queue only rejects when its unused tail cannot hold this node. */
 	if (hcge_engine_sync(ctx) < 0)
 		return -EIO;
-	return ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) < 0 ? -errno : 0;
+	if (ioctl(ctx->ge_fd, HCGE_SUBMIT, &submit) == 0) {
+		hcge_capture_last_node(node, words);
+		return 0;
+	}
+	return -errno;
 }
 
 int hcge_batch_begin(hcge_context *ctx, hcge_batch *batch, uint32_t *buffer,
