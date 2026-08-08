@@ -329,6 +329,16 @@ static unsigned handoff_defer_len;
 static unsigned handoff_defer_dropped;
 static int handoff_critical;
 static unsigned handoff_log_calls;
+/*
+ * Handoff register diagnostics (disp-state/raster-wait/native-gma/
+ * te-condition lines) are gated behind SF2000_DISPLAY_DIAG=1.  On a normal
+ * boot they are disabled: the deferred flush would otherwise render the
+ * whole burst back onto the live scanout through the service's own kmsg
+ * reader, pausing the console before the menu appears (run 146).  The
+ * handoff kmsg guard itself stays armed as a safety net; the diagnostic
+ * lines remain available for hardware bring-up and regression runs.
+ */
+static int display_diagnostics;
 static hcge_context *display_ge;
 
 static void stop_signal(int signal_number)
@@ -848,8 +858,12 @@ static void log_display_state(const char *phase)
 	 * record.  These few kmsg lines survive through logd into loglinux.txt
 	 * and let two physical runs (bootloader-handoff versus direct boot)
 	 * be compared register-for-register.  Keep them observational; every
-	 * register here is safe to read on the physical SF2000.
+	 * register here is safe to read on the physical SF2000.  Gated behind
+	 * SF2000_DISPLAY_DIAG=1 (off by default) so the deferred flush does not
+	 * render the burst back onto the live scanout on normal boots.
 	 */
+	if (!display_diagnostics)
+		return;
 	snprintf(line, sizeof(line),
 		"sf2000-screen: disp-state %s gctl=%08x gctlhw=%08x dmba=%08x dmbahw=%08x linebuf=%08x vmode=%08x vctrl=%08x vrgb=%08x vt2=%08x clk=%08x lcd=%08x rgbsrc=%08x src0=%08x\n",
 		phase,
@@ -873,6 +887,9 @@ static void log_raster_wait(const char *result, uint32_t expected_dmba,
 		unsigned elapsed_ms, uint32_t ctl_hw, uint32_t dmba_hw)
 {
 	char line[160];
+
+	if (!display_diagnostics)
+		return;
 
 	snprintf(line, sizeof(line),
 		"sf2000-screen: raster-wait %s expected=%08x ms=%u ctlhw=%08x dmbahw=%08x\n",
@@ -4119,8 +4136,10 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 				active_ctl_hw, active_dmba, active_dmba_hw,
 				mmio_read32(gma, GMA_LINEBUF), desc[0], desc[4], desc[5],
 				desc[7], desc[8], desc[9]);
-			log_line(line);
-			append_file_log(line);
+			if (display_diagnostics) {
+				log_line(line);
+				append_file_log(line);
+			}
 			snprintf(line, sizeof(line),
 				"sf2000-screen: native-gma bits csc=%u bypass=%u "
 				"enhance=%u d0_csc=%u edge_reduce=%u edge_avg=%u "
@@ -4134,8 +4153,10 @@ static void present_frame_profile(const struct gma_scanout_profile *profile)
 				(int32_t)desc[150], (int32_t)desc[151],
 				(int32_t)desc[152], (int32_t)desc[153],
 				(int32_t)desc[154], (int32_t)desc[155]);
-			log_line(line);
-			append_file_log(line);
+			if (display_diagnostics) {
+				log_line(line);
+				append_file_log(line);
+			}
 		}
 		logged_hw_state = 1;
 	}
@@ -4485,13 +4506,16 @@ static int condition_native_scanout(void)
 		char line[128];
 
 		progress_mark("screen-native-hold-fail", 0x3fu, rearmed);
-		snprintf(line, sizeof(line),
-			"sf2000-screen: te-condition fail rearmed=%u stopping=%d\n",
-			rearmed, stopping ? 1 : 0);
-		log_line(line);
+		if (display_diagnostics) {
+			snprintf(line, sizeof(line),
+				"sf2000-screen: te-condition fail rearmed=%u stopping=%d\n",
+				rearmed, stopping ? 1 : 0);
+			log_line(line);
+		}
 		return -1;
 	}
-	log_line("sf2000-screen: te-condition done, TE streaming stopped\n");
+	if (display_diagnostics)
+		log_line("sf2000-screen: te-condition done, TE streaming stopped\n");
 
 	/*
 	 * The physical log77 interrupt count was about twice the panel frame rate,
@@ -4866,6 +4890,9 @@ int main(int argc, char **argv, char **envp)
 		led_enabled = 0;
 	if (env_is((const char *const *)envp, "SF2000_FAST_PANEL", "1"))
 		slow_panel_bus = 0;
+	display_diagnostics =
+		env_is((const char *const *)envp, "SF2000_DISPLAY_DIAG", "1") ||
+		cmdline_contains("SF2000_DISPLAY_DIAG=1");
 	progress_mark("screen-after-env-checks", 0x3fu, SCREEN_TAG);
 
 	if (cmdline_contains("SF2000_RESET_SNAPSHOT=fast")) {

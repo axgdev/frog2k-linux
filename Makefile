@@ -2423,8 +2423,12 @@ smoke-linux-buildroot-ge-verify-reset: smoke-linux-buildroot-ge-verify-cpu-fallb
 # were clean with an identical GE sequence and byte-identical handoff
 # registers.  Handoff diagnostics are deferred and flushed only after the
 # scanout is stable.
+# A non-default LINUX_CMDLINE makes SDCARD_ASD_SYNC_DEFAULT=0, so the
+# diagnostic build is never copied to the physical SD image; rebuild the
+# default ASD afterwards (smoke-linux-buildroot-asd) before flashing.
 smoke-linux-buildroot-handoff-quiet:
 	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='$(LINUX_DEFAULT_CMDLINE) SF2000_DISPLAY_DIAG=1' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-screen: handoff diagnostics flushed' '$(BUILD_DIR)'/logs/linux-asd.log
