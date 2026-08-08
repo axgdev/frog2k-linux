@@ -4530,6 +4530,75 @@ static int condition_native_scanout(void)
 	return 0;
 }
 
+/*
+ * The bootloader UI leaves the GMA and RGB path live with its own
+ * descriptors and an already-initialised panel.  Re-running the MCU panel
+ * init + VOU re-sequence on that inherited state scrambled the physical
+ * panel on every bootloader-handoff boot (runs 135/137/139/141/145), while
+ * the identical sequence from the cold state (direct boot, runs
+ * 143/144/146) is clean.  The inherited registers read back byte-identical
+ * to the final rgb-commit values, so the defect is in the transition, not
+ * the final state.  This restores the cold pre-handoff GMA/RGB state
+ * observed on a direct boot (run 146: GMA banks and VOU_RGB_ENABLE all
+ * zero) so the panel reset and the VOU re-sequence in panel_vou_rgb_enable()
+ * -- which re-establishes the timing registers for the detected panel
+ * variant -- start from the same deterministic point as a direct boot.
+ *
+ * Note this also fires when the screen service is restarted with the GMA
+ * left configured by a previous linux run (gctl/dmba nonzero); a full
+ * re-drive from the cold state is the intended behaviour there too.
+ */
+static void display_cold_reinit_if_inherited(void)
+{
+	uint32_t gctl = mmio_read32(gma, GMA_CTL);
+	uint32_t dmba = mmio_read32(gma, GMA_DMBA);
+	uint32_t ctl_hw = mmio_read32(gma, GMA_CTL_HW);
+	uint32_t rgb = mmio_read32(gma, VOU_RGB_ENABLE);
+
+	/* SF2000_SKIP_PANEL_INIT=1 is a panel bring-up/debug mode: the caller
+	 * has already established the display by hand and wants the inherited
+	 * state left untouched.  Tearing the GMA/RGB down here would leave the
+	 * panel dark with no re-init to follow, so honour the skip. */
+	if (env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
+		return;
+
+	/* Direct-boot pre-state: the four registers we clear here are all
+	 * zero on both the physical direct boot (run 146: gctl/gctlhw/dmba/
+	 * dmbahw/vrgb all 0) and on the QEMU clean boot.  VOU_HD_MODE is
+	 * deliberately not part of the detection or the clear: the bootloader
+	 * leaves it at 0x15, which is also the reset default the panel init
+	 * re-establishes, and it is not a register this path touches. */
+	if (!gctl && !dmba && !ctl_hw && !rgb)
+		return;
+
+	progress_mark("screen-cold-takeover-gctl", 0x3fu, gctl);
+	progress_mark("screen-cold-takeover-dmba", 0x3fu, dmba);
+	progress_mark("screen-cold-takeover-rgb", 0x3fu, rgb);
+
+	/* Disable both GMA banks and drop the inherited descriptor pointers so
+	 * the fetcher cannot read the bootloader's descriptor while the panel
+	 * reset + VOU re-sequence below re-establish the display.  GMA_CTL=0
+	 * already stops the fetcher; the DMBA clear additionally removes the
+	 * stale descriptor base in case the engine latches it.  The GMA_K keep
+	 * value is deliberately left alone: its direct-boot value is not in the
+	 * run-146 evidence, and a stopped fetcher never consults it. */
+	mmio_write32(gma, GMA_CTL, 0u);
+	mmio_write32(gma, GMA_CTL_ALT, 0u);
+	mmio_write32(gma, GMA_DMBA, 0u);
+	mmio_write32(gma, GMA_DMBA_ALT, 0u);
+
+	/* Disable the RGB port, matching the direct-boot pre-state.  Do not
+	 * touch SYS_CLK_CTR (shared with the GE clock) or hardcode the VOU
+	 * timing registers here: panel_vou_rgb_enable() re-establishes them
+	 * for the detected panel variant and already ORs in the clock bits it
+	 * needs, so it is robust to any inherited value. */
+	mmio_write32(gma, VOU_RGB_ENABLE, 0u);
+
+	progress_mark("screen-cold-takeover-done", 0x3fu, SCREEN_TAG);
+	if (display_diagnostics)
+		log_line("sf2000-screen: display cold re-init after inherited bootloader state\n");
+}
+
 static void run_direct_console(unsigned *frame)
 {
 	char buf[768];
@@ -4550,6 +4619,12 @@ static void run_direct_console(unsigned *frame)
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
 
+	/*
+	 * A bootloader-handoff boot inherits a live GMA/VOU/RGB state; a direct
+	 * boot inherits zeroes.  Restore the cold state first so the panel reset
+	 * and VOU re-sequence below start from the same deterministic point.
+	 */
+	display_cold_reinit_if_inherited();
 	panel_lcd_setup_enable();
 	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
 		panel_init_sf2000_original_order();

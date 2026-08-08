@@ -2797,6 +2797,9 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'panel-cmd cmd=0x2c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'panel-data cmd=0x36 index=0 value=0x0070' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	# QEMU always boots linux directly (no bootloader UI), so the display
+	# cold re-init for an inherited bootloader state must be a no-op here.
+	! grep -q 'name=screen-cold-takeover-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout with panel pixel clock disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
