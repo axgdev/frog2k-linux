@@ -3616,6 +3616,21 @@ static void ge_copy_render_to_scanout(void)
 	state->src.phys = render_phys;
 	state->src.pitch = PITCH;
 	state->accel = HCGE_DFXL_BLIT;
+	/*
+	 * Vendor API parity (unifrog_ge.c setup_clip): always present a
+	 * full-surface clip in the state.  The node builders do not yet encode
+	 * clip words (the vendor writes them at offsets 0x5c/0x60 of its larger
+	 * node; our 9-word direct node has no clip field), so this is a state
+	 * contract only until a physical failing-node capture pins the node
+	 * grammar -- a stale clip window retained by the engine is the prime
+	 * candidate for the completed-but-stale-destination signature behind
+	 * physical verify detail 0x03430000.
+	 */
+	state->mod_hw = HCGE_SMF_CLIP;
+	state->clip.x1 = 0;
+	state->clip.y1 = 0;
+	state->clip.x2 = WIDTH - 1;
+	state->clip.y2 = HEIGHT - 1;
 	hcge_set_state(display_ge, state, state->accel);
 	if (trace_attempt)
 		progress_mark("screen-ge-submit", 0x3fu, attempt);
@@ -3642,7 +3657,14 @@ static void ge_copy_render_to_scanout(void)
 		 * self-generated kmsg/CPU-copy loop. */
 		if (sync_ret == -EINTR || screen_stop_requested())
 			return;
-		if (sync_ret == 0 && trace_attempt) {
+		/*
+		 * Verify every completed present, not just the first four: the
+		 * physical HC15xx defect reports a successful fence with the
+		 * destination left stale, and it is not confined to the handoff
+		 * frames.  A late stale destination must be caught and repaired by
+		 * the CPU fallback rather than shown on the panel.
+		 */
+		if (sync_ret == 0) {
 			uint16_t *dst = (uint16_t *)(gma_ram + GMA_FRAME_OFF);
 			uint16_t *src = render_cpu;
 			static const uint16_t samples[][2] = {
@@ -3676,11 +3698,14 @@ static void ge_copy_render_to_scanout(void)
 					break;
 				}
 			}
-			progress_mark(verified ? "screen-ge-verify-ok" :
-				"screen-ge-verify-fail", 0x3fu,
-				verified ? attempt : verify_detail);
-			ge_trace_state(attempt, verified ? "verify-ok" : "verify-fail",
-				render_phys, GMA_FRAME_PHYS, dst[0]);
+			if (trace_attempt || !verified) {
+				progress_mark(verified ? "screen-ge-verify-ok" :
+					"screen-ge-verify-fail", 0x3fu,
+					verified ? attempt : verify_detail);
+				ge_trace_state(attempt,
+					verified ? "verify-ok" : "verify-fail",
+					render_phys, GMA_FRAME_PHYS, dst[0]);
+			}
 		}
 	}	if (submitted && sync_ret != 0) {
 		/* A timeout does not prove that HC15xx stopped touching memory.  Reset

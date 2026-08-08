@@ -798,7 +798,9 @@ void hcge_set_state(hcge_context *ctx, hcge_state *state,
 	if (state != &ctx->state)
 		ctx->state = *state;
 	ctx->state.accel = accel;
-	state->mod_hw = HCGE_SMF_NONE;
+	/* Do not clobber the caller's mod_hw: the vendor API (unifrog_ge.c
+	 * setup_clip) sets HCGE_SMF_CLIP with a full-surface clip on every
+	 * operation, and consumers may depend on the clip state surviving. */
 }
 
 bool hcge_fill_rect(hcge_context *ctx, HCGERectangle *rectangle)
