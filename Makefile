@@ -2372,22 +2372,30 @@ smoke-linux-buildroot-ge-no-irq:
 	! grep -qE 'sync timeout|ETIMEDOUT|completion.*timeout|timed out' '$(BUILD_DIR)'/logs/linux-asd.log
 
 # Complete one optimized RGB565 GE blit without writing its destination.  This
-# reproduces run 131's physical symptom: HC15xx reports sync completion, but
-# the scanout sample is wrong.  The screen service must reset GE, verify that
-# the independent GMA raster remains valid, repair scanout on the CPU, and
-# still reach screen-ready.
-smoke-linux-buildroot-ge-verify-reset:
+# reproduces the physical symptom: HC15xx reports sync completion, but the
+# scanout sample is wrong.  A completed verification failure must repair the
+# scanout on the CPU without resetting the already-running VOU/GMA owner.
+smoke-linux-buildroot-ge-verify-cpu-fallback:
 	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-fault-dest=on' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
 	grep -q 'sf2000: ge fault-dest: skipped RGB565 blit 4 destination write' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-verify-fail' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'name=screen-ge-verify-reset' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'name=screen-ge-reset-ctl-before' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'name=screen-ge-reset-ctl-after' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-present-fail' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'GE present failed .*sync=0 verify=0' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'copied on CPU' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-ge-cpu-only' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
-	! grep -q 'name=screen-ge-verify-reset-fail' '$(BUILD_DIR)'/logs/linux-asd.log
+	cpu_only_line="$$(grep -n 'name=screen-ge-cpu-only' '$(BUILD_DIR)'/logs/linux-asd.log | head -n 1 | cut -d: -f1)"; \
+		test -n "$$cpu_only_line"; \
+		! tail -n +"$$cpu_only_line" '$(BUILD_DIR)'/logs/linux-asd.log | grep -q 'name=screen-ge-submit'
+	! grep -q 'name=screen-ge-verify-reset' '$(BUILD_DIR)'/logs/linux-asd.log
+	! grep -q 'name=screen-ge-sync-reset' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'name=screen-ge-reset-gma-invalid' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Keep the old name as a compatibility alias; completed verification failures
+# intentionally use CPU repair and do not reset the running VOU/GMA owner.
+smoke-linux-buildroot-ge-verify-reset: smoke-linux-buildroot-ge-verify-cpu-fallback
 
 # Boot with the kernel load window (KSEG0 0x80600000-0x80c00000) prefilled
 # with the stale word 0x61006441 (a COP1 instruction) -- the physical-device

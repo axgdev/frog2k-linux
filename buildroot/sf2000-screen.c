@@ -310,6 +310,7 @@ static uint32_t cached_render_frame_phys;
 static uint32_t cached_render_frame_handle;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
+static int ge_cpu_only;
 static hcge_context *display_ge;
 
 static void stop_signal(int signal_number)
@@ -2777,10 +2778,10 @@ static const uint8_t *glyph_for(char ch)
 
 static uint16_t *framebuffer(void)
 {
-	if (display_ge && cached_render_enabled)
+	if (display_ge && !ge_cpu_only && cached_render_enabled)
 		return cached_render_frame;
 	return (uint16_t *)(gma_ram +
-		(display_ge ? GMA_RENDER_OFF : GMA_FRAME_OFF));
+		(display_ge && !ge_cpu_only ? GMA_RENDER_OFF : GMA_FRAME_OFF));
 }
 
 static void put_pixel(unsigned x, unsigned y, uint16_t color)
@@ -3398,6 +3399,9 @@ static int ge_fill_rgb565(uint32_t destination, void *cpu_address,
 static int ge_fill_render(uint16_t color)
 {
 	static int logged;
+
+	if (ge_cpu_only)
+		return -1;
 	void *cpu_address = cached_render_enabled ?
 		(void *)cached_render_frame :
 		(void *)(gma_ram + GMA_RENDER_OFF);
@@ -3448,6 +3452,8 @@ static void ge_copy_render_to_scanout(void)
 	/* A stop request may interrupt the GE fence below.  Do not submit more
 	 * work once ownership is being handed back to init. */
 	if (screen_stop_requested())
+		return;
+	if (ge_cpu_only)
 		return;
 	if (!display_ge) {
 		memcpy(scanout_cpu, render_cpu, FRAME_BYTES);
@@ -3554,70 +3560,21 @@ static void ge_copy_render_to_scanout(void)
 			ge_trace_state(attempt, verified ? "verify-ok" : "verify-fail",
 				render_phys, GMA_FRAME_PHYS, dst[0]);
 		}
-	}
-	if (submitted && (sync_ret != 0 || !verified)) {
-		int reset_ret;
-		uint32_t reset_gma_dmba_before = mmio_read32(gma, GMA_DMBA_HW);
-
-		/* A timeout does not prove that HC15xx stopped touching memory.  A
-		 * completed-but-wrong node is also unsafe to preserve: run 131 showed
-		 * the recurring fourth node report completion while leaving one scanout
-		 * sample at zero.  Reset both cases before the CPU fallback so a stale
-		 * GE context cannot overwrite the repaired surface or poison the next
-		 * queue submission.  The reset is scoped to GE; the already-latched GMA
-		 * raster continues scanning the destination while the queue is repaired.
-		 * The EINTR shutdown case returned above and must not reset hardware while
-		 * ownership is being relinquished. */
-		progress_mark("screen-ge-reset-ctl-before", 0x3fu,
-			mmio_read32(gma, GMA_CTL_HW));
-		progress_mark("screen-ge-reset-dmba-before", 0x3fu,
-			reset_gma_dmba_before);
-		reset_ret = hcge_reset(display_ge);
-		progress_mark("screen-ge-reset-ctl-after", 0x3fu,
-			mmio_read32(gma, GMA_CTL_HW));
-		{
-			uint32_t reset_gma_ctl_hw = 0u;
-			uint32_t reset_gma_dmba_hw = 0u;
-			unsigned gma_wait;
-
-			/* GMA mirrors latch at a VOU boundary and may lag the GE reset by
-			 * a few milliseconds.  Poll briefly before treating a valid raster
-			 * as lost; never wait indefinitely in the presentation path. */
-			for (gma_wait = 0; gma_wait < 20u; gma_wait++) {
-				reset_gma_ctl_hw = mmio_read32(gma, GMA_CTL_HW);
-				reset_gma_dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
-				if (reset_ret != 0 ||
-				    ((reset_gma_ctl_hw & 1u) &&
-				     (reset_gma_dmba_hw == reset_gma_dmba_before ||
-				      reset_gma_dmba_hw == gma_desc_phys)))
-					break;
-				sleep_ms(1u);
-			}
-			progress_mark("screen-ge-reset-wait-ms", 0x3fu,
-				gma_wait);
-			progress_mark("screen-ge-reset-ctl-after", 0x3fu,
-				reset_gma_ctl_hw);
-			progress_mark("screen-ge-reset-dmba-after", 0x3fu,
-				reset_gma_dmba_hw);
-			if (reset_ret == 0 &&
-			    (!(reset_gma_ctl_hw & 1u) ||
-			     (reset_gma_dmba_hw != reset_gma_dmba_before &&
-			      reset_gma_dmba_hw != gma_desc_phys))) {
-				progress_mark("screen-ge-reset-gma-invalid", 0x3fu,
-					reset_gma_dmba_hw);
-				log_line("sf2000-screen: GE reset changed active GMA; leaving scanout unchanged\\n");
-				return;
-			}
-		}
-		if (reset_ret != 0) {
-			progress_mark(sync_ret != 0 ? "screen-ge-sync-reset-fail" :
-				"screen-ge-verify-reset-fail", 0x3fu,
-				(uint32_t)reset_ret);
+	}	if (submitted && sync_ret != 0) {
+		/* A timeout does not prove that HC15xx stopped touching memory.  Reset
+		 * before the CPU fallback so a late GE write cannot overwrite the
+		 * cache-flushed scanout surface.  Do not reset for a completed-but-wrong
+		 * node: on physical HC15xx, HCGE_RESET can disturb the already-running
+		 * VOU/GMA ownership even when the GMA mirrors still look valid.  The
+		 * completed verification-failure path must therefore remain the simple
+		 * CPU repair that was proven by the run-134 direct boot. */
+		if (hcge_reset(display_ge) != 0) {
+			progress_mark("screen-ge-sync-reset-fail", 0x3fu,
+				(uint32_t)sync_ret);
 			log_line("sf2000-screen: GE reset failed; leaving scanout unchanged\\n");
 			return;
 		}
-		progress_mark(sync_ret != 0 ? "screen-ge-sync-reset" :
-			"screen-ge-verify-reset", 0x3fu,				(sync_ret != 0 ? (uint32_t)sync_ret : verify_detail));
+		progress_mark("screen-ge-sync-reset", 0x3fu, (uint32_t)sync_ret);
 	}
 	if (!submitted || sync_ret != 0 || !verified) {
 	cpu_fallback:			{
@@ -3647,11 +3604,22 @@ static void ge_copy_render_to_scanout(void)
 					"sf2000-screen: GE present failed count=%u submit=%u sync=%d verify=%d detail=%08x, copied on CPU\n",
 					display_ge_failures, submitted ? 1u : 0u,
 					sync_ret, verified, verify_detail);
-				log_line(line);
-				progress_mark("screen-ge-present-fail", 0x3fu,
+				log_line(line);				progress_mark("screen-ge-present-fail", 0x3fu,
 					((uint32_t)(-sync_ret) & 0xffffu) |
 					(submitted ? 1u << 16 : 0u) |
 					(verified ? 1u << 17 : 0u));
+			}
+			/* A completed-but-wrong node is the physical failure mode: the
+			 * fence returned success, but the destination stayed stale.  Do not
+			 * submit another node from this userspace context after repairing the
+			 * scanout.  Keeping the screen service in CPU/GMA mode prevents a
+			 * second bad GE node from overwriting the repaired frame, while the
+			 * browser's separate /dev/ge context remains available. */
+			if (sync_ret == 0 && !verified) {
+				ge_cpu_only = 1;
+				cached_render_enabled = 0;
+				progress_mark("screen-ge-cpu-only", 0x3fu, verify_detail);
+				log_line("sf2000-screen: GE disabled after completed verification failure; CPU/GMA scanout active\n");
 			}
 		}
 	} else {
@@ -4534,7 +4502,7 @@ handoff_complete:
 	if (!cached_render_frame)
 		cached_render_frame = allocate_frame(&cached_render_frame_phys,
 			&cached_render_frame_handle);
-	if (display_ge && rgb_active &&
+	if (display_ge && !ge_cpu_only && rgb_active &&
 	    cached_render_frame &&
 	    hcge_linux_cached_phys(cached_render_frame)) {
 		memcpy(cached_render_frame,
