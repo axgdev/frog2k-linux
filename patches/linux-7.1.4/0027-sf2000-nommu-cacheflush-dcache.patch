@@ -1,0 +1,36 @@
+[PATCH] mips: make NOMMU SF2000 cacheflush DMA-coherent
+
+Write back and invalidate D-cache ranges requested by GE/GMA userspace.
+
+--- a/arch/mips/mm/cache.c
++++ b/arch/mips/mm/cache.c
+@@ -19,6 +19,8 @@
+ 
+ #include <asm/bcache.h>
+ #include <asm/cacheflush.h>
++#include <asm/cachectl.h>
++#include <asm/io.h>
+ #include <asm/processor.h>
+ #include <asm/cpu.h>
+ #include <asm/cpu-features.h>
+@@ -124,7 +126,20 @@
+ 		return -EFAULT;
+ #endif
+ 
++#if defined(CONFIG_MIPS_SF2000) && !defined(CONFIG_MMU)
++	/*
++	 * The physical HC15xx GE/GMA engines are non-coherent DMA masters.
++	 * QEMU reads guest RAM directly and therefore masks a missing D-cache
++	 * writeback; the real panel otherwise scans stale RAM after a userspace
++	 * CPU render. Honour the cache argument on the SF2000 NOMMU path.
++	 */
++	if (cache & DCACHE)
++		dma_cache_wback_inv(addr, bytes);
++	if (cache & ICACHE)
++		__flush_icache_user_range(addr, addr + bytes);
++#else
+ 	__flush_icache_user_range(addr, addr + bytes);
++#endif
+ 
+ 	return 0;
+ }

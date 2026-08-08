@@ -337,7 +337,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot physical-linux-asd \
+.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot physical-linux-asd \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
@@ -418,7 +418,7 @@ help:
 		'make smoke-linux-buildroot-stale-ram  boot with stale garbage prefill in RAM'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
-	memory-layout-audit check-linux-early-handoff
+	memory-layout-audit check-linux-early-handoff check-linux-cacheflush
 
 check-linux-early-handoff:
 	grep -Fq 'sf2000_watchdog_arm("early-watchdog-armed")' $(LINUX_PATCHES)
@@ -427,6 +427,18 @@ check-linux-early-handoff:
 	grep -Fq 'sf2000_before_irq_enable();' $(LINUX_PATCHES)
 	grep -Fq 'clear_c0_cause(CAUSEF_IV);' $(LINUX_PATCHES)
 	grep -Fq 'change_c0_intctl(0x3e0, 0);' $(LINUX_PATCHES)
+
+# A QEMU display smoke cannot model the physical HC15xx's non-coherent L1.
+# Keep the physical-device prerequisite explicit: the generated NOMMU kernel
+# must implement the D-cache part of userspace cacheflush(BCACHE), not merely
+# the historical instruction-cache-only path.
+check-linux-cacheflush: $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP)
+	grep -Fq '#include <asm/cachectl.h>' '$(LINUX_SRC)/arch/mips/mm/cache.c'
+	grep -Fq '#include <asm/io.h>' '$(LINUX_SRC)/arch/mips/mm/cache.c'
+	grep -q '^CONFIG_DMA_NONCOHERENT=y$$' '$(LINUX_OUT)/.config'
+	grep -Fq 'if (cache & DCACHE)' '$(LINUX_SRC)/arch/mips/mm/cache.c'
+	grep -Fq 'dma_cache_wback_inv(addr, bytes);' '$(LINUX_SRC)/arch/mips/mm/cache.c'
+	grep -Fq 'if (cache & ICACHE)' '$(LINUX_SRC)/arch/mips/mm/cache.c'
 
 check-vendor: check test-ge-utils test-ge-matrix test-ge-queue
 
