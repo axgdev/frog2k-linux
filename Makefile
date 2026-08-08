@@ -341,7 +341,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
-	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq smoke-linux-buildroot-stale-ram run-linux-buildroot-storage \
+	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq smoke-linux-buildroot-handoff-quiet smoke-linux-buildroot-stale-ram run-linux-buildroot-storage \
 	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
 	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
 smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
@@ -2408,6 +2408,34 @@ smoke-linux-buildroot-ge-verify-cpu-fallback:
 # Keep the old name as a compatibility alias; completed verification failures
 # intentionally use CPU repair and do not reset the running VOU/GMA owner.
 smoke-linux-buildroot-ge-verify-reset: smoke-linux-buildroot-ge-verify-cpu-fallback
+
+# The screen service must not write /dev/kmsg while the GMA/VOU display
+# handoff is in flight: the ttyS0 console drains every record synchronously
+# in the writer's context and the service's own /dev/kmsg reader renders
+# records back onto the live scanout.  Runs 135..142 (per-message kmsg
+# logging through the handoff, b3bfda4) scrambled the physical panel on
+# every boot and both boot paths; runs 143/144 (kmsg-quiet handoff, c325f8b)
+# were clean with an identical GE sequence and byte-identical handoff
+# registers.  Handoff diagnostics are deferred and flushed only after the
+# scanout is stable.
+smoke-linux-buildroot-handoff-quiet:
+	$(MAKE) ROOTFS=buildroot \
+		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
+	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-screen: handoff diagnostics flushed' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000-screen: disp-state handoff-done' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'name=screen-handoff-kmsg-calls' '$(BUILD_DIR)'/logs/linux-asd.log
+	# No screen-service kmsg record may appear between the last pre-handoff
+	# record (backlight ownership) and the deferred-flush marker.  The
+	# "backlight ownership" anchor is the last log_line emitted before
+	# run_direct_console() sets handoff_critical; keep it that way (the
+	# comment above the handoff_critical assignment documents the guard).
+	last_pre="$$(grep -n 'sf2000-screen: taking backlight ownership' '$(BUILD_DIR)'/logs/linux-asd.log | tail -n 1 | cut -d: -f1)"; \
+		flush="$$(grep -n 'sf2000-screen: handoff diagnostics flushed' '$(BUILD_DIR)'/logs/linux-asd.log | tail -n 1 | cut -d: -f1)"; \
+		test -n "$$last_pre" -a -n "$$flush"; \
+		awk -v a="$$last_pre" -v b="$$flush" \
+			'NR > a && NR < b && (/sf2000-screen:/ || /sf2000-perf:/) { bad = 1 } END { exit bad }' \
+			'$(BUILD_DIR)'/logs/linux-asd.log
 
 # Boot with the kernel load window (KSEG0 0x80600000-0x80c00000) prefilled
 # with the stale word 0x61006441 (a COP1 instruction) -- the physical-device

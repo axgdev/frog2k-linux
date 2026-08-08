@@ -311,6 +311,24 @@ static uint32_t cached_render_frame_handle;
 static int cached_render_enabled;
 static int cached_render_tick_dirty;
 static int ge_cpu_only;
+/*
+ * Display-handoff logging guard.  The screen service must not write
+ * /dev/kmsg while the GMA/VOU ownership transfer is in flight: the ttyS0
+ * console drains every record synchronously in the writer's context and
+ * the service's own /dev/kmsg reader renders records back onto the live
+ * scanout.  Runs 135..142 (b3bfda4 per-message kmsg logging through the
+ * handoff) scrambled the physical panel on every boot, on both boot paths;
+ * runs 143/144 (kmsg-quiet handoff, the c325f8b rate-limited fd) were
+ * clean with an identical GE sequence and byte-identical handoff registers.
+ * Buffer handoff diagnostics and flush them only after the scanout is
+ * stable (handoff_flush_deferred).
+ */
+#define HANDOFF_DEFER_MAX 8192u
+static char handoff_defer_buf[HANDOFF_DEFER_MAX];
+static unsigned handoff_defer_len;
+static unsigned handoff_defer_dropped;
+static int handoff_critical;
+static unsigned handoff_log_calls;
 static hcge_context *display_ge;
 
 static void stop_signal(int signal_number)
@@ -740,35 +758,73 @@ static uint16_t rgb565(unsigned r, unsigned g, unsigned b)
 	return (uint16_t)(((r & 0x1f) << 11) | ((g & 0x3f) << 5) | (b & 0x1f));
 }
 
+static void log_line_record(const char *record, size_t len)
+{
+	int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+
+	if (fd >= 0) {
+		if (write(fd, record, len) >= 0) {
+			close(fd);
+			return;
+		}
+		close(fd);
+	}
+	if (len > 3u)
+		(void)write(STDERR_FILENO, record + 3, len - 3u);
+}
+
 static void log_line(const char *line)
 {
 	char record[256];
 	size_t len = strlen(line);
-	int fd;
 
-	/*
-	 * /dev/kmsg ratelimits each open fd to 10 records per 5s and fails
-	 * excess writes with EBUSY.  A long-lived fd therefore silences the
-	 * screen service after its first ten diagnostics (run 133 lost every
-	 * display-handoff record after "guarded panel init done" this way).
-	 * The browser's per-message open is never limited; use the same
-	 * pattern so the retained log always sees the handoff instrumentation.
-	 */
 	if (len > sizeof(record) - 4u)
 		len = sizeof(record) - 4u;
 	record[0] = '<';
 	record[1] = '6';
 	record[2] = '>';
 	memcpy(record + 3, line, len);
-	fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
-	if (fd >= 0) {
-		if (write(fd, record, len + 3u) >= 0) {
-			close(fd);
-			return;
+	if (handoff_critical) {
+		/* The display handoff is timing-sensitive: defer instead of
+		 * touching the kmsg/console path (see the guard comment above). */
+		handoff_log_calls++;
+		if (handoff_defer_len + len + 3u <= sizeof(handoff_defer_buf)) {
+			memcpy(handoff_defer_buf + handoff_defer_len,
+			       record, len + 3u);
+			handoff_defer_len += len + 3u;
+		} else {
+			handoff_defer_dropped++;
 		}
-		close(fd);
+		return;
 	}
-	(void)write(STDERR_FILENO, line, len);
+	log_line_record(record, len + 3u);
+}
+
+static void handoff_flush_deferred(void)
+{
+	static const char marker[] =
+		"<6>sf2000-screen: handoff diagnostics flushed\n";
+	unsigned pos = 0;
+
+	if (handoff_critical)
+		return;
+	/* Emit the marker first so the retained log shows the handoff window
+	 * was kmsg-quiet up to this point (no screen record precedes it). */
+	log_line_record(marker, sizeof(marker) - 1u);
+	while (pos < handoff_defer_len) {
+		size_t rec_len = handoff_defer_len - pos;
+		unsigned nl;
+
+		/* Each buffered record is a single '<level>' line. */
+		for (nl = pos; nl < handoff_defer_len; nl++)
+			if (handoff_defer_buf[nl] == '\n') {
+				rec_len = nl - pos + 1u;
+				break;
+			}
+		log_line_record(handoff_defer_buf + pos, rec_len);
+		pos += (unsigned)rec_len;
+	}
+	handoff_defer_len = 0;
 }
 
 static void append_file_log(const char *line)
@@ -847,7 +903,7 @@ static void ge_trace_state(unsigned attempt, const char *stage,
 	first = mmio_read32(regs, 0x10u);
 	last = mmio_read32(regs, 0x14u);
 	snprintf(line, sizeof(line),
-		"sf2000-screen: ge-state attempt=%u stage=%s status=%08x first=%08x last=%08x src=%08x dst=%08x sample=%04x\\n",
+		"sf2000-screen: ge-state attempt=%u stage=%s status=%08x first=%08x last=%08x src=%08x dst=%08x sample=%04x\n",
 		attempt, stage, status, first, last, render_phys, dst_phys,
 		sample);
 	/* Keep normal submit/sync snapshots in retained progress only.  Emitting
@@ -3573,7 +3629,7 @@ static void ge_copy_render_to_scanout(void)
 		if (hcge_reset(display_ge) != 0) {
 			progress_mark("screen-ge-sync-reset-fail", 0x3fu,
 				(uint32_t)sync_ret);
-			log_line("sf2000-screen: GE reset failed; leaving scanout unchanged\\n");
+			log_line("sf2000-screen: GE reset failed; leaving scanout unchanged\n");
 			return;
 		}
 		progress_mark("screen-ge-sync-reset", 0x3fu, (uint32_t)sync_ret);
@@ -4371,9 +4427,13 @@ static void run_direct_console(unsigned *frame)
 	unsigned input_retry = 0;
 	int rgb_active = 0;
 	int ge_diagnostics;
+	int handoff_guard_done = 0;
 	int browser_boot = cmdline_contains("SF2000_BOOT_VISUAL=browser");
 	uint64_t performance_begin_us = monotonic_us();
 
+	/* Guard the whole display setup + ownership transfer: no kmsg writes
+	 * from this service until the first present lands with a stable scanout. */
+	handoff_critical = 1;
 	log_line("sf2000-screen: direct text console begin\n");
 	append_file_log("sf2000-screen: direct text console begin\n");
 
@@ -4576,6 +4636,20 @@ handoff_complete:
 				panel_push_frame(0);
 			if (*frame <= 4u)
 				progress_mark("screen-loop-present-done", 0x3fu, *frame);
+			/* The first present runs with the scanout stable: end the kmsg
+			 * embargo, record the guard outcome in the retained log, and
+			 * flush the deferred handoff diagnostics. */
+			if (!handoff_guard_done) {
+				handoff_guard_done = 1;
+				handoff_critical = 0;
+				progress_mark("screen-handoff-kmsg-calls", 0x3fu,
+					handoff_log_calls);
+				progress_mark("screen-handoff-kmsg-deferred", 0x3fu,
+					handoff_defer_len);
+				progress_mark("screen-handoff-kmsg-dropped", 0x3fu,
+					handoff_defer_dropped);
+				handoff_flush_deferred();
+			}
 			idle = 0;
 		} else {
 			idle++;
