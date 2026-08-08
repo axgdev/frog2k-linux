@@ -1,71 +1,71 @@
-[PATCH] sf2000: ge: poll GE completion instead of waiting on the IRQ
+[PATCH] sf2000: make GE queue polling independent of IRQ delivery
 
-The HC15xx completion interrupt is an accelerator, not the contract:
-the sysint cascade does not deliver it on every boot path (on the
-physical SF2000 the GE line shows 0 interrupts while the engine still
-finishes nodes and sets STATUS.DONE).  With the IRQ silent, every
-HCGE_SYNC_TIMEOUT waits on the completion until -ETIMEDOUT, and the
-latched STATUS_BUSY bit then makes the submit path skip the doorbell,
-so the engine stops receiving work, the GMA never latches its
-descriptor, and the panel samples an invalid RGB stream (moving static).
+Treat the completion IRQ as an accelerator only. Require BUSY clear and HQ_FIRST consumption, then return directly from HCGE_SYNC_TIMEOUT.
 
-The vendor firmware and the NuttX bootloader both poll STATUS instead:
-the engine sets DONE and advances HQ_FIRST to the producer when it
-consumes a node.  Follow that contract here:
-
-  - HCGE_SYNC_TIMEOUT polls for DONE / HQ_FIRST reaching the producer
-    (or phy_addr_min across a wrap) and only falls back to the
-    completion IRQ as an accelerator.
-  - HCGE_SUBMIT drains the previous node by polling the same signals
-    and clears the latched STATUS (write-one-to-clear) before
-    publishing, so a missed IRQ cannot wedge the busy gate.
-
-Signed-off-by: SF2000 Linux Port <sf2000@localhost>
----
 --- a/drivers/misc/sf2000-ge.c
 +++ b/drivers/misc/sf2000-ge.c
-@@ -334,7 +334,6 @@
+@@ -332,36 +332,39 @@
+ 		return 0;
+ 	case HCGE_SYNC_TIMEOUT: {
  		unsigned long timeout = msecs_to_jiffies(arg ? arg : 1000);
- 		long waited;
+-		long waited;
  		int idle;
 -		u32 first = readl(ge->regs + SF2000_GE_HQ_FIRST);
  		u32 status = readl(ge->regs + SF2000_GE_STATUS);
  
++		/*
++		 * The completion IRQ is only an accelerator.  The physical HC15xx
++		 * sysint cascade can be silent, so a successful poll must complete
++		 * the ioctl without waiting on the IRQ.  A latched DONE bit alone
++		 * can describe an inherited or previous transaction; require BUSY
++		 * clear and HQ_FIRST to consume the published producer.
++		 */
  		if (ctx->is_finish) {
-@@ -343,9 +342,29 @@
+ 			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
+ 				status, !(status & SF2000_GE_STATUS_BUSY),
  				10, jiffies_to_usecs(timeout));
- 			if (!idle)
- 				return 0;
+-			if (!idle)
+-				return 0;
 -		} else if (!(status & SF2000_GE_STATUS_BUSY) &&
 -			   first == (ctx->phy_addr_start & ~1u))
 -			return 0;
+-		waited = wait_for_completion_interruptible_timeout(&ge->done,
+-								   timeout);
+-		if (waited < 0)
+-			return -EINTR;
+-		if (waited > 0) {
 +		} else {
-+			/*
-+			 * The completion IRQ is an accelerator, not the contract:
-+			 * the HC15xx sysint cascade does not deliver it on every
-+			 * boot path, which previously wedged sync forever even
-+			 * though the engine had finished the node.  Follow the
-+			 * vendor and NuttX poll contract: the published node is
-+			 * done once the engine has consumed it (HQ_FIRST reaches
-+			 * the producer, or returns to phy_addr_min across a wrap)
-+			 * or set the DONE completion bit.
-+			 */
-+			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
+ 			idle = readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
+-				status, !(status & SF2000_GE_STATUS_BUSY),
+-				10, jiffies_to_usecs(waited));
+-			if (!idle)
+-				return 0;
 +				status,
-+				(status & SF2000_GE_STATUS_DONE) ||
-+				readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++				!(status & SF2000_GE_STATUS_BUSY) &&
++				(readl(ge->regs + SF2000_GE_HQ_FIRST) ==
 +					(ctx->phy_addr_start & ~1u) ||
-+				(SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
-+				 readl(ge->regs + SF2000_GE_HQ_FIRST) ==
-+					ctx->phy_addr_min),
++				 (SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
++				  readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++					ctx->phy_addr_min)),
 +				10, jiffies_to_usecs(timeout));
-+			if (!idle)
-+				return 0;
 +		}
- 		waited = wait_for_completion_interruptible_timeout(&ge->done,
- 								   timeout);
- 		if (waited < 0)
-@@ -402,6 +421,35 @@
++		if (idle) {
++			dev_err_ratelimited(ge->dev,
++				"sync timeout status=%08x first=%08x producer=%08x finish=%u\n",
++				status, readl(ge->regs + SF2000_GE_HQ_FIRST),
++				ctx->phy_addr_start, ctx->is_finish);
++			return -ETIMEDOUT;
+ 		}
+-		dev_err_ratelimited(ge->dev,
+-			"sync timeout status=%08x first=%08x producer=%08x finish=%u\n",
+-			status, readl(ge->regs + SF2000_GE_HQ_FIRST),
+-			ctx->phy_addr_start, ctx->is_finish);
+-		return -ETIMEDOUT;
++		return 0;
+ 	}
+ 	case HCGE_GET_CMDQ_BUFINFO: {
+ 		struct hcge_cmdq_buf_info info = {
+@@ -402,6 +405,35 @@
  			return -EINVAL;
  		mutex_lock(&ge->submit_lock);
  		/*
@@ -82,12 +82,12 @@ Signed-off-by: SF2000 Linux Port <sf2000@localhost>
 +
 +			if (readl_poll_timeout(ge->regs + SF2000_GE_STATUS,
 +					drain,
-+					(drain & SF2000_GE_STATUS_DONE) ||
-+					readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++					(!(drain & SF2000_GE_STATUS_BUSY) &&
++					 (readl(ge->regs + SF2000_GE_HQ_FIRST) ==
 +						(ctx->phy_addr_start & ~1u) ||
-+					(SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
-+					 readl(ge->regs + SF2000_GE_HQ_FIRST) ==
-+						ctx->phy_addr_min),
++					  (SF2000_GE_NODE_WRAP(ctx->phy_addr_start) &&
++					   readl(ge->regs + SF2000_GE_HQ_FIRST) ==
++						ctx->phy_addr_min))),
 +					10, 250 * USEC_PER_MSEC)) {
 +				mutex_unlock(&ge->submit_lock);
 +				return -EBUSY;

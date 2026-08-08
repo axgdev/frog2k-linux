@@ -833,13 +833,15 @@ static void ge_trace_state(unsigned attempt, const char *stage,
 	uint32_t last;
 	char line[192];
 
-	if (!display_ge || !ge_mapping || attempt > 4u)
+	if (!display_ge || attempt > 4u)
 		return;
 
 	/* HCGE_GET_GE_REGISTER returns the physical GE base (0x18806000), not a
-	 * userspace pointer.  Use the separately mapped /dev/mem alias here.  Keep
-	 * these reads observational: the screen service must never poke GE state
-	 * while diagnosing a failed presentation. */
+	 * userspace pointer.  Use the /dev/mem mapping when available and the
+	 * KSEG1 alias on the direct physical boot path.  The direct path is the
+	 * important one for run 137: previously this guard silently removed all
+	 * queue evidence from the physical log.  Keep these reads observational;
+	 * the screen service must never poke GE state while diagnosing a frame. */
 	regs = ge;
 	status = mmio_read32(regs, 0x08u);
 	first = mmio_read32(regs, 0x10u);
