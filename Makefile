@@ -2276,6 +2276,42 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 
+# End-to-end save-state round trip: launch QPSX, open the pause menu with the
+# SELECT+START chord, jump to SAVE STATE (item 4), confirm the save, jump to
+# LOAD STATE (item 5), confirm the load, then resume.  The frontend kmsg
+# markers are the oracle: "save state serialize size ... bytes=" proves
+# retro_serialize_size() is no longer 0, and the written/loaded markers prove
+# retro_serialize()/retro_unserialize() round-trip through the core's native
+# freeze machinery.
+run-linux-qpsx-savestate: qemu linux-buildroot-asd qpsx-real-test-sd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 15; printf 'sendkey ret-backspace 2000\n'; sleep 3; \
+		printf 'sendkey down 200\n'; sleep 0.5; \
+		printf 'sendkey down 200\n'; sleep 0.5; \
+		printf 'sendkey down 200\n'; sleep 0.5; \
+		printf 'sendkey down 200\n'; sleep 0.5; \
+		printf 'sendkey x 200\n'; sleep 12; \
+		printf 'sendkey down 200\n'; sleep 0.5; \
+		printf 'sendkey x 200\n'; sleep 12; \
+		printf 'sendkey z 200\n'; sleep 2; printf 'quit\n') | \
+		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log \
+		> '$(BUILD_DIR)'/logs/linux-qpsx-savestate.console 2>&1
+
+smoke-linux-qpsx-savestate: run-linux-qpsx-savestate
+	grep -q 'sf2000-frontend: pause menu opened' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -Eq 'sf2000-frontend: save state serialize size slot=0 bytes=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -q 'sf2000-frontend: save state serialize complete' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -q 'sf2000-frontend: save state written slot=0' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -q 'sf2000-frontend: save state loaded slot=0' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	! grep -Eq 'save state (unavailable|allocation failed|serialization failed|write failed|rejected|read failed|unserialization failed)' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
 		*' $(GPSP_SMC_MODE) '*) ;; \
