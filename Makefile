@@ -46,6 +46,10 @@ OBJDUMP_MIPS = $(CROSS_COMPILE)objdump
 READELF_MIPS = $(CROSS_COMPILE)readelf
 NM_MIPS = $(CROSS_COMPILE)nm
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
+# Kernel asm-offset generation is not safe with the isolated nested job budget
+# on this NOMMU port; keep the kernel build deterministic. Other host stages
+# may still use JOBS in their own isolated make invocations.
+KERNEL_JOBS ?= 1
 ROOTFS ?= tiny
 LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
@@ -1360,7 +1364,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	# largest packaged core has a roughly 20 MiB load image, so order 13 is the
 	# smallest general ceiling that can load it with its stack. This changes the
 	# buddy limit, not a 32 MiB reservation.
-	'$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
+	set -e; '$(LINUX_SRC)'/scripts/config --file '$(LINUX_OUT)/.config' \
 		--enable BLK_DEV_INITRD \
 		--set-str INITRAMFS_SOURCE '$(abspath $(ROOTFS_CPIO))' \
 		--enable CMDLINE_BOOL \
@@ -1466,6 +1470,8 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable CGROUP_CPUACCT \
 		--disable CGROUPS \
 		--disable NAMESPACES \
+		--disable TIME_NS \
+		--disable TIME_NS_VDSO \
 		--disable SYSVIPC \
 		--disable POSIX_MQUEUE \
 		--disable KEYS \
@@ -1613,10 +1619,14 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 	# (Reserved Instruction at a valid text address).
 	grep -q '^CONFIG_MIPS_L1_CACHE_SHIFT=7$$' '$(LINUX_OUT)/.config'
 	grep -q '^CONFIG_BOARD_SCACHE=y$$' '$(LINUX_OUT)/.config'
+	grep -q '^CONFIG_MIPS_SF2000=y$$' '$(LINUX_OUT)/.config'
+	! grep -q '^CONFIG_MMU=y$$' '$(LINUX_OUT)/.config'
+	grep -q '^CONFIG_BINFMT_ELF_NOMMU=y$$' '$(LINUX_OUT)/.config'
 	touch '$@'
 
 $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
-	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
+	env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(KERNEL_JOBS)' \
+		-C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
 	# The loader consumes only allocated ELF sections.  Keeping DWARF in the
 	# embedded image wastes most of RAM and makes relocation overlap needlessly
@@ -1625,8 +1635,11 @@ $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
 
 linux: $(LINUX_VMLINUX) $(SF2000_DTB)
 
+# Re-extracting is intentionally rootfs-independent: switching between tiny
+# and Buildroot must not retain a kernel config from the other output tree.
 linux-reextract:
-	rm -rf '$(LINUX_SRC)' '$(LINUX_OUT)'
+	rm -rf '$(LINUX_SRC)' '$(BUILD_DIR)/linux-sf2000' \
+		'$(BUILD_DIR)/linux-sf2000-buildroot'
 
 linux-reconfigure:
 	rm -f '$(LINUX_OUT)/.config' '$(LINUX_CONFIG_STAMP)'
@@ -2791,6 +2804,7 @@ smoke-linux-buildroot-display: run-linux-buildroot-display
 	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'value=0x00000001 name=screen-vou-geometry-contract' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0xb6060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
 	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-buildroot-display.log

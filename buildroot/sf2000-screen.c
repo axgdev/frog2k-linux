@@ -340,6 +340,10 @@ static unsigned handoff_log_calls;
  */
 static int display_diagnostics;
 static hcge_context *display_ge;
+/* Set before panel/RGB takeover so inherited boots can explicitly restore
+ * the controller's RAM/RGB ownership bit without changing the proven cold
+ * direct-boot sequence. */
+static int bootloader_handoff;
 
 static void stop_signal(int signal_number)
 {
@@ -724,6 +728,8 @@ static const struct panel_rgb_mode_profile panel_rgb_mode_profiles[] = {
  * its lossy selector-only form, and a complete reset/init.  Every phase is
  * labelled in its GMA framebuffer.
  */
+#define HC15_PROFILE_PRODUCTION 2u
+
 static const struct hc15_panel_sync_profile hc15_panel_sync_profiles[] = {
 	{ "H1 STOCK DISPON", 0x60, 0, 0, 1, 0, 0xb6060606u },
 	{ "H2 MUFROG PRE-IRQ", 0x70, 1, 0, 1, 0, 0xb6060606u },
@@ -1731,6 +1737,43 @@ static void panel_rgb_clock_enable(void)
 		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
 }
 
+static int panel_rgb_clock_rearm_handoff(void)
+{
+	const uint32_t rgb_clocks = (1u << 9) | (1u << 10);
+	uint32_t gate1 = mmio_read32(sysio, SYS_CLOCK_GATE1_OFF);
+	uint32_t gate_off = gate1 & ~rgb_clocks;
+	uint32_t gate_off_readback;
+
+	/*
+	 * A Linux direct boot enters with the HC15 RGB clocks stopped.  A Linux
+	 * boot reached through the frontend is different: the bootloader leaves
+	 * CLOCK_GATE1=0x00000600 while it disables only VOU_RGB_ENABLE.  Merely
+	 * ORing the enable bits back in preserves the old timing-generator phase;
+	 * the panel then reports the characteristic rolling/striped scrambled
+	 * raster even though every final VOU register reads correctly.
+	 *
+	 * Re-arm only the two RGB clocks after the inherited GMA fetcher is idle
+	 * and before Linux reclaims the panel bus.  Preserve all unrelated clock
+	 * fields and keep the cold direct path byte-for-byte unchanged.
+	 */
+	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate_off);
+	__asm__ volatile ("sync" : : : "memory");
+	gate_off_readback = mmio_read32(sysio, SYS_CLOCK_GATE1_OFF);
+	progress_mark("screen-rgb-gate-rearm-before", 0x3fu, gate1);
+	progress_mark("screen-rgb-gate-rearm-off", 0x3fu, gate_off_readback);
+	if (gate_off_readback & rgb_clocks) {
+		progress_mark("screen-rgb-gate-rearm-fail", 0x3fu,
+			gate_off_readback);
+		return -1;
+	}
+	sleep_ms(1);
+	mmio_write32(sysio, SYS_CLOCK_GATE1_OFF, gate1 | rgb_clocks);
+	__asm__ volatile ("sync" : : : "memory");
+	progress_mark("screen-rgb-gate-rearm-after", 0x3fu,
+		mmio_read32(sysio, SYS_CLOCK_GATE1_OFF));
+	return 0;
+}
+
 static void panel_rgb_output_mux_enable(void)
 {
 	uint32_t strap;
@@ -2004,6 +2047,17 @@ static void panel_vou_rgb_enable(void)
 		mmio_read32(gma, VOU_HD_MODE) ^
 		mmio_read32(gma, VOU_HD_TIMING3) ^
 		mmio_read32(gma, VOU_HD_CTRL));
+	/*
+	 * Keep a machine-checkable geometry contract beside the individual
+	 * register breadcrumbs.  A coherent but wrapped panel image must not be
+	 * mistaken for a bad framebuffer: QEMU can at least prove that the Linux
+	 * VOU active window and total are the intended 320x240/444x304 contract.
+	 */
+	progress_mark("screen-vou-geometry-contract", 0x3fu,
+		(mmio_read32(gma, VOU_HD_TIMING2) == 0x01300378u &&
+		 mmio_read32(gma, 0x014u) == 0x028e000au &&
+		 mmio_read32(gma, 0x024u) == 0x011e002eu &&
+		 mmio_read32(gma, 0x02cu) == 0x013007ffu) ? 1u : 0u);
 	progress_mark("screen-vpo-after-90", 0x3fu,
 		mmio_read32(gma, VOU_VPO_CTRL));
 	progress_mark("screen-vpo-after-94", 0x3fu,
@@ -2585,6 +2639,8 @@ static void panel_te_rearm(void)
 	if (!panel_enabled || !panel_te_streaming || panel_te_busy)
 		return;
 	panel_te_busy = 1;
+	if (bootloader_handoff && panel_te_rearms == 0u)
+		progress_mark("screen-te-handoff-rearm-begin", 0x3fu, panel_te_last);
 	/* Exact recovered MuFrog st7789v2:vsync_irq() transaction. */
 	panel_control_pinmux();
 	panel_config_outputs();
@@ -2598,6 +2654,8 @@ static void panel_te_rearm(void)
 		progress_mark("screen-te-rearm-edge", 0x3fu,
 			((uint32_t)panel_te_rising << 31) | (rearm << 16) |
 			(uint32_t)panel_te_last);
+	if (bootloader_handoff && rearm == 1u)
+		progress_mark("screen-te-handoff-rearm-done", 0x3fu, panel_te_last);
 }
 
 static void panel_te_service_sample(void)
@@ -2727,8 +2785,6 @@ static int panel_init_variant(const struct panel_variant *variant)
  * every Linux jump, so nuttx-* breadcrumbs never survive and the header is
  * always valid.  A missing mark means a direct boot.
  */
-static int bootloader_handoff;
-
 static int detect_bootloader_handoff(void)
 {
 	volatile struct progress_log *log =
@@ -2761,62 +2817,10 @@ static int detect_bootloader_handoff(void)
 	return handoff;
 }
 
-/*
- * Take over a panel the bootloader already initialized, without toggling the
- * reset line.  Mirrors the vendor H3 ownership edge: pad the shared
- * 8080/RGB bus back to MCU mode, identify the panel for the log, and let the
- * common push-frame / VOU / GMA / H3 handoff below take ownership.  The init
- * command replay is deliberately skipped: the bootloader ran the identical
- * sequence, and the H3 handoff re-applies MADCTL/TEON/COLMOD/RGBCTRL before
- * re-arming RAMWR and connecting RGB.
- */
-static void panel_takeover_sf2000_without_reset(void)
-{
-	uint32_t panel_id;
-	uint32_t panel_aux;
-	char line[128];
-
-	if (!panel_enabled)
-		return;
-
-	log_line("sf2000-screen: panel takeover without reset (bootloader handoff)\n");
-	append_file_log("sf2000-screen: panel takeover without reset (bootloader handoff)\n");
-	runtime_watchdog_arm();
-	panel_control_pinmux();
-	gpio_config_input(PINPAD_L08);
-	panel_config_outputs();
-	gpio_set_pad(PINPAD_L10, 1);
-	gpio_set_pad(PINPAD_T01, 1);
-	gpio_set_pad(PINPAD_L07, 1);
-	gpio_set_pad(PINPAD_T00, 1);
-	gpio_set_pad(PINPAD_L01, 1);
-	panel_bus_idle();
-	panel_id = panel_read_id();
-	panel_aux = panel_read_sf2000_aux_id();
-	progress_mark("screen-panel-id", 0x3fu, panel_id);
-	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
-	{
-		char panel_marker[32];
-
-		snprintf(panel_marker, sizeof(panel_marker), "0x%06x\n",
-			panel_id & 0xffffffu);
-		publish_marker("/run/sf2000-panel-id", panel_marker);
-	}
-	if ((panel_id & 0xffffffu) == 0x009306u)
-		panel_runtime_madctl = 0x28u;
-	else
-		panel_runtime_madctl = 0x70u;
-	snprintf(line, sizeof(line),
-		"sf2000-screen: panel takeover done id=0x%06x aux=0x%08x madctl=0x%02x\n",
-		panel_id & 0xffffffu, panel_aux, panel_runtime_madctl);
-	log_line(line);
-	append_file_log(line);
-}
-
 static int panel_init_sf2000_original_order(void)
 {
-	uint32_t panel_id;
-	uint32_t panel_aux;
+	uint32_t panel_id = 0;
+	uint32_t panel_aux = 0;
 	char line[128];
 	const struct panel_variant *variant = &panel_variants[0];
 
@@ -2826,18 +2830,56 @@ static int panel_init_sf2000_original_order(void)
 	log_line("sf2000-screen: guarded panel init begin\n");
 	append_file_log("sf2000-screen: guarded panel init begin\n");
 	runtime_watchdog_arm();
-	panel_control_pinmux();
-	gpio_config_input(PINPAD_L08);
-	panel_config_outputs();
-	gpio_set_pad(PINPAD_L10, 1);
-	gpio_set_pad(PINPAD_T01, 1);
-	gpio_set_pad(PINPAD_L07, 1);
-	gpio_set_pad(PINPAD_T00, 1);
-	gpio_set_pad(PINPAD_L01, 1);
-	panel_reset_sf2000();
-	sleep_ms(120);
-	panel_id = panel_read_id();
-	panel_aux = panel_read_sf2000_aux_id();
+	if (!bootloader_handoff) {
+		panel_control_pinmux();
+		gpio_config_input(PINPAD_L08);
+		panel_config_outputs();
+		gpio_set_pad(PINPAD_L10, 1);
+		gpio_set_pad(PINPAD_T01, 1);
+		gpio_set_pad(PINPAD_L07, 1);
+		gpio_set_pad(PINPAD_T00, 1);
+		gpio_set_pad(PINPAD_L01, 1);
+	}
+
+	if (bootloader_handoff) {
+		/*
+		 * HCRTOS deliberately leaves the ST7789 reset line untouched during
+		 * its RGB handoff: the controller is already initialized and the
+		 * bootloader has just primed its GRAM.  Do not issue MCU read commands
+		 * here either: ID reads change the panel command/address state that we
+		 * are trying to preserve.  The handoff is the SF2000 panel contract;
+		 * retain the known SF2000 MADCTL and let the ownership edge below
+		 * re-arm only the commands used by the vendor transition.
+		 */
+		log_line("sf2000-screen: preserving vendor panel state for handoff\n");
+		/* The panel is intentionally not read here; identity is inherited from
+		 * the bootloader and is not available without disturbing MCU state. */
+		panel_id = 0xffffffffu;
+		panel_aux = 0xffffffffu;
+		panel_runtime_madctl = 0x70u;
+	} else {
+		panel_reset_sf2000();
+		sleep_ms(120);
+		panel_id = panel_read_id();
+		panel_aux = panel_read_sf2000_aux_id();
+		panel_runtime_madctl = 0x70u;
+		panel_apply_init_sequence(st7789_sf2000_init);
+		panel_restart_frame();
+		panel_cmd(ST7789_DISPON);
+		if ((panel_id & 0xffffffu) == 0x009306u) {
+			/* Vendor driver: SF2000-safe init first, then reset and GB300 panel. */
+			log_line("sf2000-screen: detected GB300 panel, restarting with 009306 init\n");
+			panel_reset();
+			panel_control_pinmux();
+			panel_config_outputs();
+			panel_apply_init_sequence(st7789_009306_init);
+			panel_cmd(ST7789_DISPON);
+			panel_restart_frame();
+			variant = &panel_variants[5];
+			panel_runtime_madctl = 0x28u;
+		}
+	}
+
 	progress_mark("screen-panel-id", 0x3fu, panel_id);
 	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
 	{
@@ -2847,27 +2889,11 @@ static int panel_init_sf2000_original_order(void)
 			panel_id & 0xffffffu);
 		publish_marker("/run/sf2000-panel-id", panel_marker);
 	}
-	panel_apply_init_sequence(st7789_sf2000_init);
-	panel_restart_frame();
-	panel_cmd(ST7789_DISPON);
-	if ((panel_id & 0xffffffu) == 0x009306u) {
-		/* Vendor driver: SF2000-safe init first, then reset and GB300 panel. */
-		log_line("sf2000-screen: detected GB300 panel, restarting with 009306 init\n");
-		panel_reset();
-		panel_control_pinmux();
-		panel_config_outputs();
-		panel_apply_init_sequence(st7789_009306_init);
-		panel_cmd(ST7789_DISPON);
-		panel_restart_frame();
-		variant = &panel_variants[5];
-		panel_runtime_madctl = 0x28u;
-	} else {
-		panel_runtime_madctl = 0x70u;
-	}
 	snprintf(line, sizeof(line),
-		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s madctl=0x%02x\n",
+		"sf2000-screen: guarded panel init done id=0x%06x aux=0x%08x init=%s madctl=0x%02x mode=%s\n",
 		panel_id & 0xffffffu, panel_aux, variant->name,
-		panel_runtime_madctl);
+		panel_runtime_madctl,
+		bootloader_handoff ? "preserved" : "reset");
 	log_line(line);
 	append_file_log(line);
 	return 0;
@@ -2940,8 +2966,9 @@ static void panel_fill_solid_direct(uint16_t color)
 
 static void panel_commit_rgb_handoff(void)
 {
-	/* SF2000 production path: recovered MuFrog transaction plus L08 TE rearm. */
-	panel_apply_sync_profile(&hc15_panel_sync_profiles[2]);
+	unsigned profile = HC15_PROFILE_PRODUCTION;
+
+	panel_apply_sync_profile(&hc15_panel_sync_profiles[profile]);
 }
 
 static const uint8_t *glyph_for(char ch)
@@ -4488,6 +4515,7 @@ static void panel_apply_sync_profile(
 	panel_control_pinmux();
 	panel_config_outputs();
 	panel_bus_idle();
+
 	if (profile->reset) {
 		panel_reset_sf2000();
 		sleep_ms(120);
@@ -4499,11 +4527,15 @@ static void panel_apply_sync_profile(
 		panel_data(0x00);
 		panel_cmd(ST7789_COLMOD);
 		panel_data(0x55);
+		/* B1 is the vendor RGB timing command. Do not inject B0 here: the
+		 * vendor handoff never writes RAMCTRL at this edge, and changing it on
+		 * a live controller is an unverified ownership assumption. */
 		panel_cmd(ST7789_RGBCTRL);
 		panel_data(0x40);
 		panel_data(0x04);
 		panel_data(0x14);
 	}
+
 	if (profile->final_ramwr) {
 		/* MuFrog arms RAMWR before DISPON; its first TE IRQ re-arms RAMWR. */
 		panel_restart_frame();
@@ -4514,9 +4546,12 @@ static void panel_apply_sync_profile(
 		panel_cmd(ST7789_INVON);
 		panel_cmd(ST7789_DISPON);
 	}
+
 	progress_mark("screen-panel-command-final", 0x3fu, ST7789_DISPON);
 	progress_mark("screen-rgb-pinmux", 0x3fu, SCREEN_TAG);
 	panel_rgb_bus_connect();
+	if (bootloader_handoff)
+		progress_mark("screen-panel-rgb-owner-handoff", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-pinmux-done", 0x3fu, SCREEN_TAG);
 	if (profile->te_mode)
 		panel_te_stream_start(profile->te_mode == 1);
@@ -4680,7 +4715,50 @@ static int condition_native_scanout(void)
  * left configured by a previous linux run (gctl/dmba nonzero); a full
  * re-drive from the cold state is the intended behaviour there too.
  */
-static void display_cold_reinit_if_inherited(void)
+/*
+ * A bootloader handoff leaves the last GMA descriptor in flight.  Clearing
+ * the staging registers is not enough: the *_HW mirrors are updated only
+ * after the fetcher reaches a frame boundary.  Do not overwrite the shared
+ * descriptor arena or switch the panel's MCU bus while that old fetch is
+ * still live.
+ */
+static int display_wait_gma_idle(void)
+{
+	uint32_t ctl_hw = 0;
+	uint32_t dmba_hw = 0;
+	uint32_t last_ctl = ~0u;
+	unsigned stable = 0;
+	unsigned elapsed;
+
+	/* The hardware mirror may retain a descriptor address after the fetcher
+	 * stops.  Use the existing bit-0 active indication conservatively, require
+	 * a short post-disable settle, and require the mirror to remain unchanged
+	 * for several reads rather than requiring the stale descriptor mirror to
+	 * become zero. */
+	sleep_ms(2);
+	for (elapsed = 0; elapsed < 200u && !stopping; elapsed++) {
+		ctl_hw = mmio_read32(gma, GMA_CTL_HW);
+		dmba_hw = mmio_read32(gma, GMA_DMBA_HW);
+		if (!(ctl_hw & 1u) && ctl_hw == last_ctl)
+			stable++;
+		else
+			stable = 0;
+		last_ctl = ctl_hw;
+		if (stable >= 3u) {
+			progress_mark("screen-cold-gma-idle-ms", 0x3fu, elapsed);
+			progress_mark("screen-cold-gma-idle-ctl", 0x3fu, ctl_hw);
+			progress_mark("screen-cold-gma-idle-dmba", 0x3fu, dmba_hw);
+			return 0;
+		}
+		sleep_ms(1);
+	}
+	progress_mark("screen-cold-gma-idle-timeout", 0x3fu, elapsed);
+	progress_mark("screen-cold-gma-idle-ctl", 0x3fu, ctl_hw);
+	progress_mark("screen-cold-gma-idle-dmba", 0x3fu, dmba_hw);
+	return -1;
+}
+
+static int display_cold_reinit_if_inherited(void)
 {
 	uint32_t gctl = mmio_read32(gma, GMA_CTL);
 	uint32_t dmba = mmio_read32(gma, GMA_DMBA);
@@ -4692,7 +4770,7 @@ static void display_cold_reinit_if_inherited(void)
 	 * state left untouched.  Tearing the GMA/RGB down here would leave the
 	 * panel dark with no re-init to follow, so honour the skip. */
 	if (env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
-		return;
+		return 0;
 
 	/* Direct-boot pre-state: the four registers we clear here are all
 	 * zero on both the physical direct boot (run 146: gctl/gctlhw/dmba/
@@ -4701,34 +4779,63 @@ static void display_cold_reinit_if_inherited(void)
 	 * leaves it at 0x15, which is also the reset default the panel init
 	 * re-establishes, and it is not a register this path touches. */
 	if (!gctl && !dmba && !ctl_hw && !rgb)
-		return;
+		return 0;
 
 	progress_mark("screen-cold-takeover-gctl", 0x3fu, gctl);
 	progress_mark("screen-cold-takeover-dmba", 0x3fu, dmba);
 	progress_mark("screen-cold-takeover-rgb", 0x3fu, rgb);
 
-	/* Disable both GMA banks and drop the inherited descriptor pointers so
-	 * the fetcher cannot read the bootloader's descriptor while the panel
-	 * reset + VOU re-sequence below re-establish the display.  GMA_CTL=0
-	 * already stops the fetcher; the DMBA clear additionally removes the
-	 * stale descriptor base in case the engine latches it.  The GMA_K keep
-	 * value is deliberately left alone: its direct-boot value is not in the
-	 * run-146 evidence, and a stopped fetcher never consults it. */
-	mmio_write32(gma, GMA_CTL, 0u);
-	mmio_write32(gma, GMA_CTL_ALT, 0u);
-	mmio_write32(gma, GMA_DMBA, 0u);
-	mmio_write32(gma, GMA_DMBA_ALT, 0u);
+	/* Stop the output before stopping the fetcher.  Otherwise a live VOU
+	 * boundary can keep the inherited GMA transaction in flight while the
+	 * panel control bus is reclaimed. */
+	mmio_write32(gma, VOU_RGB_ENABLE, 0u);
 
-	/* Disable the RGB port, matching the direct-boot pre-state.  Do not
-	 * touch SYS_CLK_CTR (shared with the GE clock) or hardcode the VOU
+	/* GMA_CTL/DMBA are protected staging registers.  A direct write can read
+	 * back on some revisions without committing the transaction, which made
+	 * the old cold barrier report success while the handoff descriptor was
+	 * still owned by the bootloader.  Mirror the bootloader's mask transaction:
+	 * preserve the non-enable control bits, clear only the active bit, remove
+	 * both descriptor bases, then restore the masks. */
+	{
+		uint32_t mask0 = mmio_read32(gma, GMA_MASK);
+		uint32_t mask1 = mmio_read32(gma, GMA_MASK_ALT);
+		uint32_t control = mmio_read32(gma, GMA_CTL);
+		uint32_t control_alt = mmio_read32(gma, GMA_CTL_ALT);
+
+		mmio_write32(gma, GMA_MASK, mask0 | 1u);
+		mmio_write32(gma, GMA_MASK_ALT, mask1 | 1u);
+		mmio_write32(gma, GMA_CTL, control & ~1u);
+		mmio_write32(gma, GMA_CTL_ALT, control_alt & ~1u);
+		mmio_write32(gma, GMA_DMBA, 0u);
+		mmio_write32(gma, GMA_DMBA_ALT, 0u);
+		__asm__ volatile("sync" : : : "memory");
+		mmio_write32(gma, GMA_MASK, mask0);
+		mmio_write32(gma, GMA_MASK_ALT, mask1);
+	}
+	progress_mark("screen-cold-gma-stage-ctl", 0x3fu,
+		mmio_read32(gma, GMA_CTL));
+	progress_mark("screen-cold-gma-stage-dmba", 0x3fu,
+		mmio_read32(gma, GMA_DMBA));
+	/* The staging writes above take effect at the next hardware boundary.
+	 * Wait before panel init can reuse the descriptor RAM.  Fail closed if
+	 * damaged hardware never reports an inactive fetcher. */
+	if (display_wait_gma_idle() < 0)
+		return -1;
+
+	/* The fetcher is now stopped, so the RGB clock phase can be re-armed
+	 * without interrupting an inherited scanout boundary. */
+	if (panel_rgb_clock_rearm_handoff() < 0)
+		return -1;
+
+	/* Do not touch SYS_CLK_CTR (shared with the GE clock) or hardcode the VOU
 	 * timing registers here: panel_vou_rgb_enable() re-establishes them
 	 * for the detected panel variant and already ORs in the clock bits it
 	 * needs, so it is robust to any inherited value. */
-	mmio_write32(gma, VOU_RGB_ENABLE, 0u);
 
 	progress_mark("screen-cold-takeover-done", 0x3fu, SCREEN_TAG);
 	if (display_diagnostics)
 		log_line("sf2000-screen: display cold re-init after inherited bootloader state\n");
+	return 0;
 }
 
 static void run_direct_console(unsigned *frame)
@@ -4741,6 +4848,7 @@ static void run_direct_console(unsigned *frame)
 	unsigned input_retry = 0;
 	int rgb_active = 0;
 	int ge_diagnostics;
+	int te_before_ge_probe = 0;
 	int handoff_guard_done = 0;
 	int browser_boot = cmdline_contains("SF2000_BOOT_VISUAL=browser");
 	uint64_t performance_begin_us = monotonic_us();
@@ -4764,16 +4872,31 @@ static void run_direct_console(unsigned *frame)
 		log_line("sf2000-screen: bootloader handoff detected\n");
 	/*
 	 * A bootloader-handoff boot inherits a live GMA/VOU/RGB state; a direct
-	 * boot inherits zeroes.  Restore the cold state first so the panel setup
+	 * boot inherits zeroes. Restore the cold state first so the panel setup
 	 * and VOU re-sequence below start from the same deterministic point.
+	 * Only a persisted bootloader handoff may require quiescing an inherited
+	 * GMA/VOU owner; keep the proven direct-cold path unchanged.
 	 */
-	display_cold_reinit_if_inherited();
+	if (bootloader_handoff && display_cold_reinit_if_inherited() < 0) {
+			log_line("sf2000-screen: inherited GMA did not quiesce; aborting handoff\n");
+			append_file_log("sf2000-screen: inherited GMA did not quiesce; aborting handoff\n");
+			progress_mark("screen-cold-gma-abort", 0x3fu, SCREEN_TAG);
+			backlight_set(0);
+			handoff_critical = 0;
+			handoff_flush_deferred();
+			runtime_watchdog_disable();
+			stopping = 1;
+			return;			}
 	panel_lcd_setup_enable();
 	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1")) {
-		if (bootloader_handoff)
-			panel_takeover_sf2000_without_reset();
-		else
+
+		if (bootloader_handoff) {
+			progress_mark("screen-panel-handoff-preserve", 0x3fu,
+				SCREEN_TAG);
+			(void)panel_init_sf2000_original_order();
+		} else {
 			panel_init_sf2000_original_order();
+		}
 	}
 	performance_mark("screen-panel-init-us", performance_begin_us);
 
@@ -4795,10 +4918,17 @@ static void run_direct_console(unsigned *frame)
 	 * log66 restored all eight GMA states but still scrambled.  Every clear
 	 * physical run (52, 55, 56 and 64) includes this exact MCU/GE sequence.
 	 */
-	progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
-	panel_push_frame(0);
-	progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
-	performance_mark("screen-panel-push-us", performance_begin_us);
+	if (!bootloader_handoff) {
+		progress_mark("screen-panel-push-begin", 0x3fu, SCREEN_TAG);
+		panel_push_frame(0);
+		progress_mark("screen-panel-push-done", 0x3fu, SCREEN_TAG);
+		performance_mark("screen-panel-push-us", performance_begin_us);
+	} else {
+		/* The vendor handoff already leaves the ST7789 in continuous RGB
+		 * ownership.  Any MCU RAMWR transaction here would reclaim the shared
+		 * pads and destroy the inherited RGB address phase. */
+		progress_mark("screen-panel-push-preserved", 0x3fu, SCREEN_TAG);
+	}
 	/*
 	 * Keep the broad GE/MCU cards as an explicit hardware diagnostic.  Normal
 	 * boot already exercises the same fill and blit engines and no longer
@@ -4827,16 +4957,41 @@ static void run_direct_console(unsigned *frame)
 	mark_hc15_display_state(0);
 	progress_mark("screen-rgb-engine-prepare", 0x3fu, SCREEN_TAG);
 	panel_rgb_engine_prepare();
+	if (bootloader_handoff) {
+		/* Reconnect only the SoC-side RGB output.  Do not enter the panel's
+		 * MCU command path: its controller and pads are already vendor-owned
+		 * RGB state from the bootloader. */
+		progress_mark("screen-rgb-preserved-connect", 0x3fu, SCREEN_TAG);
+		panel_rgb_bus_connect();
+		/*
+		 * The vendor/MuFrog handoff starts the TE synchronizer immediately
+		 * after the RGB ownership edge.  Without this, the first Linux frame
+		 * can be perfectly intact but begin at the panel's retained GRAM
+		 * address phase, producing a fixed wrapped displacement.  The first TE
+		 * edge below re-arms RAMWR through the vendor GPIO transaction and
+		 * establishes a fresh panel frame origin; this is handoff-only.
+		 */
+		panel_te_stream_start(1);
+		panel_te_streaming = 1;
+		progress_mark("screen-te-handoff-start", 0x3fu, 1u);
+	}
 	progress_mark("screen-rgb-engine-ready", 0x3fu, SCREEN_TAG);
 	progress_mark("screen-rgb-prime-begin", 0x3fu, SCREEN_TAG);
 	present_frame();
 	progress_mark("screen-rgb-prime-done", 0x3fu, SCREEN_TAG);
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
-		/* Preserve the working direct frame and retained failure snapshot. */
+		/* Handoff has already left the panel on RGB ownership.  Do not
+		 * continue into fallback paths with rgb_active clear: they may try
+		 * to reclaim the shared pads through the MCU bus. */
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
 		log_line("sf2000-screen: rgb-handoff abort: first GMA raster latch failed\n");
 		log_display_state("latch1-fail");
-		goto handoff_complete;
+		backlight_set(0);
+		handoff_critical = 0;
+		handoff_flush_deferred();
+		runtime_watchdog_disable();
+		stopping = 1;
+		return;
 	}
 	/*
 	 * One matching shadow can still be inherited from a previous owner.  Make
@@ -4848,13 +5003,39 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-rgb-prime2-done", 0x3fu, SCREEN_TAG);
 	if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
-		goto handoff_complete;
+		log_line("sf2000-screen: rgb-handoff abort: second GMA raster latch failed\n");
+		backlight_set(0);
+		handoff_critical = 0;
+		handoff_flush_deferred();
+		runtime_watchdog_disable();
+		stopping = 1;
+		return;
 	}
 	/*
 	 * Hold the proven MuFrog panel ownership transaction constant while the
 	 * descriptor matrix varies only GMA source geometry and header semantics.
 	 */
-	panel_commit_rgb_handoff();
+	if (!bootloader_handoff)
+		panel_commit_rgb_handoff();
+	if (bootloader_handoff) {
+		/* The preserved path connected the SoC RGB output before priming; no
+		 * MCU command replay is allowed after that point.  This second submit
+		 * verifies that the live RGB edge consumes Linux's descriptor without
+		 * disturbing the vendor-initialized ST7789. */
+		progress_mark("screen-rgb-postcommit-prime", 0x3fu, SCREEN_TAG);
+		present_frame();
+		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
+			progress_mark("screen-rgb-postcommit-abort", 0x3fu, SCREEN_TAG);
+			log_line("sf2000-screen: rgb-handoff abort: post-commit GMA latch failed\n");
+			backlight_set(0);
+			handoff_critical = 0;
+			handoff_flush_deferred();
+			runtime_watchdog_disable();
+			stopping = 1;
+			return;
+		}
+		progress_mark("screen-rgb-postcommit-latched", 0x3fu, SCREEN_TAG);
+	}
 	rgb_active = 1;
 	mark_hc15_display_state(1);
 	log_display_state("rgb-commit");
@@ -4864,9 +5045,22 @@ static void run_direct_console(unsigned *frame)
 	 * its interrupt could change shared bus ownership during a DMBA update.
 	 */
 	if (ge_diagnostics) {
+		/* The probe temporarily disables TE while it owns the shared
+		 * pads.  Remember the caller's state so a direct profile with TE
+		 * disabled is not changed by diagnostics. */
+		te_before_ge_probe = panel_te_streaming;
 		if (run_gma_descriptor_probe() < 0) {
 			progress_mark("screen-rgb-handoff-abort", 0x3fu,
 				SCREEN_TAG);
+			if (bootloader_handoff) {
+				log_line("sf2000-screen: rgb-handoff abort: GE probe failed\n");
+				backlight_set(0);
+				handoff_critical = 0;
+				handoff_flush_deferred();
+				runtime_watchdog_disable();
+				stopping = 1;
+				return;
+			}
 			goto handoff_complete;
 		}
 		draw_console_screen(*frame);
@@ -4877,17 +5071,52 @@ static void run_direct_console(unsigned *frame)
 		if (panel_wait_gma_raster(gma_desc_phys) < 0) {
 			progress_mark("screen-rgb-handoff-abort", 0x3fu,
 				SCREEN_TAG);
+			if (bootloader_handoff) {
+				log_line("sf2000-screen: rgb-handoff abort: GE restore latch failed\n");
+				backlight_set(0);
+				handoff_critical = 0;
+				handoff_flush_deferred();
+				runtime_watchdog_disable();
+				stopping = 1;
+				return;
+			}
 			goto handoff_complete;
 		}
-		panel_te_streaming = 1;
+		/* The descriptor probe deliberately stops TE while it owns the
+		 * shared pads.  Restore the pre-probe state after its final latch;
+		 * do not restart it here, because that would discard the sampled
+		 * edge and rearm counter. */
+		panel_te_streaming = te_before_ge_probe;
+	}
+	progress_mark(panel_te_streaming ?
+		"screen-te-conditioning-precondition-ok" :
+		"screen-te-conditioning-precondition-fail", 0x3fu,
+		(unsigned)panel_te_streaming);
+	if (!panel_te_streaming) {
+		progress_mark("screen-rgb-handoff-abort", 0x3fu, SCREEN_TAG);
+		log_line("sf2000-screen: rgb-handoff abort: TE stream was not started\n");
+		backlight_set(0);
+		handoff_critical = 0;
+		handoff_flush_deferred();
+		runtime_watchdog_disable();
+		stopping = 1;
+		return;
 	}
 	/* Complete the recovered ownership transition with one post-switch frame. */
 	if (condition_native_scanout() < 0) {
 		progress_mark("screen-rgb-handoff-abort", 0x3fu,
 			SCREEN_TAG);
-		log_line("sf2000-screen: rgb-handoff abort: TE conditioning failed, TE streaming left active\n");
+		log_line("sf2000-screen: rgb-handoff abort: TE conditioning failed\n");
 		log_display_state("cond-fail");
-		goto handoff_complete;
+		/* A handoff without a fresh panel frame origin is not safe to
+		 * expose as a ready display: fail closed instead of continuing with
+		 * the exact shifted/wrapped state this conditioning prevents. */
+		backlight_set(0);
+		handoff_critical = 0;
+		handoff_flush_deferred();
+		runtime_watchdog_disable();
+		stopping = 1;
+		return;
 	}
 	progress_mark("screen-rgb-handoff-done", 0x3fu, SCREEN_TAG);
 	log_display_state("handoff-done");
