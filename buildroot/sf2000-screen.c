@@ -2706,6 +2706,113 @@ static int panel_init_variant(const struct panel_variant *variant)
 	return 0;
 }
 
+/*
+ * Bootloader-handoff detection.
+ *
+ * A bootloader-UI boot leaves the panel fully configured and RGB-streaming
+ * when it jumps to Linux.  The vendor-proven ownership transaction (H3, the
+ * recovered MuFrog sequence) does not reset the panel at that boundary: on a
+ * physical ST7789 the reset can leave the RGB address phase disabled even
+ * though the VOU/GMA surfaces are valid, and the panel can retain an
+ * incomplete RGB/MCU transaction across the pulse.  Direct boots inherit a
+ * cold panel and still need the full reset + init sequence.
+ *
+ * The kernel samples SYS_LCD_SETUP bit 16 (the RGB enable only the
+ * bootloader UI asserts; direct boots inherit the 0x000c0000 boot ROM strap,
+ * runs 145/146) at the earliest boot point, before its own splash present
+ * ORs the bit in, and persists the decision as the
+ * "linux-bootloader-handoff" mark in the shared Linux progress journal at
+ * PROGRESS_PHYS.  The bootloader's retained journal at 0x06800000 is not a
+ * usable signal: the loader unconditionally progress_reset()s it before
+ * every Linux jump, so nuttx-* breadcrumbs never survive and the header is
+ * always valid.  A missing mark means a direct boot.
+ */
+static int bootloader_handoff;
+
+static int detect_bootloader_handoff(void)
+{
+	volatile struct progress_log *log =
+		(volatile struct progress_log *)(uintptr_t)KSEG1ADDR(PROGRESS_PHYS);
+	char name[PROGRESS_NAME_LEN];
+	uint32_t best_seq = 0;
+	uint32_t mark_value = 0;
+	unsigned i;
+	unsigned j;
+	int handoff = 0;
+
+	if (log->magic != PROGRESS_MAGIC || log->version != PROGRESS_VERSION)
+		return 0;
+
+	for (i = 0; i < PROGRESS_ENTRIES; i++) {
+		/* The journal lives in uncached RAM and is a persistent ring
+		 * buffer: warm reboots keep the previous kernel's marks, so the
+		 * current boot's decision is the highest-seq match. */
+		for (j = 0; j < PROGRESS_NAME_LEN; j++)
+			name[j] = log->entries[i].name[j];
+		if (!memcmp(name, "linux-bootloader-handoff", 24u) &&
+		    log->entries[i].seq > best_seq) {
+			best_seq = log->entries[i].seq;
+			handoff = log->entries[i].value != 0;
+			mark_value = log->entries[i].value;
+		}
+	}
+	if (best_seq)
+		progress_mark("screen-handoff-kernel-mark", 0x3fu, mark_value);
+	return handoff;
+}
+
+/*
+ * Take over a panel the bootloader already initialized, without toggling the
+ * reset line.  Mirrors the vendor H3 ownership edge: pad the shared
+ * 8080/RGB bus back to MCU mode, identify the panel for the log, and let the
+ * common push-frame / VOU / GMA / H3 handoff below take ownership.  The init
+ * command replay is deliberately skipped: the bootloader ran the identical
+ * sequence, and the H3 handoff re-applies MADCTL/TEON/COLMOD/RGBCTRL before
+ * re-arming RAMWR and connecting RGB.
+ */
+static void panel_takeover_sf2000_without_reset(void)
+{
+	uint32_t panel_id;
+	uint32_t panel_aux;
+	char line[128];
+
+	if (!panel_enabled)
+		return;
+
+	log_line("sf2000-screen: panel takeover without reset (bootloader handoff)\n");
+	append_file_log("sf2000-screen: panel takeover without reset (bootloader handoff)\n");
+	runtime_watchdog_arm();
+	panel_control_pinmux();
+	gpio_config_input(PINPAD_L08);
+	panel_config_outputs();
+	gpio_set_pad(PINPAD_L10, 1);
+	gpio_set_pad(PINPAD_T01, 1);
+	gpio_set_pad(PINPAD_L07, 1);
+	gpio_set_pad(PINPAD_T00, 1);
+	gpio_set_pad(PINPAD_L01, 1);
+	panel_bus_idle();
+	panel_id = panel_read_id();
+	panel_aux = panel_read_sf2000_aux_id();
+	progress_mark("screen-panel-id", 0x3fu, panel_id);
+	progress_mark("screen-panel-aux", 0x3fu, panel_aux);
+	{
+		char panel_marker[32];
+
+		snprintf(panel_marker, sizeof(panel_marker), "0x%06x\n",
+			panel_id & 0xffffffu);
+		publish_marker("/run/sf2000-panel-id", panel_marker);
+	}
+	if ((panel_id & 0xffffffu) == 0x009306u)
+		panel_runtime_madctl = 0x28u;
+	else
+		panel_runtime_madctl = 0x70u;
+	snprintf(line, sizeof(line),
+		"sf2000-screen: panel takeover done id=0x%06x aux=0x%08x madctl=0x%02x\n",
+		panel_id & 0xffffffu, panel_aux, panel_runtime_madctl);
+	log_line(line);
+	append_file_log(line);
+}
+
 static int panel_init_sf2000_original_order(void)
 {
 	uint32_t panel_id;
@@ -4645,14 +4752,29 @@ static void run_direct_console(unsigned *frame)
 	append_file_log("sf2000-screen: direct text console begin\n");
 
 	/*
+	 * A bootloader-UI session leaves its retained journal and a panel that
+	 * is already configured and RGB-streaming; a direct boot inherits a cold
+	 * panel and zeroed registers.  Take the vendor-proven no-reset ownership
+	 * edge for the handoff case (a reset at this boundary can leave the
+	 * physical ST7789's RGB address phase disabled); direct boots keep the
+	 * full reset + init sequence.
+	 */
+	bootloader_handoff = detect_bootloader_handoff();
+	if (bootloader_handoff)
+		log_line("sf2000-screen: bootloader handoff detected\n");
+	/*
 	 * A bootloader-handoff boot inherits a live GMA/VOU/RGB state; a direct
-	 * boot inherits zeroes.  Restore the cold state first so the panel reset
+	 * boot inherits zeroes.  Restore the cold state first so the panel setup
 	 * and VOU re-sequence below start from the same deterministic point.
 	 */
 	display_cold_reinit_if_inherited();
 	panel_lcd_setup_enable();
-	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1"))
-		panel_init_sf2000_original_order();
+	if (!env_is((const char *const *)environ, "SF2000_SKIP_PANEL_INIT", "1")) {
+		if (bootloader_handoff)
+			panel_takeover_sf2000_without_reset();
+		else
+			panel_init_sf2000_original_order();
+	}
 	performance_mark("screen-panel-init-us", performance_begin_us);
 
 	console_clear();

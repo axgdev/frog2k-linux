@@ -760,7 +760,7 @@ index 1ae6d0c0e..f0b2435ff 100644
  #include <asm/fw/fw.h>
  
  #ifdef CONFIG_MIPS_ELF_APPENDED_DTB
-@@ -74,6 +75,620 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
+@@ -74,6 +75,667 @@ static const char builtin_cmdline[] __initconst = CONFIG_CMDLINE;
  static const char builtin_cmdline[] __initconst = "";
  #endif
  
@@ -1015,6 +1015,45 @@ index 1ae6d0c0e..f0b2435ff 100644
 +	sf2000_gma_write32(SF2000_GMA_MASK, 0);
 +}
 +
++/*
++ * Bootloader-handoff detection, sampled once at the earliest kernel point.
++ *
++ * The bootloader UI leaves SYS_LCD_SETUP bit 16 (RGB enable) set when it
++ * jumps to Linux; a direct boot inherits the 0x000c0000 boot ROM strap
++ * (physical runs 145/146).  The retained journal at 0x06800000 carries no
++ * surviving breadcrumbs: the loader unconditionally progress_reset()s it
++ * before every Linux jump, re-stamping the header while zeroing the entries,
++ * so the header is always valid and nuttx-* marks never survive.  Bit 16 is
++ * the only surviving discriminator and it must be read before this splash's
++ * own present() ORs it in on a direct boot.
++ *
++ * The decision is persisted as the "linux-bootloader-handoff" mark in the
++ * shared Linux progress journal (0x07a00000) so the userspace screen service
++ * can reproduce it without re-reading the register the splash no longer
++ * owns.
++ */
++static int sf2000_screen_bootloader_handoff(void)
++{
++	volatile struct sf2000_progress_log *log = SF2000_PROGRESS_KSEG1;
++	static int cached = -1;
++
++	if (cached < 0) {
++		cached = (sf2000_read32(0x094) & (1u << 16)) ? 1 : 0;
++		/* A large stock ASD load can overwrite the journal before the
++		 * kernel boots (see retained.h); repair the header so the
++		 * decision survives into userspace.  Mirrors sf2000-screen's
++		 * progress_mark recovery. */
++		if (log->magic != SF2000_PROGRESS_MAGIC ||
++		    log->version != SF2000_PROGRESS_VERSION) {
++			memset((void *)log, 0, SF2000_PROGRESS_RESERVE_SIZE);
++			log->magic = SF2000_PROGRESS_MAGIC;
++			log->version = SF2000_PROGRESS_VERSION;
++		}
++		sf2000_progress_mark("linux-bootloader-handoff", 0x3fu, cached);
++	}
++	return cached != 0;
++}
++
 +static void sf2000_screen_mark(unsigned int kind, unsigned int detail)
 +{
 +	unsigned int seq = ++sf2000_screen_seq;
@@ -1037,13 +1076,21 @@ index 1ae6d0c0e..f0b2435ff 100644
 +	sf2000_screen_digit(210, 154, (detail / 10) % 10, 0xffff, dim, 4);
 +	sf2000_screen_digit(252, 154, detail % 10, 0xffff, dim, 4);
 +
-+	sf2000_screen_present();
++	/* A bootloader-handoff boot leaves the panel mid RGB transaction; the
++	 * splash has no ownership of it there.  Only present on a direct boot,
++	 * where the panel is cold and the GMA is ours to enable. */
++	if (!sf2000_screen_bootloader_handoff())
++		sf2000_screen_present();
 +}
 +
 +static void __init sf2000_reserve_diag_mem(void)
 +{
 +	if (!IS_ENABLED(CONFIG_MIPS_SF2000))
 +		return;
++
++	/* Sample the inherited SYS_LCD_SETUP bit 16 here, before the splash
++	 * present can OR it in, and persist the decision for userspace. */
++	sf2000_screen_bootloader_handoff();
 +
 +	memblock_reserve(SF2000_GMA_RESERVE_PHYS, SF2000_GMA_RESERVE_SIZE);
 +	memblock_reserve(SF2000_PROGRESS_PHYS, SF2000_PROGRESS_RESERVE_SIZE);
@@ -1381,7 +1428,7 @@ index 1ae6d0c0e..f0b2435ff 100644
  /*
   * mips_io_port_base is the begin of the address space to which x86 style
   * I/O ports are mapped.
-@@ -649,6 +1242,7 @@ static void __init arch_mem_init(char **cmdline_p)
+@@ -649,6 +1266,7 @@ static void __init arch_mem_init(char **cmdline_p)
  
  	early_init_fdt_reserve_self();
  	early_init_fdt_scan_reserved_mem();
