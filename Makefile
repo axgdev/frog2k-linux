@@ -267,8 +267,6 @@ SDCARD_MUFROG_LICENSES := \
 	fceumm-prosty-Copying
 SDCARD_FRONTEND_CORES := sf2000-gambatte sf2000-gpsp sf2000-fceumm
 SDCARD_FRONTEND_LICENSES := gambatte-COPYING gpsp-COPYING fceumm-Copying
-UI_FONT_SOURCE ?= ../mufrog-commandc/fonts/unifrog-ui.ttf
-UI_FONT_LICENSE_SOURCE ?= ../mufrog-commandc/fonts/OFL.txt
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 LINUX_ROM_SD_IMAGE_OFFSET := 1048576
@@ -1748,11 +1746,11 @@ $(SDCARD_USER_CONFIG): buildroot/sf2000-rootfs-overlay/etc/sf2000.conf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(SDCARD_UI_FONT): $(UI_FONT_SOURCE)
+$(SDCARD_UI_FONT): fonts/unifrog-ui.ttf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(SDCARD_UI_FONT_LICENSE): $(UI_FONT_LICENSE_SOURCE)
+$(SDCARD_UI_FONT_LICENSE): fonts/OFL.txt
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
