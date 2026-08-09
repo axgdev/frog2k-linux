@@ -207,6 +207,20 @@ SDCARD_USER_CONFIG := $(BUILD_DIR)/sdcard/sf2000.conf
 SDCARD_UI_FONT := $(BUILD_DIR)/sdcard/sf2000/ui.ttf
 SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
 SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
+# The sdcard core copies are re-staged from the frontend's freshly built
+# executables.  Depending the stamp on those executables - not just frontend
+# sources - makes a forced core rebuild in the frontend repo (e.g. `make
+# build/sf2000-qpsx`) propagate into the sdcard staging and the ASD, instead
+# of silently re-shipping the previously packaged core.  $(wildcard) keeps
+# fresh-checkout builds working: absent executables contribute no
+# prerequisite, so the stamp rule still runs via its source find deps.
+FRONTEND_CORE_OUTPUTS := $(wildcard $(addprefix $(FRONTEND_PROJECT)/build/sf2000-, \
+	quicknes prosystem snes9x2005 snes9x2002 stella2014 gearboy pce-fast \
+	gambatte gpsp fceumm js2300-core \
+	gpsp-multicore picodrive qpsx mame2000 fbalpha2012 a5200 atari800lib \
+	handy race beetle-cygne gearcoleco frodo fake08 bluemsx \
+	snes9x2005-prosty snes9x2002-prosty gambatte-prosty quicknes-prosty \
+	fceumm-prosty))
 SDCARD_QUICKNES := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-quicknes
 SDCARD_QUICKNES_LICENSE := $(BUILD_DIR)/sdcard/sf2000/cores/licenses/quicknes-LICENSE
 SDCARD_PROSYSTEM := $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-prosystem
@@ -1761,7 +1775,8 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/patches/fceumm \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		'$(FRONTEND_PROJECT)'/patches/mufrog \
-		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile
+		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile \
+		$(FRONTEND_CORE_OUTPUTS)
 	$(FRONTEND_MAKE) core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 	rm -rf '$(dir $@)'
