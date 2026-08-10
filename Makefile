@@ -296,7 +296,10 @@ GPSP_SMC_MODE ?= smc-ab
 GPSP_REAL_ROM ?=
 GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 QPSX_REAL_IMAGE ?=
+QPSX_REAL_MENU_AT_START ?= 1
 QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
+SDCARD_QPSX_STARTUP_CONFIG := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg
+SDCARD_QPSX_STARTUP_CHECKSUM := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg.sha256
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
 JS2300_TEST_SD := $(BUILD_DIR)/js2300-test.sd.img
 JS2300_UI_SMOKE_SCRIPT := $(FRONTEND_PROJECT)/tests/js2300-ui-smoke.js
@@ -383,6 +386,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-snes9x2002 smoke-linux-snes9x2002 \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
+	qpsx-no-menu-test-sd run-linux-qpsx-no-menu smoke-linux-qpsx-no-menu \
+	qpsx-no-menu-physical \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
 	run-linux-buildroot-input smoke-linux-buildroot-input \
@@ -431,7 +436,8 @@ help:
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-buildroot-asd  boot the artifact in QEMU' \
 		'make smoke-linux-buildroot-ge-no-irq  boot with the GE completion IRQ suppressed' \
-		'make smoke-linux-buildroot-stale-ram  boot with stale garbage prefill in RAM'
+		'make smoke-linux-buildroot-stale-ram  boot with stale garbage prefill in RAM' \
+		'make ROOTFS=buildroot qpsx-no-menu-physical  stage a temporary direct-game QPSX SD diagnostic'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
 	memory-layout-audit check-linux-early-handoff check-linux-cacheflush
@@ -1895,6 +1901,8 @@ linux-buildroot-asd:
 # (which intentionally defaults to the tiny diagnostic rootfs) cannot be
 # mistaken for a physical-device build.
 physical-linux-asd:
+	# Remove a prior diagnostic before syncing the normal physical artifact.
+	rm -f '$(SDCARD_QPSX_STARTUP_CONFIG)' '$(SDCARD_QPSX_STARTUP_CHECKSUM)'
 	$(ISOLATED_MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=1 linux-asd
 
 ifeq ($(SDCARD_ASD_SYNC),1)
@@ -2054,18 +2062,39 @@ qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 				::/PSX/TEST.BIN;; \
 	esac
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
-	printf 'debug_log=1\n' > '$(BUILD_DIR)'/.qpsx-real-test.cfg
+	printf 'debug_log=1\nmenu_at_start=$(QPSX_REAL_MENU_AT_START)\n' > '$(BUILD_DIR)'/.qpsx-real-test.cfg
 	config_name='TEST.BIN.cfg'; \
 	case '$(QPSX_REAL_IMAGE)' in \
 		*.[cC][uU][eE]) config_name='00-TEST.cue.cfg';; \
 	esac; \
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(BUILD_DIR)'/.qpsx-real-test.cfg \
 		"::/cores/config/$$config_name"
+	if test '$(QPSX_REAL_MENU_AT_START)' = 0; then \
+		printf 'menu_at_start=0\nauto_menu=0\n' > '$(BUILD_DIR)'/.qpsx-startup.cfg; \
+		mcopy -i '$(QPSX_REAL_TEST_SD)' '$(BUILD_DIR)'/.qpsx-startup.cfg \
+			::/cores/config/psx_startup.cfg; \
+		rm -f '$(BUILD_DIR)'/.qpsx-startup.cfg; \
+	fi
 	rm -f '$(BUILD_DIR)'/.qpsx-real-test.cfg
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx' \
 		::/sf2000/cores/sf2000-qpsx
+
+# These are deliberately separate from the normal physical image.  The
+# no-menu SD target reuses the real-image builder with menu_at_start=0 for
+# QEMU.  The physical target stages only the startup option after producing a
+# normal Buildroot ASD; the option is removed by the next physical-linux-asd
+# invocation, so it cannot silently become the default user image.
+qpsx-no-menu-test-sd: FORCE
+	$(MAKE) QPSX_REAL_MENU_AT_START=0 qpsx-real-test-sd
+
+qpsx-no-menu-physical: physical-linux-asd
+	mkdir -p '$(dir $(SDCARD_QPSX_STARTUP_CONFIG))'
+	printf 'menu_at_start=0\nauto_menu=0\n' > '$(SDCARD_QPSX_STARTUP_CONFIG)'
+	( cd '$(BUILD_DIR)/sdcard' && sha256sum 'cores/config/psx_startup.cfg' ) > '$(SDCARD_QPSX_STARTUP_CHECKSUM)'
+	@printf 'QPSX no-menu diagnostic staged at %s\n' '$(SDCARD_QPSX_STARTUP_CONFIG)'
+	@printf '%s\n' 'Copy this file together with the normal build/sdcard tree to the test SD card, then launch QPSX without closing an internal menu.'
 
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_CORE_STAMP) \
 		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
@@ -2340,6 +2369,54 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+
+run-linux-qpsx-no-menu: qemu linux-buildroot-asd qpsx-no-menu-test-sd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 20; printf 'q\n') | \
+		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log \
+		> '$(BUILD_DIR)'/logs/linux-qpsx-no-menu.console 2>&1
+
+smoke-linux-qpsx-no-menu: run-linux-qpsx-no-menu
+	@case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) expected='00-TEST.cue';; \
+		*) expected='TEST.BIN';; \
+	esac; \
+	grep -q "sf2000-browser: launch QPSX /mnt/sd/PSX/$$expected" \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	grep -q 'sf2000-frontend: ROM load complete' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	grep -q 'QPSX: .*Skipping menu at startup (menu_at_start=OFF)' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	grep -Eq 'sf2000-frontend: first frame [0-9]+x[0-9]+ .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	awk '/sf2000-browser: launch QPSX/{launched=1} launched && /scanout-oracle/ { \
+		distinct=0; nonblack=0; \
+		for (i=1; i<=NF; i++) { \
+			if ($$i ~ /^distinct=/) { split($$i, a, "="); distinct=a[2]+0; } \
+			if ($$i ~ /^nonblack=/) { split($$i, b, "="); nonblack=b[2]+0; } \
+		} \
+		if (distinct >= 3 && nonblack > 0) visible=1; \
+	} END{exit !visible}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	awk '/QPSX: retro_run progress: frame [0-9]+/ { \
+		if (match($$0, /frame [0-9]+/)) { \
+			value=substr($$0, RSTART+6, RLENGTH-6)+0; \
+			if (value >= 120) progress=1; \
+		} \
+	} END{exit !progress}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	! grep -Eq 'QPSX: QPSX_084: AUTO-(OPENING|CLOSING) INVISIBLE MENU' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	@printf 'PASS smoke-linux-qpsx-no-menu\\n'
 
 # End-to-end save-state round trip: launch QPSX, open the pause menu with the
 # SELECT+START chord, jump to SAVE STATE (item 4), confirm the save, jump to
