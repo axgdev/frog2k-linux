@@ -302,6 +302,7 @@ GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 QPSX_REAL_IMAGE ?=
 QPSX_REAL_MENU_AT_START ?= 1
 QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
+QPSX_BENCHMARK_SECONDS ?= 25
 SDCARD_QPSX_STARTUP_CONFIG := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg
 SDCARD_QPSX_STARTUP_CHECKSUM := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg.sha256
 FRONTEND_LIFECYCLE_TEST_SD := $(BUILD_DIR)/frontend-lifecycle-test.sd.img
@@ -391,6 +392,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	qpsx-mips32r1-audit qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
 	qpsx-no-menu-test-sd run-linux-qpsx-no-menu smoke-linux-qpsx-no-menu \
+	run-linux-qpsx-attract-benchmark benchmark-linux-qpsx-attract \
 	qpsx-no-menu-physical \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
@@ -2480,6 +2482,44 @@ smoke-linux-qpsx-savestate: run-linux-qpsx-savestate
 	grep -q 'sf2000-frontend: save state resume frame=2 complete' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	! grep -Eq 'save state (unavailable|allocation failed|serialization failed|write failed|rejected|read failed|unserialization failed)' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+
+# Launch Ridge Racer without game input, switch the frontend to uncapped mode,
+# and measure an identical section of its recorded race.  QEMU wall time is a
+# comparative emulator-engineering metric; physical logs remain authoritative
+# for absolute FPS because TCG does not model the HC15xx pipeline or caches.
+run-linux-qpsx-attract-benchmark: qemu linux-buildroot-asd qpsx-no-menu-test-sd
+	mkdir -p '$(BUILD_DIR)'/logs
+	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
+		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
+		sleep 12; printf 'sendkey ret-backspace 2000\n'; sleep 2; \
+		printf 'sendkey down 200\n'; sleep 1; \
+		printf 'sendkey right 200\n'; sleep 0.3; \
+		printf 'sendkey right 200\n'; sleep 0.3; \
+		printf 'sendkey right 200\n'; sleep 0.3; \
+		printf 'sendkey right 200\n'; sleep 1; \
+		printf 'sendkey z 200\n'; sleep '$(QPSX_BENCHMARK_SECONDS)'; \
+		printf 'quit\n') | \
+		SF2000_SCANOUT_ORACLE=0 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp \
+		-D '$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.log \
+		> '$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.console 2>&1
+
+benchmark-linux-qpsx-attract: run-linux-qpsx-attract-benchmark
+	@awk '/QPSX: retro_run progress: frame (1200|1800)$$/ { \
+		line=$$0; sub(/^.*\[/, "", line); sub(/\].*$$/, "", line); \
+		time=line+0; frame=$$NF+0; if (frame == 1200) start=time; \
+		if (frame == 1800) stop=time; \
+	} END { \
+		if (!start || !stop || stop <= start) exit 1; \
+		printf "QPSX Ridge Racer attract benchmark: 600 frames in %.6f s (%.2f fps)\n", \
+			stop-start, 600/(stop-start); \
+	}' '$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.log
+	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.log
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
