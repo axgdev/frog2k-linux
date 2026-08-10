@@ -306,6 +306,7 @@ QPSX_OPTIMIZE ?= -O2
 QPSX_TEST_CORE ?= $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx
 QPSX_REAL_CORE_DEP ?= qpsx-mips32r1-audit
 QPSX_BENCHMARK_SD_TARGET ?= qpsx-no-menu-test-sd
+QPSX_BENCHMARK_ASD_TARGET ?= linux-buildroot-asd
 QPSX_BENCHMARK_SECONDS ?= 25
 SDCARD_QPSX_STARTUP_CONFIG := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg
 SDCARD_QPSX_STARTUP_CHECKSUM := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg.sha256
@@ -366,7 +367,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-Wall -Wextra
 
 .PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot physical-linux-asd \
-	linux-buildroot-asd sdcard-linux sdcard-buildroot linux-rom-sd \
+	linux-buildroot-asd linux-buildroot-test-asd sdcard-linux sdcard-buildroot linux-rom-sd \
 	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
 	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq smoke-linux-buildroot-handoff-quiet smoke-linux-buildroot-stale-ram run-linux-buildroot-storage \
@@ -1917,6 +1918,12 @@ linux-buildroot:
 linux-buildroot-asd:
 	$(ISOLATED_MAKE) ROOTFS=buildroot linux-asd
 
+# QEMU tests need the kernel/rootfs artifact, not a synchronized physical SD
+# layout.  Keeping that distinction explicit prevents an emulator iteration
+# from rebuilding and checksumming every libretro core.
+linux-buildroot-test-asd:
+	$(ISOLATED_MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=0 linux-asd
+
 # The SD-card artifact must contain the Buildroot userspace/menu.  Keep this
 # explicit alias next to the historical target so a bare `make linux-asd`
 # (which intentionally defaults to the tiny diagnostic rootfs) cannot be
@@ -2505,7 +2512,7 @@ smoke-linux-qpsx-savestate: run-linux-qpsx-savestate
 # and measure an identical section of its recorded race.  QEMU wall time is a
 # comparative emulator-engineering metric; physical logs remain authoritative
 # for absolute FPS because TCG does not model the HC15xx pipeline or caches.
-run-linux-qpsx-attract-benchmark: qemu linux-buildroot-asd $(QPSX_BENCHMARK_SD_TARGET)
+run-linux-qpsx-attract-benchmark: qemu $(QPSX_BENCHMARK_ASD_TARGET) $(QPSX_BENCHMARK_SD_TARGET)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
@@ -2541,7 +2548,8 @@ benchmark-linux-qpsx-attract: run-linux-qpsx-attract-benchmark
 
 benchmark-linux-qpsx-attract-dev:
 	$(MAKE) benchmark-linux-qpsx-attract \
-		QPSX_BENCHMARK_SD_TARGET=qpsx-dev-no-menu-test-sd
+		QPSX_BENCHMARK_SD_TARGET=qpsx-dev-no-menu-test-sd \
+		QPSX_BENCHMARK_ASD_TARGET=linux-buildroot-test-asd
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
