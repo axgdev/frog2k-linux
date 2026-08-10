@@ -2024,14 +2024,33 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		$(SDCARD_UI_FONT)
 	@test -n '$(QPSX_REAL_IMAGE)' || { \
-		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal raw PSX image' >&2; exit 2; }
+		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal PSX .cue or raw image' >&2; exit 2; }
 	@test -f '$(QPSX_REAL_IMAGE)' || { \
 		echo 'QPSX_REAL_IMAGE does not name a regular file' >&2; exit 2; }
 	mkdir -p '$(dir $(QPSX_REAL_TEST_SD))'
 	truncate -s 128M '$(QPSX_REAL_TEST_SD)'
 	mkfs.vfat -F 32 -n SFTEST '$(QPSX_REAL_TEST_SD)' >/dev/null
 	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores
-	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_REAL_IMAGE)' ::/PSX/TEST.BIN
+	@case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) \
+			mcopy -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_REAL_IMAGE)' \
+				::/PSX/00-TEST.cue; \
+				cue_dir=$$(dirname '$(QPSX_REAL_IMAGE)'); \
+				awk -F'"' '/^[[:space:]]*FILE[[:space:]]+"/ {print $$2}' \
+					'$(QPSX_REAL_IMAGE)' | while IFS= read -r relpath; do \
+					test -n "$$relpath" || continue; \
+					sidecar="$$cue_dir/$$relpath"; \
+					test -f "$$sidecar" || { echo "missing cue FILE: $$sidecar" >&2; exit 2; }; \
+					destdir=$$(dirname "$$relpath"); \
+					if test "$$destdir" != .; then \
+						mmd -p -i '$(QPSX_REAL_TEST_SD)' "::/PSX/$$destdir"; \
+					fi; \
+					mcopy -i '$(QPSX_REAL_TEST_SD)' "$$sidecar" \
+						"::/PSX/$$relpath"; \
+				done;; \
+		*) mcopy -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_REAL_IMAGE)' \
+				::/PSX/TEST.BIN;; \
+	esac
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' \
@@ -2269,7 +2288,7 @@ run-linux-qpsx-real: qemu linux-buildroot-asd qpsx-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
-		sleep 25; printf 'quit\n') | \
+		sleep 2; printf 'sendkey ret 100\n'; sleep 25; printf 'q\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
@@ -2278,7 +2297,11 @@ run-linux-qpsx-real: qemu linux-buildroot-asd qpsx-real-test-sd
 		> '$(BUILD_DIR)'/logs/linux-qpsx-real.console 2>&1
 
 smoke-linux-qpsx-real: run-linux-qpsx-real
-	grep -q 'sf2000-browser: launch QPSX /mnt/sd/PSX/TEST.BIN' \
+	@case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) expected='00-TEST.cue';; \
+		*) expected='TEST.BIN';; \
+	esac; \
+	grep -q "sf2000-browser: launch QPSX /mnt/sd/PSX/$$expected" \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	grep -q 'sf2000-frontend: core init complete' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
@@ -2286,7 +2309,9 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	grep -Eq 'sf2000-frontend: first frame [0-9]+x[0-9]+ .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
-	awk '/sf2000-browser: launch QPSX/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
+	grep -q 'QPSX: Menu closed - resyncing SPU' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	awk '/QPSX: Menu closed - resyncing SPU/{closed=1} closed && /scanout-oracle/ && /distinct=([2-9]|1[0-9]+)/ && /nonblack=[1-9][0-9]*/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
