@@ -2452,6 +2452,7 @@ smoke-linux-qpsx-no-menu: run-linux-qpsx-no-menu
 run-linux-qpsx-savestate: qemu linux-buildroot-asd qpsx-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 15; printf 'sendkey ret-backspace 2000\n'; sleep 3; \
 		printf 'sendkey down 200\n'; sleep 0.5; \
@@ -2461,7 +2462,7 @@ run-linux-qpsx-savestate: qemu linux-buildroot-asd qpsx-real-test-sd
 		printf 'sendkey x 200\n'; sleep 12; \
 		printf 'sendkey down 200\n'; sleep 0.5; \
 		printf 'sendkey x 200\n'; sleep 12; \
-		printf 'sendkey z 200\n'; sleep 2; printf 'quit\n') | \
+		printf 'sendkey z 200\n'; sleep 6; printf 'quit\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
 		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
@@ -2475,6 +2476,8 @@ smoke-linux-qpsx-savestate: run-linux-qpsx-savestate
 	grep -q 'sf2000-frontend: save state serialize complete' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	grep -q 'sf2000-frontend: save state written slot=0' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	grep -q 'sf2000-frontend: save state loaded slot=0' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -q 'sf2000-frontend: save state resume frame=1 complete' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
+	grep -q 'sf2000-frontend: save state resume frame=2 complete' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	! grep -Eq 'save state (unavailable|allocation failed|serialization failed|write failed|rejected|read failed|unserialization failed)' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log
 
