@@ -54,6 +54,9 @@ ROOTFS ?= tiny
 LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
+UI_LATIN_FONT_URL := https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf
+UI_LATIN_FONT_SHA256 := b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5
+UI_LATIN_FONT_CACHE := .cache/NotoSans-Regular.ttf
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
 BUILDROOT_VERSION := 2026.05.1
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
@@ -205,6 +208,7 @@ SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 SDCARD_USER_CONFIG := $(BUILD_DIR)/sdcard/sf2000.conf
 SDCARD_UI_FONT := $(BUILD_DIR)/sdcard/sf2000/ui.ttf
+SDCARD_UI_LATIN_FONT := $(BUILD_DIR)/sdcard/sf2000/ui-latin.ttf
 SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
 SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
 # The sdcard core copies are re-staged from the frontend's freshly built
@@ -385,7 +389,7 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-snes9x2005 smoke-linux-snes9x2005 \
 	run-linux-snes9x2002 smoke-linux-snes9x2002 \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
-	qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
+	qpsx-mips32r1-audit qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
 	qpsx-no-menu-test-sd run-linux-qpsx-no-menu smoke-linux-qpsx-no-menu \
 	qpsx-no-menu-physical \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
@@ -1770,6 +1774,15 @@ $(SDCARD_UI_FONT): fonts/unifrog-ui.ttf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
+$(UI_LATIN_FONT_CACHE): Makefile
+	mkdir -p '$(@D)'
+	curl -L --fail -o '$@' '$(UI_LATIN_FONT_URL)'
+	printf '%s  %s\n' '$(UI_LATIN_FONT_SHA256)' '$@' | sha256sum -c -
+
+$(SDCARD_UI_LATIN_FONT): $(UI_LATIN_FONT_CACHE)
+	mkdir -p '$(dir $@)'
+	cp '$<' '$@'
+
 $(SDCARD_UI_FONT_LICENSE): fonts/OFL.txt
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
@@ -1844,10 +1857,10 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 
 $(SDCARD_CHECKSUMS): $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
 		$(SDCARD_FASTBOOT_BIN) $(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) \
-		$(SDCARD_UI_FONT_LICENSE) $(SDCARD_CORE_STAMP)
+		$(SDCARD_UI_LATIN_FONT) $(SDCARD_UI_FONT_LICENSE) $(SDCARD_CORE_STAMP)
 	cd '$(BUILD_DIR)/sdcard' && sha256sum bios/bisrv.asd \
 		firmware/linux.asd firmware/unifrog.bin sf2000.conf \
-		sf2000/ui.ttf sf2000/OFL.txt \
+		sf2000/ui.ttf sf2000/ui-latin.ttf sf2000/OFL.txt \
 		sf2000/js2300-cores/chip8.js \
 		sf2000/cores/sf2000-js2300-core \
 		sf2000/cores/sf2000-quicknes \
@@ -2029,8 +2042,12 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp-multicore' \
 		::/sf2000/cores/sf2000-gpsp-multicore
 
-qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
-		$(SDCARD_UI_FONT)
+qpsx-mips32r1-audit: $(SDCARD_CORE_STAMP)
+	$(FRONTEND_MAKE) qpsx-mips32r1-audit \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+
+qpsx-real-test-sd: Makefile qpsx-mips32r1-audit $(SDCARD_USER_CONFIG) \
+		$(SDCARD_UI_FONT) $(SDCARD_UI_LATIN_FONT)
 	@test -n '$(QPSX_REAL_IMAGE)' || { \
 		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal PSX .cue or raw image' >&2; exit 2; }
 	@test -f '$(QPSX_REAL_IMAGE)' || { \
@@ -2077,6 +2094,8 @@ qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 	fi
 	rm -f '$(BUILD_DIR)'/.qpsx-real-test.cfg
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
+	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_LATIN_FONT)' \
+		::/sf2000/ui-latin.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx' \
 		::/sf2000/cores/sf2000-qpsx
@@ -2097,7 +2116,7 @@ qpsx-no-menu-physical: physical-linux-asd
 	@printf '%s\n' 'Copy this file together with the normal build/sdcard tree to the test SD card, then launch QPSX without closing an internal menu.'
 
 $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_CORE_STAMP) \
-		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT)
+		$(SDCARD_USER_CONFIG) $(SDCARD_UI_FONT) $(SDCARD_UI_LATIN_FONT)
 	mkdir -p '$(dir $@)'
 	truncate -s 128M '$@'
 	mkfs.vfat -F 32 -n SFTEST '$@' >/dev/null
@@ -2106,6 +2125,7 @@ $(BROWSER_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(SDCARD_CORE_STAMP) \
 	mcopy -i '$@' '$(SDCARD_GAMBATTE)' ::/sf2000/cores/sf2000-gambatte
 	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
+	mcopy -i '$@' '$(SDCARD_UI_LATIN_FONT)' ::/sf2000/ui-latin.ttf
 	mcopy -i '$@' Makefile ::/README.TXT
 
 $(FRONTEND_LIFECYCLE_TEST_SD): Makefile $(BROWSER_TEST_ROM) $(GPSP_TEST_ROM) \
@@ -2346,6 +2366,10 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 	grep -q 'sf2000-frontend: core init complete' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	grep -q 'sf2000-frontend: ROM load complete' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	grep -Eq 'QPSX_232_TEST: psxM=0x[0-9A-Fa-f]+ \(fixed=0\)' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	! grep -q 'Using FIXED address 0x85000000 for PSX RAM' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	grep -Eq 'sf2000-frontend: first frame [0-9]+x[0-9]+ .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
