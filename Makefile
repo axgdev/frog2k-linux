@@ -302,6 +302,10 @@ GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 QPSX_REAL_IMAGE ?=
 QPSX_REAL_MENU_AT_START ?= 1
 QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
+QPSX_OPTIMIZE ?= -O2
+QPSX_TEST_CORE ?= $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx
+QPSX_REAL_CORE_DEP ?= qpsx-mips32r1-audit
+QPSX_BENCHMARK_SD_TARGET ?= qpsx-no-menu-test-sd
 QPSX_BENCHMARK_SECONDS ?= 25
 SDCARD_QPSX_STARTUP_CONFIG := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg
 SDCARD_QPSX_STARTUP_CHECKSUM := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg.sha256
@@ -392,7 +396,9 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	gpsp-real-test-sd run-linux-gpsp-real smoke-linux-gpsp-real \
 	qpsx-mips32r1-audit qpsx-real-test-sd run-linux-qpsx-real smoke-linux-qpsx-real \
 	qpsx-no-menu-test-sd run-linux-qpsx-no-menu smoke-linux-qpsx-no-menu \
+	qpsx-dev-real-test-sd qpsx-dev-no-menu-test-sd \
 	run-linux-qpsx-attract-benchmark benchmark-linux-qpsx-attract \
+	benchmark-linux-qpsx-attract-dev \
 	qpsx-no-menu-physical \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
@@ -2048,7 +2054,7 @@ qpsx-mips32r1-audit: $(SDCARD_CORE_STAMP)
 	$(FRONTEND_MAKE) qpsx-mips32r1-audit \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
 
-qpsx-real-test-sd: Makefile qpsx-mips32r1-audit $(SDCARD_USER_CONFIG) \
+qpsx-real-test-sd: Makefile $(QPSX_REAL_CORE_DEP) $(SDCARD_USER_CONFIG) \
 		$(SDCARD_UI_FONT) $(SDCARD_UI_LATIN_FONT)
 	@test -n '$(QPSX_REAL_IMAGE)' || { \
 		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal PSX .cue or raw image' >&2; exit 2; }
@@ -2099,8 +2105,20 @@ qpsx-real-test-sd: Makefile qpsx-mips32r1-audit $(SDCARD_USER_CONFIG) \
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_LATIN_FONT)' \
 		::/sf2000/ui-latin.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' \
-		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx' \
+		'$(QPSX_TEST_CORE)' \
 		::/sf2000/cores/sf2000-qpsx
+
+# Rebuild and stage only QPSX from its development checkout.  This avoids the
+# all-core SDCARD_CORE_STAMP and is the intended edit/build/QEMU loop.
+qpsx-dev-real-test-sd: FORCE
+	$(FRONTEND_MAKE) qpsx-dev-mips32r1-audit \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))' \
+		QPSX_OPTIMIZE='$(QPSX_OPTIMIZE)'
+	$(MAKE) qpsx-real-test-sd QPSX_REAL_CORE_DEP= \
+		QPSX_TEST_CORE='$(FRONTEND_PROJECT)/build/sf2000-qpsx-dev'
+
+qpsx-dev-no-menu-test-sd: FORCE
+	$(MAKE) QPSX_REAL_MENU_AT_START=0 qpsx-dev-real-test-sd
 
 # These are deliberately separate from the normal physical image.  The
 # no-menu SD target reuses the real-image builder with menu_at_start=0 for
@@ -2487,7 +2505,7 @@ smoke-linux-qpsx-savestate: run-linux-qpsx-savestate
 # and measure an identical section of its recorded race.  QEMU wall time is a
 # comparative emulator-engineering metric; physical logs remain authoritative
 # for absolute FPS because TCG does not model the HC15xx pipeline or caches.
-run-linux-qpsx-attract-benchmark: qemu linux-buildroot-asd qpsx-no-menu-test-sd
+run-linux-qpsx-attract-benchmark: qemu linux-buildroot-asd $(QPSX_BENCHMARK_SD_TARGET)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
@@ -2520,6 +2538,10 @@ benchmark-linux-qpsx-attract: run-linux-qpsx-attract-benchmark
 	}' '$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-attract-benchmark.log
+
+benchmark-linux-qpsx-attract-dev:
+	$(MAKE) benchmark-linux-qpsx-attract \
+		QPSX_BENCHMARK_SD_TARGET=qpsx-dev-no-menu-test-sd
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
