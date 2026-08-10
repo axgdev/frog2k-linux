@@ -2030,7 +2030,9 @@ qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 	mkdir -p '$(dir $(QPSX_REAL_TEST_SD))'
 	truncate -s 128M '$(QPSX_REAL_TEST_SD)'
 	mkfs.vfat -F 32 -n SFTEST '$(QPSX_REAL_TEST_SD)' >/dev/null
-	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores
+	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores ::/cores
+	mmd -i '$(QPSX_REAL_TEST_SD)' ::/cores/config
+	mattrib +h -i '$(QPSX_REAL_TEST_SD)' ::/cores
 	@case '$(QPSX_REAL_IMAGE)' in \
 		*.[cC][uU][eE]) \
 			mcopy -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_REAL_IMAGE)' \
@@ -2052,6 +2054,14 @@ qpsx-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 				::/PSX/TEST.BIN;; \
 	esac
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
+	printf 'debug_log=1\n' > '$(BUILD_DIR)'/.qpsx-real-test.cfg
+	config_name='TEST.BIN.cfg'; \
+	case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) config_name='00-TEST.cue.cfg';; \
+	esac; \
+	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(BUILD_DIR)'/.qpsx-real-test.cfg \
+		"::/cores/config/$$config_name"
+	rm -f '$(BUILD_DIR)'/.qpsx-real-test.cfg
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx' \
@@ -2287,6 +2297,7 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 run-linux-qpsx-real: qemu linux-buildroot-asd qpsx-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
+		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 2; printf 'sendkey ret 100\n'; sleep 25; printf 'q\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
@@ -2311,7 +2322,21 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	grep -q 'QPSX: Menu closed - resyncing SPU' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
-	awk '/QPSX: Menu closed - resyncing SPU/{closed=1} closed && /scanout-oracle/ && /distinct=([2-9]|1[0-9]+)/ && /nonblack=[1-9][0-9]*/{visible=1} END{exit !visible}' \
+	awk '/QPSX: Menu closed - resyncing SPU/{closed=1} closed && /scanout-oracle/ { \
+		distinct=0; nonblack=0; \
+		for (i=1; i<=NF; i++) { \
+			if ($$i ~ /^distinct=/) { split($$i, a, "="); distinct=a[2]+0; } \
+			if ($$i ~ /^nonblack=/) { split($$i, b, "="); nonblack=b[2]+0; } \
+		} \
+		if (distinct >= 3 && nonblack > 0) visible=1; \
+	} END{exit !visible}' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
+	awk '/QPSX: Menu closed - resyncing SPU/{closed=1} closed && /QPSX: retro_run progress: frame [0-9]+/ { \
+		if (match($$0, /frame [0-9]+/)) { \
+			value=substr($$0, RSTART+6, RLENGTH-6)+0; \
+			if (value >= 120) progress=1; \
+		} \
+	} END{exit !progress}' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
