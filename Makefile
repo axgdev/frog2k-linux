@@ -57,6 +57,7 @@ LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
 UI_LATIN_FONT_URL := https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf
 UI_LATIN_FONT_SHA256 := b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5
 UI_LATIN_FONT_CACHE := .cache/NotoSans-Regular.ttf
+UI_LATIN_FONT_PROFILE := .cache/NotoSans-Regular.profile
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
 BUILDROOT_VERSION := 2026.05.1
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
@@ -211,6 +212,9 @@ SDCARD_UI_FONT := $(BUILD_DIR)/sdcard/sf2000/ui.ttf
 SDCARD_UI_LATIN_FONT := $(BUILD_DIR)/sdcard/sf2000/ui-latin.ttf
 SDCARD_UI_FONT_LICENSE := $(BUILD_DIR)/sdcard/sf2000/OFL.txt
 SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
+# Core staging atomically replaces its output directory, so keep the input
+# signature beside that directory rather than inside it.
+SDCARD_CORE_PROFILE := $(BUILD_DIR)/sdcard/.core-build-profile
 # The sdcard core copies are re-staged from the frontend's freshly built
 # executables.  Depending the stamp on those executables - not just frontend
 # sources - makes a forced core rebuild in the frontend repo (e.g. `make
@@ -301,9 +305,14 @@ GPSP_REAL_ROM ?=
 GPSP_REAL_TEST_SD := $(BUILD_DIR)/gpsp-real-test.sd.img
 QPSX_REAL_IMAGE ?=
 QPSX_REAL_MENU_AT_START ?= 1
+QPSX_REAL_TEST_MIN_MIB ?= 128
 QPSX_REAL_TEST_SD := $(BUILD_DIR)/qpsx-real-test.sd.img
+QPSX_REAL_TEST_BASE_PROFILE := $(BUILD_DIR)/qpsx-real-test.base-profile
+QPSX_REAL_TEST_CORE_PROFILE := $(BUILD_DIR)/qpsx-real-test.core-profile
+QPSX_REAL_TEST_CORE_STAMP := $(BUILD_DIR)/qpsx-real-test.core-installed
 QPSX_OPTIMIZE ?= -O2
 QPSX_TEST_CORE ?= $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx
+QPSX_AUDIT_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.qpsx-mips32r1-audited
 QPSX_REAL_CORE_DEP ?= qpsx-mips32r1-audit
 QPSX_BENCHMARK_SD_TARGET ?= qpsx-no-menu-test-sd
 QPSX_BENCHMARK_ASD_TARGET ?= linux-buildroot-asd
@@ -1783,7 +1792,18 @@ $(SDCARD_UI_FONT): fonts/unifrog-ui.ttf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(UI_LATIN_FONT_CACHE): Makefile
+$(UI_LATIN_FONT_PROFILE): FORCE
+	mkdir -p '$(@D)'
+	@set -eu; \
+	tmp='$@.tmp'; \
+	printf '%s\n%s\n' '$(UI_LATIN_FONT_URL)' '$(UI_LATIN_FONT_SHA256)' > "$$tmp"; \
+	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
+		rm -f "$$tmp"; \
+	else \
+		mv "$$tmp" '$@'; \
+	fi
+
+$(UI_LATIN_FONT_CACHE): $(UI_LATIN_FONT_PROFILE)
 	mkdir -p '$(@D)'
 	curl -L --fail -o '$@' '$(UI_LATIN_FONT_URL)'
 	printf '%s  %s\n' '$(UI_LATIN_FONT_SHA256)' '$@' | sha256sum -c -
@@ -1796,6 +1816,29 @@ $(SDCARD_UI_FONT_LICENSE): fonts/OFL.txt
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
+# Only inputs that affect frontend compilation or the staged core set belong
+# in this signature.  Depending directly on this top-level Makefile made an
+# unrelated QEMU or packaging edit rebuild every emulator.  The phony profile
+# recipe still runs each time, but compare-and-replace preserves its timestamp
+# until a relevant value or cross compiler actually changes.
+$(SDCARD_CORE_PROFILE): FORCE $(BUILDROOT_TOOLCHAIN_STAMP)
+	mkdir -p '$(dir $@)'
+	@set -eu; \
+	tmp='$@.tmp'; \
+	{ \
+		printf '%s\n' \
+			'FRONTEND_PROJECT=$(abspath $(FRONTEND_PROJECT))' \
+			'BUILDROOT_CC=$(BUILDROOT_CC)' \
+			'FRONTEND_CORES=$(SDCARD_FRONTEND_CORES)' \
+			'MUFROG_CORES=$(SDCARD_MUFROG_CORES)'; \
+		stat -c 'compiler=%n|size=%s|mtime=%y' '$(BUILDROOT_CC)'; \
+	} > "$$tmp"; \
+	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
+		rm -f "$$tmp"; \
+	else \
+		mv "$$tmp" '$@'; \
+	fi
+
 $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include '$(FRONTEND_PROJECT)'/patches/quicknes \
 		'$(FRONTEND_PROJECT)'/patches/gambatte \
@@ -1803,7 +1846,7 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/patches/fceumm \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		'$(FRONTEND_PROJECT)'/patches/mufrog \
-		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile Makefile \
+		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(SDCARD_CORE_PROFILE) \
 		$(FRONTEND_CORE_OUTPUTS)
 	$(FRONTEND_MAKE) core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
@@ -2057,18 +2100,76 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 		'$(BUILD_DIR)/sdcard/sf2000/cores/sf2000-gpsp-multicore' \
 		::/sf2000/cores/sf2000-gpsp-multicore
 
-qpsx-mips32r1-audit: $(SDCARD_CORE_STAMP)
+$(QPSX_AUDIT_STAMP): $(SDCARD_CORE_STAMP)
 	$(FRONTEND_MAKE) qpsx-mips32r1-audit \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+	touch '$@'
 
-qpsx-real-test-sd: Makefile $(QPSX_REAL_CORE_DEP) $(SDCARD_USER_CONFIG) \
+qpsx-mips32r1-audit: $(QPSX_AUDIT_STAMP)
+
+# A PSX disc can be hundreds of MiB, so hashing or recopying it in every test
+# loop is itself a substantial benchmark tax.  Record high-resolution metadata
+# for the disc and its CUE sidecars, while hashing the small configuration and
+# font inputs.  Compare-and-replace gives Make an honest content-change edge.
+$(QPSX_REAL_TEST_BASE_PROFILE): FORCE $(SDCARD_USER_CONFIG) \
 		$(SDCARD_UI_FONT) $(SDCARD_UI_LATIN_FONT)
 	@test -n '$(QPSX_REAL_IMAGE)' || { \
 		echo 'set QPSX_REAL_IMAGE=/path/to/a/legal PSX .cue or raw image' >&2; exit 2; }
 	@test -f '$(QPSX_REAL_IMAGE)' || { \
 		echo 'QPSX_REAL_IMAGE does not name a regular file' >&2; exit 2; }
+	mkdir -p '$(dir $@)'
+	@set -eu; \
+	tmp='$@.tmp'; \
+	{ \
+		printf 'menu_at_start=%s\nmin_mib=%s\nimage=%s\n' \
+			'$(QPSX_REAL_MENU_AT_START)' '$(QPSX_REAL_TEST_MIN_MIB)' \
+			'$(QPSX_REAL_IMAGE)'; \
+		sha256sum '$(SDCARD_USER_CONFIG)' '$(SDCARD_UI_FONT)' \
+			'$(SDCARD_UI_LATIN_FONT)'; \
+		stat -c 'disc=%n|size=%s|mtime=%y' '$(QPSX_REAL_IMAGE)'; \
+		case '$(QPSX_REAL_IMAGE)' in \
+			*.[cC][uU][eE]) \
+				cue_dir=$$(dirname '$(QPSX_REAL_IMAGE)'); \
+				awk -F'"' '/^[[:space:]]*FILE[[:space:]]+"/ {print $$2}' \
+					'$(QPSX_REAL_IMAGE)' | while IFS= read -r relpath; do \
+					test -n "$$relpath" || continue; \
+					sidecar="$$cue_dir/$$relpath"; \
+					test -f "$$sidecar" || { \
+						echo "missing cue FILE: $$sidecar" >&2; exit 2; }; \
+					stat -c 'sidecar=%n|size=%s|mtime=%y' "$$sidecar"; \
+				done;; \
+		esac; \
+	} > "$$tmp"; \
+	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
+		rm -f "$$tmp"; \
+	else \
+		mv "$$tmp" '$@'; \
+	fi
+
+$(QPSX_REAL_TEST_SD): $(QPSX_REAL_TEST_BASE_PROFILE)
 	mkdir -p '$(dir $(QPSX_REAL_TEST_SD))'
-	truncate -s 128M '$(QPSX_REAL_TEST_SD)'
+	@set -eu; \
+	disc_bytes=$$(stat -c %s '$(QPSX_REAL_IMAGE)'); \
+	case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) \
+			cue_dir=$$(dirname '$(QPSX_REAL_IMAGE)'); \
+			list=$$(mktemp '$(BUILD_DIR)/.qpsx-real-sidecars.XXXXXX'); \
+			trap 'rm -f "$$list"' EXIT HUP INT TERM; \
+			awk -F'"' '/^[[:space:]]*FILE[[:space:]]+"/ {print $$2}' \
+				'$(QPSX_REAL_IMAGE)' > "$$list"; \
+			while IFS= read -r relpath; do \
+				test -n "$$relpath" || continue; \
+				sidecar="$$cue_dir/$$relpath"; \
+				disc_bytes=$$((disc_bytes + $$(stat -c %s "$$sidecar"))); \
+			done < "$$list"; \
+			rm -f "$$list"; \
+			trap - EXIT HUP INT TERM;; \
+	esac; \
+	image_mib=$$(((disc_bytes + 33554432 + 1048575) / 1048576)); \
+	if test "$$image_mib" -lt '$(QPSX_REAL_TEST_MIN_MIB)'; then \
+		image_mib='$(QPSX_REAL_TEST_MIN_MIB)'; \
+	fi; \
+	truncate -s "$${image_mib}M" '$(QPSX_REAL_TEST_SD)'
 	mkfs.vfat -F 32 -n SFTEST '$(QPSX_REAL_TEST_SD)' >/dev/null
 	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores ::/cores
 	mmd -i '$(QPSX_REAL_TEST_SD)' ::/cores/config
@@ -2111,9 +2212,34 @@ qpsx-real-test-sd: Makefile $(QPSX_REAL_CORE_DEP) $(SDCARD_USER_CONFIG) \
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 	mcopy -i '$(QPSX_REAL_TEST_SD)' '$(SDCARD_UI_LATIN_FONT)' \
 		::/sf2000/ui-latin.ttf
-	mcopy -i '$(QPSX_REAL_TEST_SD)' \
-		'$(QPSX_TEST_CORE)' \
+
+# Core edits are the common iteration case.  Install only the changed core
+# into the already-populated image instead of formatting and recopying the
+# disc.  Hashing this small executable avoids timestamp ambiguity when it is
+# produced by a deterministic or compare-and-replace build.
+$(QPSX_REAL_TEST_CORE_PROFILE): FORCE $(QPSX_REAL_CORE_DEP)
+	@test -f '$(QPSX_TEST_CORE)' || { \
+		echo 'QPSX_TEST_CORE does not name a regular file' >&2; exit 2; }
+	mkdir -p '$(dir $@)'
+	@set -eu; \
+	tmp='$@.tmp'; \
+	{ \
+		printf 'core=%s\n' '$(QPSX_TEST_CORE)'; \
+		sha256sum '$(QPSX_TEST_CORE)'; \
+	} > "$$tmp"; \
+	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
+		rm -f "$$tmp"; \
+	else \
+		mv "$$tmp" '$@'; \
+	fi
+
+$(QPSX_REAL_TEST_CORE_STAMP): $(QPSX_REAL_TEST_SD) \
+		$(QPSX_REAL_TEST_CORE_PROFILE)
+	mcopy -o -i '$(QPSX_REAL_TEST_SD)' '$(QPSX_TEST_CORE)' \
 		::/sf2000/cores/sf2000-qpsx
+	touch '$@'
+
+qpsx-real-test-sd: $(QPSX_REAL_TEST_CORE_STAMP)
 
 # Rebuild and stage only QPSX from its development checkout.  This avoids the
 # all-core SDCARD_CORE_STAMP and is the intended edit/build/QEMU loop.
