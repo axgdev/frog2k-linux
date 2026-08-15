@@ -389,6 +389,7 @@ smoke-linux-buildroot-partitioned-storage \
 smoke-linux-buildroot-fat16-storage \
 smoke-linux-buildroot-exfat-storage \
 smoke-linux-buildroot-mixed-fs-storage \
+smoke-linux-buildroot-superfloppy-storage \
 run-linux-buildroot-rom \
 run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
@@ -3095,6 +3096,28 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1 extras=1' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	mcopy -i "$$tmp_sd@@$$((p1_lba * 512))" ::loglinux.txt "$$tmp_log"; \
 	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
+	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
+
+# Bootloader-proven stock superfloppy layout: FAT32 at sector 0 with no usable
+# MBR.  The mount service must try /dev/mmcblk0 first instead of probing the
+# ghost partition nodes (~300 ms each on the physical device).
+smoke-linux-buildroot-superfloppy-storage:
+	set -e; \
+	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-superfloppy.XXXXXX.img); \
+	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-superfloppy-loglinux.XXXXXX.txt); \
+	trap 'rm -f $$tmp_sd $$tmp_log' EXIT; \
+	truncate -s 64M "$$tmp_sd"; \
+	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
+	mmd -i "$$tmp_sd" ::sf2000; \
+	mcopy -i "$$tmp_sd" Makefile ::sf2000/ui.ttf; \
+	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
+		run-linux-asd; \
+	grep -q 'sf2000-mount: superfloppy: whole disk first' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0' '$(BUILD_DIR)'/logs/linux-asd.log; \
+	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
+	grep -q 'source=logd --- SF2000 Linux storage mounted ---' "$$tmp_log"; \
+	grep -q 'source=heartbeat alive' "$$tmp_log"; \
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-linux-buildroot-storage-launch:

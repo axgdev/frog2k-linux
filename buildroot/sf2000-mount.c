@@ -222,6 +222,41 @@ static int candidate_index(const char candidates[][32], unsigned count,
 	return -1;
 }
 
+/*
+ * Stock SF2000 cards are superfloppy: FAT lives at sector 0 and any MBR
+ * partition nodes are ghost entries that fail every mount probe (~300ms
+ * each).  Reading the boot sector is one cheap block transfer, so detect
+ * the layout once and let the whole disk be tried before the partitions.
+ * Cards with a real partition table keep the partition-first order the
+ * QEMU smokes and MBR users rely on.
+ */
+static int whole_disk_is_superfloppy(void)
+{
+	unsigned char sector[512];
+	ssize_t got;
+	int fd;
+
+	fd = open("/dev/mmcblk0", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return 0;
+	got = pread(fd, sector, sizeof(sector), 0);
+	close(fd);
+	if (got < (ssize_t)sizeof(sector))
+		return 0;
+	/* A FAT/exFAT boot sector always carries the 0x55AA boot signature. */
+	if (sector[510] != 0x55u || sector[511] != 0xaau)
+		return 0;
+	/* BS_FilSysType: FAT12/16 at offset 54, FAT32 at offset 82. */
+	if (sector[54] == 'F' && sector[55] == 'A' && sector[56] == 'T')
+		return 1;
+	if (sector[82] == 'F' && sector[83] == 'A' && sector[84] == 'T')
+		return 1;
+	/* exFAT boot sector: "EXFAT   " OEM name at offset 3. */
+	if (sector[3] == 'E' && sector[4] == 'X' && sector[5] == 'F')
+		return 1;
+	return 0;
+}
+
 static unsigned collect_candidates(char candidates[][32], unsigned max)
 {
 	DIR *dir;
@@ -436,6 +471,18 @@ static int mount_all_volumes(void)
 	char line[160];
 
 	count = collect_candidates(candidates, MAX_CANDIDATES);
+	if (whole_disk_is_superfloppy()) {
+		int whole = candidate_index(candidates, count, "/dev/mmcblk0");
+
+		if (whole > 0) {
+			char first[32];
+
+			memcpy(first, candidates[0], sizeof(first));
+			memcpy(candidates[0], candidates[whole], sizeof(first));
+			memcpy(candidates[whole], first, sizeof(first));
+			log_status("superfloppy: whole disk first");
+		}
+	}
 	snprintf(line, sizeof(line), "candidates=%u", count);
 	log_status(line);
 

@@ -783,9 +783,7 @@ static void graceful_shutdown(long logd_pid, long screen_pid)
 
 int main(void)
 {
-	unsigned int storage_started = 0;
 	unsigned int screen_wait_ticks = 0;
-	unsigned int spawn_storage = 0;
 	unsigned int panel_probe = 0;
 	unsigned int fb_test_started = 0;
 	unsigned int fb_test_enabled = 0;
@@ -842,7 +840,6 @@ int main(void)
 			panel_probe_argv, screen_stack);
 		log_message("sf2000_buildroot: panel probe started\n");
 		progress_mark("init-panel-probe", 0x3eu, INIT_TAG);
-		storage_started = 1;
 	}
 	/* Buffer the complete boot profile in RAM while display and MMC settle. */
 	logd_pid = spawn_service(
@@ -864,6 +861,26 @@ int main(void)
 			sleep_ms(100);
 			screen_wait_ticks++;
 		}
+		if (path_exists("/run/sf2000-screen-ready")) {
+			log_message("sf2000_buildroot: screen ready\n");
+			progress_mark("init-screen-ready", 0x3eu,
+				screen_wait_ticks);
+		} else {
+			log_message("sf2000_buildroot: screen ready timeout\n");
+			progress_mark("init-screen-timeout", 0x3eu,
+				screen_wait_ticks);
+		}
+		/*
+		 * The FAT volume is on the critical path to the browser and the
+		 * kernel has already enumerated the card, so start the storage
+		 * service the moment the display handoff completes instead of
+		 * letting the supervisor loop add its poll latency.
+		 */
+		progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
+		spawn_service("sf2000_buildroot: starting storage service after screen\n",
+			storage_argv, storage_late_stack);
+		log_message("sf2000_buildroot: storage service started\n");
+		progress_mark("init-helpers-started", 0x3eu, INIT_TAG);
 	}
 	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
 		pad_stack);
@@ -912,33 +929,6 @@ int main(void)
 					(unsigned int)screen_pid);
 			}
 			fb_test_started = 1;
-		}
-		if (!storage_started) {
-			spawn_storage = 0;
-			if (path_exists("/run/sf2000-screen-ready")) {
-				log_message("sf2000_buildroot: screen ready\n");
-				progress_mark("init-screen-ready", 0x3eu,
-					screen_wait_ticks);
-				storage_started = 1;
-				spawn_storage = 1;
-			} else if (screen_wait_ticks >= 10u) {
-				log_message("sf2000_buildroot: screen ready timeout\n");
-				progress_mark("init-screen-timeout", 0x3eu,
-					screen_wait_ticks);
-				storage_started = 1;
-				spawn_storage = 1;
-			} else {
-				screen_wait_ticks++;
-			}
-			if (spawn_storage) {
-				progress_mark("init-storage-spawn", 0x3eu,
-					INIT_TAG);
-				spawn_service("sf2000_buildroot: starting storage service after screen\n",
-					storage_argv, storage_late_stack);
-				log_message("sf2000_buildroot: storage service started\n");
-				progress_mark("init-helpers-started", 0x3eu,
-					INIT_TAG);
-			}
 		}
 		if (path_exists("/run/sf2000-storage-watchdog-owned"))
 			progress_mark("init-storage-wdt-owned", 0x3eu,
