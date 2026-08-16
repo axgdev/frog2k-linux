@@ -45,6 +45,14 @@ static void progress_mark(const char *name, uint32_t kind, uint32_t value);
 
 #define PROGRESS_PHYS 0x07a00000u
 #define PROGRESS_MAGIC 0x52504653u
+/* Linux-started magic in the bootloader's retained raw block (slot 60,
+ * word at 0x068100f0).  Written after the first successful present so the
+ * bootloader can distinguish a linux that reached userland (warm reboot /
+ * post-start reset take the normal flow) from a pre-takeover hang (the
+ * recovery watchdog's auto-retry kicks in).  Mirrors
+ * SF2000_RETAINED_LINUX_STARTED_SLOT in the bootloader's retained.h. */
+#define SF2000_LINUX_STARTED_PHYS 0x068100f0u
+#define SF2000_LINUX_STARTED_MAGIC 0x4c535441u
 #define PROGRESS_VERSION 1u
 #define PROGRESS_ENTRIES 1024u
 #define PROGRESS_NAME_LEN 32u
@@ -5356,6 +5364,18 @@ handoff_complete:
 				progress_mark("screen-handoff-kmsg-dropped", 0x3fu,
 					handoff_defer_dropped);
 				handoff_flush_deferred();
+				/* First successful present proves the boot chain is
+				 * alive past the loader.  Publish the linux-started
+				 * magic the bootloader checks on the next boot to tell
+				 * a pre-takeover hang (bounded auto-retry) from a
+				 * session that reached userland (normal flow, warm
+				 * instant boot). */
+				*((volatile uint32_t *)(uintptr_t)
+					KSEG1ADDR(SF2000_LINUX_STARTED_PHYS)) =
+						SF2000_LINUX_STARTED_MAGIC;
+				progress_mark("screen-linux-started", 0x3fu,
+					SF2000_LINUX_STARTED_MAGIC);
+				log_line("sf2000-screen: linux-started magic published\n");
 			}
 			idle = 0;
 		} else {

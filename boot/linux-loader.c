@@ -64,7 +64,12 @@ typedef unsigned long uintptr;
 #define SCPU_PLL_MCTRL2 0x8153u
 #define WDT0_COUNT 0xb8818500u
 #define WDT0_CONF 0xb8818504u
-#define WDT_BOOT_USEC 8000000u
+/* Recovery count for the kernel boot phase: long enough that a slow card
+ * with command retries still reaches the screen service's own watchdog
+ * takeover (~3 s healthy) well inside the window, and matched to the
+ * bootloader's SF2000_WDT_RECOVERY_USEC so both halves of the handoff use
+ * the same timeout budget. */
+#define WDT_BOOT_USEC 20000000u
 #define WDT_BOOT_TICKS ((WDT_BOOT_USEC * 27u) / 128u)
 #define WDT_BOOT_COUNT (0u - WDT_BOOT_TICKS)
 #define WDT_BOOT_CONF 0x26u
@@ -936,11 +941,19 @@ static void bootlog_wdt_state(void)
 	bootlog_flush();
 }
 
+/* Arm WDT0 with a long recovery count right before the kernel jump.  The
+ * bootloader armed the same recovery watchdog before handing off to this
+ * loader, but the handoff stub's ROM FatFs re-mount disables it (conf=0 by
+ * the time the loader reads it), and leaving it disabled means a hang
+ * anywhere in the kernel boot freezes the display until a manual
+ * power-cycle (runs 359/360).  With the count armed here, a healthy boot
+ * is unaffected: the screen service re-arms and pets WDT0 from its own
+ * takeover at first present (~3 s in), well inside the 20 s window.  A
+ * genuine pre-takeover hang instead resets back to the bootloader, which
+ * auto-retries the image a bounded number of times and then drops to the
+ * menu - never a permanent freeze and never an unbounded reset loop. */
 static void bootlog_wdt_arm(const char *name)
 {
-	if (!rom_handoff_present())
-		return;
-
 	bootlog_init();
 	if (log_ready) {
 		bootlog_puts("wdt arm before count=");
@@ -955,6 +968,11 @@ static void bootlog_wdt_arm(const char *name)
 	mmio_write32(WDT0_COUNT, WDT_BOOT_COUNT);
 	mmio_write8(WDT0_CONF, WDT_BOOT_CONF);
 	progress_mark(name, 3, WDT_BOOT_COUNT);
+	uart_puts("linux-loader: watchdog armed timeout_us=");
+	uart_hex(WDT_BOOT_USEC);
+	uart_puts(" name=");
+	uart_puts(name);
+	uart_puts("\n");
 
 	bootlog_init();
 	if (!log_ready)
@@ -966,40 +984,6 @@ static void bootlog_wdt_arm(const char *name)
 	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
 	bootlog_puts(" timeout_us=");
 	bootlog_hex(WDT_BOOT_USEC);
-	bootlog_puts(" name=");
-	bootlog_puts(name);
-	bootlog_puts("\n");
-	bootlog_flush();
-}
-
-static void bootlog_wdt_disarm(const char *name)
-{
-	bootlog_init();
-	if (log_ready) {
-		bootlog_puts("wdt disarm before count=");
-		bootlog_hex(mmio_read32(WDT0_COUNT));
-		bootlog_puts(" conf=");
-		bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
-		bootlog_puts("\n");
-		bootlog_flush();
-	}
-
-	/*
-	 * Linux does not feed WDT0.  Leaving it armed here would reset the box
-	 * ~8s into boot, long before it reaches the menu.  Disable it; the
-	 * kernel re-affirms ownership via its late_initcall takeover once early
-	 * boot has clearly succeeded.  A genuine early-boot hang therefore
-	 * stalls instead of rebooting, which is the desired behaviour for linux.
-	 */
-	mmio_write8(WDT0_CONF, 0);
-	progress_mark(name, 3, 0);
-
-	bootlog_init();
-	if (!log_ready)
-		return;
-
-	bootlog_puts("wdt disarmed conf=");
-	bootlog_hex(mmio_read32(WDT0_CONF) & 0xffu);
 	bootlog_puts(" name=");
 	bootlog_puts(name);
 	bootlog_puts("\n");
@@ -1784,7 +1768,7 @@ void linux_loader_main_impl(void)
 	print_kernel_jump(entry, dtb_dest);
 	direct_handoff_trace_mark(0x110u, 0x4c4a4d50u, entry); /* LJMP */
 	direct_handoff_trace_mark(0x118u, 0x4c445442u, (u32)dtb_dest); /* LDTB */
-	bootlog_wdt_disarm("loader-watchdog-disarmed");
+	bootlog_wdt_arm("loader-watchdog-armed");
 	set_scpu_clock_918();
 	write_status(0);
 	jump_to_kernel(entry, dtb_dest);
