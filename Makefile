@@ -54,10 +54,6 @@ ROOTFS ?= tiny
 LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
-UI_LATIN_FONT_URL := https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf
-UI_LATIN_FONT_SHA256 := b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5
-UI_LATIN_FONT_CACHE := .cache/NotoSans-Regular.ttf
-UI_LATIN_FONT_PROFILE := .cache/NotoSans-Regular.profile
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
 BUILDROOT_VERSION := 2026.05.1
 BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
@@ -1793,23 +1789,11 @@ $(SDCARD_UI_FONT): fonts/unifrog-ui.ttf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(UI_LATIN_FONT_PROFILE): FORCE
-	mkdir -p '$(@D)'
-	@set -eu; \
-	tmp='$@.tmp'; \
-	printf '%s\n%s\n' '$(UI_LATIN_FONT_URL)' '$(UI_LATIN_FONT_SHA256)' > "$$tmp"; \
-	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
-		rm -f "$$tmp"; \
-	else \
-		mv "$$tmp" '$@'; \
-	fi
-
-$(UI_LATIN_FONT_CACHE): $(UI_LATIN_FONT_PROFILE)
-	mkdir -p '$(@D)'
-	curl -L --fail -o '$@' '$(UI_LATIN_FONT_URL)'
-	printf '%s  %s\n' '$(UI_LATIN_FONT_SHA256)' '$@' | sha256sum -c -
-
-$(SDCARD_UI_LATIN_FONT): $(UI_LATIN_FONT_CACHE)
+# The Latin primary font is a checked-in subset of Noto Sans Regular (OFL,
+# same license family as OFL.txt) so the build never needs network access to
+# produce the UI.  Both this and ui.ttf are loaded by the frontend at boot;
+# keeping them small is what bounds the boot-time font read.
+$(SDCARD_UI_LATIN_FONT): fonts/unifrog-ui-latin.ttf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
