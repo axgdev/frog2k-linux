@@ -850,9 +850,27 @@ int main(void)
 		screen_pid = spawn_service("sf2000_buildroot: starting screen\n",
 			screen_argv, screen_stack);
 		/*
-		 * The display handoff and the retained progress ring are shared board
-		 * resources.  Finish that dependency before starting helpers which
-		 * also publish retained records; this avoids both CPU starvation and
+		 * The FAT volume is on the critical path to the browser and the
+		 * kernel has already enumerated the card (mmc0 probe done ~1.9s),
+		 * so start the storage service in parallel with the screen's
+		 * RGB/GMA handoff.  sf2000-mount only reads the SD card and writes
+		 * /dev/kmsg and /run files; it does not touch the retained progress
+		 * ring or the display, so it cannot starve or desynchronise the
+		 * handoff.  powerd still spawns after the screen-ready wait below
+		 * (so the frontend pause handshake can never race a screen that is
+		 * not yet ready) and launches the frontend only once the
+		 * storage-mounted marker exists, so a slow mount can never
+		 * present an empty library.
+		 */
+		progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
+		spawn_service("sf2000_buildroot: starting storage service after screen\n",
+			storage_argv, storage_late_stack);
+		log_message("sf2000_buildroot: storage service started\n");
+		progress_mark("init-helpers-started", 0x3eu, INIT_TAG);
+		/*
+		 * The display handoff and the retained progress ring are shared
+		 * board resources.  Finish that dependency before starting the
+		 * remaining helpers; this avoids both CPU starvation and
 		 * unsynchronised multi-process writes during the RGB/GMA transition.
 		 */
 		while (screen_wait_ticks < 300u &&
@@ -870,17 +888,6 @@ int main(void)
 			progress_mark("init-screen-timeout", 0x3eu,
 				screen_wait_ticks);
 		}
-		/*
-		 * The FAT volume is on the critical path to the browser and the
-		 * kernel has already enumerated the card, so start the storage
-		 * service the moment the display handoff completes instead of
-		 * letting the supervisor loop add its poll latency.
-		 */
-		progress_mark("init-storage-spawn", 0x3eu, INIT_TAG);
-		spawn_service("sf2000_buildroot: starting storage service after screen\n",
-			storage_argv, storage_late_stack);
-		log_message("sf2000_buildroot: storage service started\n");
-		progress_mark("init-helpers-started", 0x3eu, INIT_TAG);
 	}
 	spawn_service("sf2000_buildroot: starting input bridge\n", pad_argv,
 		pad_stack);

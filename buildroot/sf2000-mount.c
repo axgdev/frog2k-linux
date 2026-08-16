@@ -468,47 +468,77 @@ static int mount_all_volumes(void)
 	unsigned primary = 0;
 	unsigned i;
 	unsigned extra_slot = 2;
+	int superfloppy;
 	char line[160];
 
-	count = collect_candidates(candidates, MAX_CANDIDATES);
-	if (whole_disk_is_superfloppy()) {
-		int whole = candidate_index(candidates, count, "/dev/mmcblk0");
-
-		if (whole > 0) {
-			char first[32];
-
-			memcpy(first, candidates[0], sizeof(first));
-			memcpy(candidates[0], candidates[whole], sizeof(first));
-			memcpy(candidates[whole], first, sizeof(first));
-			log_status("superfloppy: whole disk first");
-		}
+	/*
+	 * Stock superfloppy cards carry no partition table, so every
+	 * /dev/mmcblk0pN node is a ghost that fails each mount probe (~150 ms
+	 * each on the physical card).  Mount the whole disk directly: one
+	 * candidate, no sysfs scan, no ghost probes, and no score walk.
+	 */
+	superfloppy = whole_disk_is_superfloppy();
+	if (superfloppy) {
+		count = 1;
+		snprintf(candidates[0], sizeof(candidates[0]), "/dev/mmcblk0");
+		log_status("superfloppy: whole disk first");
+	} else {
+		count = collect_candidates(candidates, MAX_CANDIDATES);
 	}
 	snprintf(line, sizeof(line), "candidates=%u", count);
 	log_status(line);
 
-	for (i = 0; i < count && mounted < MAX_MOUNTS; i++) {
-		char tmp[32];
-		char fstype[16];
+	/*
+	 * Probe the candidates, then fall back to the partition scan when the
+	 * whole-disk fast path mounted nothing (misidentified card, transient
+	 * read, unsupported variant).  The previous reorder path kept the
+	 * scanned list as a recovery; keep that behaviour.
+	 */
+	for (;;) {
+		for (i = 0; i < count && mounted < MAX_MOUNTS; i++) {
+			char tmp[32];
+			char fstype[16];
 
-		snprintf(tmp, sizeof(tmp), "/mnt/.sf2000-vol%u", mounted);
-		(void)umount(tmp);
-		if (try_mount_at(candidates[i], tmp, fstype, sizeof(fstype)) != 0)
-			continue;
+			snprintf(tmp, sizeof(tmp), "/mnt/.sf2000-vol%u", mounted);
+			(void)umount(tmp);
+			if (try_mount_at(candidates[i], tmp, fstype,
+					 sizeof(fstype)) != 0)
+				continue;
 
-		memset(&vols[mounted], 0, sizeof(vols[mounted]));
-		snprintf(vols[mounted].device, sizeof(vols[mounted].device),
-			"%.30s", candidates[i]);
-		snprintf(tmp_mounts[mounted], sizeof(tmp_mounts[0]), "%.30s", tmp);
-		snprintf(vols[mounted].fstype, sizeof(vols[mounted].fstype),
-			"%.14s", fstype);
-		vols[mounted].score = score_volume(tmp);
-		/* Slight preference for lower partition numbers when tied. */
-		vols[mounted].score += (MAX_CANDIDATES - i);
-		snprintf(line, sizeof(line),
-			"volume %.24s type=%s score=%u",
-			candidates[i], fstype, vols[mounted].score);
-		log_status(line);
-		mounted++;
+			memset(&vols[mounted], 0, sizeof(vols[mounted]));
+			snprintf(vols[mounted].device,
+				sizeof(vols[mounted].device),
+				"%.30s", candidates[i]);
+			snprintf(tmp_mounts[mounted], sizeof(tmp_mounts[0]),
+				"%.30s", tmp);
+			snprintf(vols[mounted].fstype,
+				sizeof(vols[mounted].fstype),
+				"%.14s", fstype);
+			/*
+			 * Scoring only picks the primary among multiple volumes.
+			 * A lone whole disk is primary by definition, and the
+			 * walk costs ~13 FAT stats on the slow card, so skip it
+			 * on single-candidate cards.
+			 */
+			if (count > 1)
+				vols[mounted].score = score_volume(tmp);
+			else
+				vols[mounted].score = 1u;
+			/* Slight preference for lower partition numbers when tied. */
+			vols[mounted].score += (MAX_CANDIDATES - i);
+			snprintf(line, sizeof(line),
+				"volume %.24s type=%s score=%u",
+				candidates[i], fstype, vols[mounted].score);
+			log_status(line);
+			mounted++;
+		}
+		if (mounted || !superfloppy)
+			break;
+		log_status("superfloppy: whole-disk probe empty; scanning partitions");
+		superfloppy = 0;
+		count = collect_candidates(candidates, MAX_CANDIDATES);
+		if (!count)
+			break;
 	}
 
 	if (!mounted)
