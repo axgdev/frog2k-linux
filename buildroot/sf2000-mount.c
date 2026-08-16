@@ -31,6 +31,7 @@
  */
 
 #define PRIMARY_MOUNT "/mnt/sd"
+#define FONT_WARM_PATH PRIMARY_MOUNT "/sf2000/ui.ttf"
 #define MOUNT_MARKER "/run/sf2000-storage-mounted"
 #define ROOTS_PATH "/run/sf2000-storage-roots"
 #define MAP_PATH "/run/sf2000-storage-map"
@@ -728,6 +729,34 @@ static void unmount_all_volumes(void)
 	sync();
 }
 
+/*
+ * Warm the frontend UI font into the page cache.  The browser reads
+ * ui.ttf (~280 KB) from the slow card after it launches; reading it here,
+ * in parallel with the display handoff, turns that ~0.8 s cold read into a
+ * cache hit.  Runs once per successful mount and never blocks anything: the
+ * mount marker is published before this, and powerd gates the frontend
+ * launch on that marker.
+ */
+static void warm_ui_font(void)
+{
+	char buf[4096];
+	char line[96];
+	int fd;
+	ssize_t got;
+	unsigned total = 0;
+
+	fd = open(FONT_WARM_PATH, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	while ((got = read(fd, buf, sizeof(buf))) > 0)
+		total += (unsigned)got;
+	close(fd);
+	if (total > 0u) {
+		snprintf(line, sizeof(line), "font warm %.3u KB", total / 1024u);
+		log_status(line);
+	}
+}
+
 int main(void)
 {
 	char identity[160];
@@ -783,6 +812,7 @@ int main(void)
 					"%.150s", identity);
 			else
 				last_identity[0] = 0;
+			warm_ui_font();
 			sleep_ms(POLL_MS_MOUNTED);
 			continue;
 		}

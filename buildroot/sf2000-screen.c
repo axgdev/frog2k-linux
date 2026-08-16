@@ -257,6 +257,7 @@ _Static_assert(GMA_RENDER_OFF + FRAME_BYTES <= GMA_RAM_SIZE,
 #define ST7789_CASET 0x2au
 #define ST7789_RASET 0x2bu
 #define ST7789_RAMWR 0x2cu
+#define ST7789_RAMRD 0x2eu
 #define ST7789_TEON 0x35u
 #define ST7789_MADCTL 0x36u
 #define ST7789_COLMOD 0x3au
@@ -2725,6 +2726,137 @@ static void panel_apply_init_sequence(const uint8_t *sequence)
 	watchdog_pet();
 }
 
+static void panel_push_frame(int switch_to_rgb);
+static int ge_prepare_scanout(void);
+
+/*
+ * Re-read a column of RGB565 pixels from GRAM over the MCU RAMRD path and
+ * count how many differ from the scanout buffer.  The first read after
+ * RAMRD is the required dummy cycle.  The caller must re-arm the TE/RGB
+ * stream afterwards: this function reclaims the shared pads for MCU.
+ */
+static unsigned panel_verify_gram_column(unsigned x, unsigned y,
+					 unsigned count,
+					 const uint16_t *scanout)
+{
+	unsigned i;
+	unsigned mismatches = 0;
+
+	panel_control_pinmux();
+	panel_config_outputs();
+	panel_bus_idle();
+	panel_cmd(ST7789_CASET);
+	panel_data((uint8_t)(x >> 8));
+	panel_data((uint8_t)(x & 0xff));
+	panel_data((uint8_t)(x >> 8));
+	panel_data((uint8_t)(x & 0xff));
+	panel_cmd(ST7789_RASET);
+	panel_data((uint8_t)(y >> 8));
+	panel_data((uint8_t)(y & 0xff));
+	panel_data((uint8_t)((y + count - 1u) >> 8));
+	panel_data((uint8_t)((y + count - 1u) & 0xff));
+	panel_cmd(ST7789_RAMRD);
+	panel_config_data_input();
+	(void)panel_read_data();
+	for (i = 0; i < count; i++) {
+		uint16_t got = panel_read_data();
+		uint16_t swapped = (uint16_t)((got >> 8) | (got << 8));
+		unsigned o;
+		unsigned matched = 0;
+
+		/* The vendor MADCTL may mirror GRAM; accept any orientation. */
+		for (o = 0; o < 4u; o++) {
+			unsigned gx = (o & 1u) ? WIDTH - 1u - x : x;
+			unsigned gy = (o & 2u) ? HEIGHT - 1u - (y + i) : y + i;
+			uint16_t expect = scanout[gy * WIDTH + gx];
+
+			if (got == expect || swapped == expect) {
+				matched = 1;
+				break;
+			}
+		}
+		if (!matched)
+			mismatches++;
+	}
+	panel_config_data_output();
+	panel_bus_idle();
+	return mismatches;
+}
+
+/*
+ * Opt-in post-handoff panel verification (SF2000_PANEL_VERIFY=1).  After
+ * the RGB handoff proves the GMA latch, re-read sample GRAM pixels over
+ * the MCU bus and compare them with the scanout buffer.  A mismatch means
+ * the panel lost its frame origin (the intermittent "TV static" scramble):
+ * repair in place by running the proven cold-panel sequence and
+ * re-presenting instead of leaving the session scrambled.  The probe itself
+ * takes the shared pads, so the healthy path re-arms the TE/RGB stream.
+ */
+static void panel_verify_and_repair(uint32_t gma_desc_phys)
+{
+	static const struct {
+		unsigned x, y;
+	} samples[] = {
+		{ 0u, 0u }, { WIDTH - 1u, 0u }, { 0u, HEIGHT - 1u },
+		{ WIDTH - 1u, HEIGHT - 1u }, { WIDTH / 2u, HEIGHT / 2u },
+		{ WIDTH / 2u, 0u }, { WIDTH / 2u, HEIGHT - 1u },
+		{ 0u, HEIGHT / 2u }, { WIDTH - 1u, HEIGHT / 2u },
+	};
+	const uint16_t *scanout = (const uint16_t *)(gma_ram + GMA_FRAME_OFF);
+	int was_streaming = panel_te_streaming;
+	unsigned i;
+	unsigned mismatches = 0;
+
+	if (!panel_enabled)
+		return;
+	for (i = 0; i < ARRAY_SIZE(samples); i++)
+		mismatches += panel_verify_gram_column(samples[i].x,
+						      samples[i].y, 1u, scanout);
+	/* panel_control_pinmux() clears the streaming flag; restore and re-arm. */
+	panel_te_streaming = was_streaming;
+	if (was_streaming)
+		panel_te_rearm();
+	if (mismatches == 0u) {
+		progress_mark("screen-panel-verify-ok", 0x3fu,
+			      ARRAY_SIZE(samples));
+		log_line("sf2000-screen: panel verify ok\n");
+		return;
+	}
+	if (mismatches < 2u) {
+		/* A single torn sample can trip one pixel; only repair when the
+		 * panel is broadly wrong (random garbage gives ~all mismatches). */
+		progress_mark("screen-panel-verify-suspect", 0x3fu, mismatches);
+		return;
+	}
+	{
+		char vline[160];
+
+		progress_mark("screen-panel-verify-scrambled", 0x3fu, mismatches);
+		snprintf(vline, sizeof(vline),
+			 "sf2000-screen: panel verify scrambled mismatches=%u; re-init\n",
+			 mismatches);
+		log_line(vline);
+	}
+	/* Recovery mirrors the proven cold-boot display sequence. */
+	panel_reset_sf2000();
+	watchdog_pet();
+	panel_apply_init_sequence(st7789_sf2000_init);
+	watchdog_pet();
+	panel_push_frame(0);
+	(void)ge_prepare_scanout();
+	panel_rgb_engine_prepare();
+	panel_rgb_bus_connect();
+	panel_te_stream_start(1);
+	panel_te_streaming = 1;
+	present_frame();
+	if (panel_wait_gma_raster(gma_desc_phys) == 0)
+		progress_mark("screen-panel-verify-repaired", 0x3fu,
+			      mismatches);
+	else
+		progress_mark("screen-panel-verify-repair-latch-fail", 0x3fu,
+			      mismatches);
+}
+
 static void panel_set_madctl(uint8_t madctl)
 {
 	if (!panel_enabled)
@@ -5123,6 +5255,17 @@ static void run_direct_console(unsigned *frame)
 	progress_mark("screen-first-present-done", 0x3fu, SCREEN_TAG);
 	performance_mark("screen-rgb-ready-us", performance_begin_us);
 	log_gma_ready();
+	/*
+	 * Opt-in panel verification (SF2000_PANEL_VERIFY=1): re-read a few
+	 * GRAM pixels over the MCU bus and compare with the scanout buffer to
+	 * catch the intermittent post-handoff "TV static" scramble, and repair
+	 * it in place instead of leaving the session scrambled.
+	 */
+	if (bootloader_handoff &&
+	    (env_is((const char *const *)environ, "SF2000_PANEL_VERIFY", "1") ||
+	     cmdline_contains("SF2000_PANEL_VERIFY=1") ||
+	     access("/mnt/sd/sf2000/panel-verify", F_OK) == 0))
+		panel_verify_and_repair(gma_desc_phys);
 
 handoff_complete:
 	if (!cached_render_frame)
