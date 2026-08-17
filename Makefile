@@ -1200,8 +1200,16 @@ $(LINUX_SRC)/Makefile:
 	rm -rf '$(LINUX_SRC)'
 	mkdir -p '$(LINUX_SRC)'
 	tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1
+	# Prune the tree down to what this port builds; see scripts/kernel-slim.sh.
+	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
 
-$(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
+# Re-prune (cheap, idempotent) whenever the slim script changes; the stamp
+# also forces a re-patch of the re-pruned tree without a full re-extract.
+$(LINUX_SRC)/.slimmed: $(LINUX_SRC)/Makefile scripts/kernel-slim.sh
+	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
+	touch '$@'
+
+$(LINUX_SRC)/.patched: $(LINUX_SRC)/.slimmed $(LINUX_PATCHES)
 	@if test -e '$@'; then \
 		printf 'linux patch series changed; applying incrementally in %s\n' '$(LINUX_SRC)'; \
 	fi
@@ -1527,6 +1535,12 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable INITRAMFS_COMPRESSION_NONE \
 		--disable INITRAMFS_COMPRESSION_LZ4 \
 		--enable RD_GZIP \
+		--disable RD_BZIP2 \
+		--disable RD_LZMA \
+		--disable RD_XZ \
+		--disable RD_LZO \
+		--disable RD_LZ4 \
+		--disable RD_ZSTD \
 		--enable DEVTMPFS \
 		--enable DEVTMPFS_MOUNT \
 		--enable PROC_FS \
