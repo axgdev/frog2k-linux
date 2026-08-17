@@ -24,7 +24,7 @@ The QEMU checkout defaults to `../sf2000_qemu`. Override it when necessary:
 make QEMU_DIR=/path/to/sf2000_qemu smoke-linux-buildroot-display
 ```
 
-## Why Buildroot still builds a toolchain
+## Toolchains
 
 The SF2000 has no MMU, so normal dynamically interpreted Linux ELF executables
 cannot be used. Its default userspace is entirely static-PIE ELF. Optional
@@ -44,7 +44,38 @@ does not provide the Linux/uClibc runtime. Substituting it for the Buildroot
 toolchain would create binaries that the no-MMU kernel cannot use as normal
 Linux processes.
 
-Buildroot is therefore retained for the root filesystem and applications. Its
+### Prebuilt external toolchain
+
+Building the Buildroot toolchain is the dominant cost of a first build (many
+GB of `host/` output). A prebuilt crosstool-ng uClibc toolchain can replace it:
+
+```sh
+make EXTERNAL_TOOLCHAIN=1 \
+	TOOLCHAIN_DIR=/path/to/extracted/toolchain-prefix \
+	BUILDROOT_TARGET_TUPLE=mipsel-unknown-linux-uclibc \
+	linux-asd
+```
+
+The toolchain must be a `mipsel` uClibc toolchain that provides the static-PIE
+startup (`rcrt1.o`, `crti.o`, `crtn.o` in the sysroot) and the PIC crt objects
+(`crtbeginS.o`/`crtendS.o`), exactly as the Buildroot toolchain does. In this
+mode the toolchain stamp only verifies those pieces instead of building them,
+so the kernel, the boot loader, and every Makefile-built static-PIE binary
+compile against the prebuilt toolchain and no Buildroot toolchain build
+happens. `LINUX_SRC`/`BUILDROOT_WORK` remain overridable if you also want to
+keep the kernel and Buildroot work trees out of `/tmp`.
+
+A crosstool-ng gcc startfile spec lists `-static` before `-static-pie`, so
+`-static -static-pie` (what Buildroot packages such as BusyBox emit when
+`CONFIG_STATIC=y`) selects the non-PIC `crt1.o` and the MIPS static-PIE link
+fails with `R_MIPS_HI16` against `_gp`. In external-toolchain mode the build
+generates a gcc specs override from the toolchain's own `-dumpspecs` (with the
+`static-pie:rcrt1.o` clause moved ahead of `static:crt1.o`) into
+`build/external-toolchain/static-pie.specs` and injects it into every package
+link through `BR2_TARGET_LDFLAGS`, so the rootfs packages link as static-PIE
+`ET_DYN` exactly like the Makefile-built binaries.
+
+Buildroot is otherwise retained for the root filesystem and applications. Its
 output is kept outside this repository and reused across builds; it is not
 rebuilt unless its configuration or toolchain inputs change.
 
