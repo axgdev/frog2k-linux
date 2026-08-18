@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sf2000-linux <sf2000-linux@example.invalid>
+Subject: [PATCH] toolchain: support GCC 16 custom external toolchains
+
+The custom external toolchain gcc-version choice stops at GCC 15, so the
+toolchain version probe rejects a gcc 16.x toolchain ("expected 15.x, got
+16.2.0"). Add a GCC_16 option and the matching BR2_TOOLCHAIN_GCC_AT_LEAST_16
+symbol so prebuilt uClibc toolchains built with crosstool-ng gcc 16 can be
+selected.
+
+--- a/toolchain/Config.in
++++ b/toolchain/Config.in
+@@ -848,9 +848,14 @@
+ 	bool
+ 	select BR2_TOOLCHAIN_GCC_AT_LEAST_14
+ 
++config BR2_TOOLCHAIN_GCC_AT_LEAST_16
++	bool
++	select BR2_TOOLCHAIN_GCC_AT_LEAST_15
++
+ # This order guarantees that the highest version is set, as kconfig
+ # stops affecting a value on the first matching default.
+ config BR2_TOOLCHAIN_GCC_AT_LEAST
++	default "16"	if BR2_TOOLCHAIN_GCC_AT_LEAST_16
+ 	string
+ 	default "15"	if BR2_TOOLCHAIN_GCC_AT_LEAST_15
+ 	default "14"	if BR2_TOOLCHAIN_GCC_AT_LEAST_14
+--- a/toolchain/toolchain-external/toolchain-external-custom/Config.in.options
++++ b/toolchain/toolchain-external/toolchain-external-custom/Config.in.options
+@@ -46,6 +46,10 @@
+ 	  Set to the gcc version that is used by your external
+ 	  toolchain.
+ 
++config BR2_TOOLCHAIN_EXTERNAL_GCC_16
++	bool "16.x"
++	select BR2_TOOLCHAIN_GCC_AT_LEAST_16
++
+ config BR2_TOOLCHAIN_EXTERNAL_GCC_15
+ 	bool "15.x"
+ 	depends on !BR2_ARCH_NEEDS_GCC_AT_LEAST_16

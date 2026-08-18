@@ -85,31 +85,6 @@ static void log_message(const char *message)
 	write_all(1, message);
 }
 
-static void log_message_long(const char *prefix, long value)
-{
-	static const char digits[] = "0123456789abcdef";
-	char buf[64];
-	unsigned int i = 0;
-	unsigned int v = (unsigned int)value;
-	unsigned int p;
-
-	for (p = 0; prefix[p] && i + 1 < sizeof(buf); p++)
-		buf[i++] = prefix[p];
-	if (i + 10 >= sizeof(buf)) {
-		buf[sizeof(buf) - 2] = '\n';
-		buf[sizeof(buf) - 1] = 0;
-		log_message(buf);
-		return;
-	}
-	buf[i++] = '0';
-	buf[i++] = 'x';
-	for (p = 0; p < 8; p++)
-		buf[i++] = digits[(v >> ((7 - p) * 4)) & 0xf];
-	buf[i++] = '\n';
-	buf[i] = 0;
-	log_message(buf);
-}
-
 static __attribute__((noinline)) int open_mmcb_block(void)
 {
 	long fd;

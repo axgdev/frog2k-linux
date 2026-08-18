@@ -114,16 +114,59 @@ BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/nu
 BUILDROOT_PATCH_FILES := $(shell find '$(BUILDROOT_PATCHES)' -type f 2>/dev/null)
 BUILDROOT_CORE_PATCHES := $(wildcard buildroot/patches/buildroot/*.patch)
 BUILDROOT_CPIO := $(BUILD_DIR)/rootfs-buildroot.cpio
-BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
 BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
 BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
 BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
-BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
-BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-strip
 BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
-PIE_SYSROOT := $(BUILDROOT_OUT)/host/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
 PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
+
+# Prebuilt external toolchain support.  Set EXTERNAL_TOOLCHAIN=1 and point
+# TOOLCHAIN_DIR at the extracted toolchain prefix and BUILDROOT_TARGET_TUPLE at
+# its tuple to skip the Buildroot toolchain build entirely (a large time and
+# disk saving).  The toolchain must be a mipsel uClibc toolchain that provides
+# the static-PIE startup (rcrt1.o) and PIC crt objects, exactly as the
+# Buildroot toolchain does; the toolchain stamp then only verifies those
+# pieces instead of building them.
+EXTERNAL_TOOLCHAIN ?= 0
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+# The prebuilt crosstool-ng toolchain uses its own tuple; default to it so the
+# common invocation is just `make EXTERNAL_TOOLCHAIN=1 TOOLCHAIN_DIR=<prefix>`.
+ifeq ($(BUILDROOT_TARGET_TUPLE),mipsel-buildroot-linux-uclibc)
+BUILDROOT_TARGET_TUPLE := mipsel-unknown-linux-uclibc
+endif
+BUILDROOT_TOOLCHAIN_STAMP := $(BUILD_DIR)/external-toolchain/.stamp-verified
+BUILDROOT_CC := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
+BUILDROOT_STRIP := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-strip
+PIE_SYSROOT := $(TOOLCHAIN_DIR)/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
+# The crosstool-ng gcc startfile spec lists -static before -static-pie, so
+# `-static -static-pie` (which Buildroot packages such as BusyBox emit) selects
+# the non-PIC crt1.o and the MIPS static-PIE link fails with R_MIPS_HI16
+# against _gp.  Generate a specs override that lets -static-pie win and hand it
+# to every package link through BR2_TARGET_LDFLAGS.
+EXTERNAL_SPECS := $(BUILD_DIR)/external-toolchain/static-pie.specs
+else
+BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
+BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
+BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-strip
+PIE_SYSROOT := $(BUILDROOT_OUT)/host/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
+endif
+
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+# Regenerate the specs override from the toolchain's own -dumpspecs output so
+# it stays in sync with that toolchain's startfile spec.
+$(EXTERNAL_SPECS): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+	mkdir -p '$(dir $@)'
+	'$(BUILDROOT_CC)' -dumpspecs | \
+		awk '/^\*startfile:/{p=1; print; next} p && /^\*[a-zA-Z_]+:/{exit} p{print}' | \
+		sed 's/static:crt1\.o%s;[[:space:]]*static-pie:rcrt1\.o%s;/static-pie:rcrt1.o%s; static:crt1.o%s;/' > '$@'
+endif
+
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+# The specs override must exist before the rootfs packages link.
+$(BUILDROOT_TARGET_STAMP): $(EXTERNAL_SPECS)
+endif
+
 BUILDROOT_PIE_CFLAGS := -Os -Wall -Wextra -march=mips32 -mabi=32 -msoft-float \
 	-fPIC -mabicalls -ffunction-sections -fdata-sections
 BUILDROOT_PIE_LDFLAGS := -nostartfiles -static -Wl,-pie \
@@ -416,7 +459,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
-	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-gb300 \
+	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-44100 \
+	smoke-linux-buildroot-audio-gb300 \
 	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
@@ -449,6 +493,7 @@ help:
 	@printf '%s\n' \
 		'make check                 fast host-side regression suite' \
 		'make check-vendor          source/vendor GE parity tests' \
+		'make EXTERNAL_TOOLCHAIN=1 TOOLCHAIN_DIR=<prefix> [BUILDROOT_TARGET_TUPLE=<tuple>] linux-buildroot-asd  use a prebuilt uClibc toolchain instead of building one' \
 		'make linux-buildroot-asd   build the physical-device artifact' \
 		'make physical-linux-asd    explicit alias for the physical buildroot ASD' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
@@ -814,7 +859,7 @@ $(BUILDROOT_SRC)/.patched: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_CORE_PATCHES)
 	done
 	touch '$@'
 
-$(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
+$(BUILDROOT_OUT)/.config: Makefile $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	mkdir -p '$(BUILDROOT_OUT)'
 	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
 	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
@@ -822,13 +867,58 @@ $(BUILDROOT_OUT)/.config: $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUI
 		--set-str PACKAGE_BUSYBOX_CONFIG '$(abspath $(BUILDROOT_BUSYBOX_CONFIG))' \
 		--set-str ROOTFS_OVERLAY '$(abspath $(BUILDROOT_OVERLAY)) $(abspath $(BUILDROOT_GENERATED_OVERLAY))' \
 		--set-str ROOTFS_DEVICE_TABLE 'system/device_table.txt $(abspath $(BUILDROOT_DEVICE_TABLE))'
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+	# Point Buildroot's own target build (busybox etc.) at the prebuilt
+	# toolchain instead of building a second one.  The feature flags below
+	# match the crosstool-ng uClibc toolchain this mode is designed for:
+	# gcc 16, uClibc-ng without threads/locale, wchar, C++, SSP.  Buildroot
+	# probes the toolchain and errors if a flag is wrong.
+	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
+		--disable BR2_TOOLCHAIN_BUILDROOT_UCLIBC \
+		--disable BR2_TOOLCHAIN_BUILDROOT_CXX \
+		--enable BR2_TOOLCHAIN_EXTERNAL \
+		--enable BR2_TOOLCHAIN_EXTERNAL_CUSTOM \
+		--enable BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED \
+		--set-str BR2_TOOLCHAIN_EXTERNAL_PATH '$(abspath $(TOOLCHAIN_DIR))' \
+		--set-str BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX '$(BUILDROOT_TARGET_TUPLE)' \
+		--enable BR2_TOOLCHAIN_EXTERNAL_GCC_16 \
+		--enable BR2_TOOLCHAIN_EXTERNAL_HEADERS_7_0 \
+		--enable BR2_TOOLCHAIN_EXTERNAL_CUSTOM_UCLIBC \
+		--enable BR2_TOOLCHAIN_EXTERNAL_WCHAR \
+		--disable BR2_TOOLCHAIN_EXTERNAL_LOCALE \
+		--disable BR2_TOOLCHAIN_EXTERNAL_HAS_THREADS \
+		--enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP \
+		--enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP_STRONG \
+		--enable BR2_TOOLCHAIN_EXTERNAL_CXX \
+		--disable BR2_TOOLCHAIN_EXTERNAL_FORTRAN \
+		--disable BR2_TOOLCHAIN_EXTERNAL_OPENMP \
+		--set-str BR2_TOOLCHAIN_GCC_AT_LEAST 16 \
+		--enable BR2_SSP_NONE \
+		--disable BR2_SSP_REGULAR \
+		--disable BR2_SSP_STRONG \
+		--disable BR2_SSP_ALL \
+		--set-str BR2_TARGET_LDFLAGS "-static-pie -specs=$(abspath $(EXTERNAL_SPECS))"
+endif
 	$(BUILDROOT_MAKE) olddefconfig
 
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+# With a prebuilt toolchain the stamp is a verification gate, not a build.
+$(BUILDROOT_TOOLCHAIN_STAMP): Makefile
+	mkdir -p '$(dir $@)'
+	test -x '$(BUILDROOT_CC)'
+	test -f '$(PIE_SYSROOT)/rcrt1.o'
+	test -f '$(PIE_SYSROOT)/crti.o'
+	test -f '$(PIE_SYSROOT)/crtn.o'
+	test -f '$(PIE_SYSROOT)/libc.a'
+	test -f "$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o)"
+	touch '$@'
+else
 $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' toolchain \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
 	touch '$@'
+endif
 
 $(PIE_STAMP): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
@@ -1111,8 +1201,27 @@ $(LINUX_SRC)/Makefile:
 	rm -rf '$(LINUX_SRC)'
 	mkdir -p '$(LINUX_SRC)'
 	tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1
+	# Prune the tree down to what this port builds; see scripts/kernel-slim.sh.
+	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
 
-$(LINUX_SRC)/.patched: $(LINUX_SRC)/Makefile $(LINUX_PATCHES)
+# Re-prune whenever the slim script changes.  The prune deletes source and
+# header files from directories that only need their Kconfig/Makefile shells,
+# so it must never run on an already-patched tree: it would delete files the
+# patch series added (sf2000-pcm.c, sf2000-ge.c, ...) and leave the tree in a
+# state where no patch can apply forward or reverse.  When the tree is
+# patched, re-extract from the tarball first so the subsequent prune starts
+# from pristine content again.
+$(LINUX_SRC)/.slimmed: $(LINUX_SRC)/Makefile scripts/kernel-slim.sh
+	@if test -e '$(LINUX_SRC)/.patched'; then \
+		printf 'slim script changed on a patched tree; re-extracting cleanly\n'; \
+		rm -rf '$(LINUX_SRC)'; \
+		mkdir -p '$(LINUX_SRC)'; \
+		tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1; \
+	fi
+	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
+	touch '$@'
+
+$(LINUX_SRC)/.patched: $(LINUX_SRC)/.slimmed $(LINUX_PATCHES)
 	@if test -e '$@'; then \
 		printf 'linux patch series changed; applying incrementally in %s\n' '$(LINUX_SRC)'; \
 	fi
@@ -1438,6 +1547,12 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--disable INITRAMFS_COMPRESSION_NONE \
 		--disable INITRAMFS_COMPRESSION_LZ4 \
 		--enable RD_GZIP \
+		--disable RD_BZIP2 \
+		--disable RD_LZMA \
+		--disable RD_XZ \
+		--disable RD_LZO \
+		--disable RD_LZ4 \
+		--disable RD_ZSTD \
 		--enable DEVTMPFS \
 		--enable DEVTMPFS_MOUNT \
 		--enable PROC_FS \
@@ -2471,7 +2586,7 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ALSA mono DMA presenter ready' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -q 'sf2000-frontend: timing .*audio_core_hz=22050 audio_output_hz=32000' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: timing .*audio_core_hz=22050 audio_output_hz=22050' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
@@ -3460,6 +3575,36 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 	dd if='$(BUILD_DIR)'/sf2000-audio.wav bs=1 skip=44 2>/dev/null | \
+		od -An -v -td2 | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
+			END { exit !found }'
+
+run-linux-buildroot-audio-44100: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	rm -f '$(BUILD_DIR)'/sf2000-audio-44100.wav
+	(sleep 6; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav44100 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' \
+		-audiodev wav,id=sf2000wav44100,path='$(BUILD_DIR)'/sf2000-audio-44100.wav \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console 2>&1
+
+smoke-linux-buildroot-audio-44100: run-linux-buildroot-audio-44100
+	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -q 'sf2000-audio: ALSA PCM DMA tone active rate=44100' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -q 'sf2000: audio guest DMA active' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console
+	! grep -q 'sf2000-audio: ALSA PCM write failed' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	test -s '$(BUILD_DIR)'/sf2000-audio-44100.wav
+	dd if='$(BUILD_DIR)'/sf2000-audio-44100.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
 			END { exit !found }'

@@ -1,0 +1,157 @@
+[PATCH] sf2000: add native multi-rate SND0 playback
+
+Program the HC15xx audio PLL and I2S M/N divisors per rate instead of
+locking the PCM to 32 kHz, so 44.1 kHz and 48 kHz cores play at their
+native rate.  The register contract (recovered from libauddrv's
+apll_dai_hw_params / i2s_dai_hw_params) is: the PLL word at SYS+0x148 is
+((a0 / (rate * 384)) << 23) | ((a0 / (rate * 32)) & 0x3ff) with a0 =
+294.912 MHz for the 32k/48k family and 270.9504 MHz for the 44.1k
+family; the I2S M/N divisors at SYS+0x478/0x47a select the family
+(M=284/N=13 for 32k/48k, M=281/N=14 for 44.1k) and SYS+0x470 control
+bits 16+21 are set for both.  The 32 kHz row keeps the proven
+0x0c000120 value.  Supported rates: 8k, 11.025k, 12k, 16k, 22.05k,
+24k, 32k, 44.1k, 48k.
+
+--- a/sound/drivers/sf2000-pcm.c	2026-08-18 09:00:00.000000000 +0100
++++ b/sound/drivers/sf2000-pcm.c	2026-08-18 09:00:00.000000000 +0100
+@@ -59,9 +59,13 @@
+ 	BIT(20) | SF2000_DMA_ENABLE)
+ #define SF2000_DMA_STEREO_S16_LE	(BIT(16) | SF2000_DMA_MONO_PACK | \
+ 	SF2000_DMA_LEFT_ALIGN | BIT(20) | SF2000_DMA_ENABLE)
+-#define SF2000_AUDIO_PLL_32K	0x0c000120
++#define SF2000_SYS_I2S_DIV_N	0x478
++#define SF2000_SYS_I2S_DIV_M	0x47a
++#define SF2000_SYS_I2S_DIV_CTL	0x470
++#define SF2000_I2S_DIV_CTL_BITS	(BIT(16) | BIT(21))
+ #define SF2000_VOLUME_90		0xcb
+-#define SF2000_RATE		32000
++#define SF2000_RATE_MIN		8000
++#define SF2000_RATE_MAX		48000
+ #define SF2000_RING_GUARD	64
+ #define SF2000_BUFFER_MAX	(128 * 1024)
+ #define SF2000_PERIOD_MIN	256
+@@ -92,14 +96,60 @@
+ 	bool ever_armed;
+ };
+ 
++/*
++ * HC15xx SND0 audio clock contract recovered from the vendor libauddrv
++ * (apll_dai_hw_params / i2s_dai_hw_params).  The PLL word at SYS+0x148 is
++ * ((a0 / (rate * 384)) << 23) | ((a0 / (rate * 32)) & 0x3ff) with a0 =
++ * 294.912 MHz for the 32 kHz/48 kHz family and 270.9504 MHz for the 44.1 kHz
++ * family.  The I2S M/N divisors at SYS+0x478/0x47a select the family:
++ * M=284/N=13 (32k/48k) or M=281/N=14 (44.1k); SYS+0x470 control bits 16 and
++ * 21 are set for both.  The 32 kHz row is the proven hardware value.
++ */
++struct sf2000_pcm_rate {
++	unsigned int rate;
++	u32 pll;
++	u32 i2s_div;		/* (M << 16) | N */
++};
++
++static const struct sf2000_pcm_rate sf2000_pcm_rate_table[] = {
++	{ 8000,  0x30000080, 0x011c000d },
++	{ 11025, 0x20000300, 0x0119000e },
++	{ 12000, 0x20000300, 0x011c000d },
++	{ 16000, 0x18000240, 0x011c000d },
++	{ 22050, 0x10000180, 0x0119000e },
++	{ 24000, 0x10000180, 0x011c000d },
++	{ 32000, 0x0c000120, 0x011c000d },
++	{ 44100, 0x080000c0, 0x0119000e },
++	{ 48000, 0x080000c0, 0x011c000d },
++};
++
++static const unsigned int sf2000_pcm_rates[] = {
++	8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
++};
++
++static const struct snd_pcm_hw_constraint_list sf2000_pcm_rate_list = {
++	.count = ARRAY_SIZE(sf2000_pcm_rates),
++	.list = sf2000_pcm_rates,
++};
++
++static const struct sf2000_pcm_rate *sf2000_pcm_rate_lookup(unsigned int rate)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(sf2000_pcm_rate_table); i++)
++		if (sf2000_pcm_rate_table[i].rate == rate)
++			return &sf2000_pcm_rate_table[i];
++	return NULL;
++}
++
+ static const struct snd_pcm_hardware sf2000_pcm_hardware = {
+ 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER |
+ 		SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
+ 		SNDRV_PCM_INFO_BATCH | SNDRV_PCM_INFO_NO_REWINDS,
+ 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+-	.rates = SNDRV_PCM_RATE_32000,
+-	.rate_min = SF2000_RATE,
+-	.rate_max = SF2000_RATE,
++	.rates = SNDRV_PCM_RATE_KNOT,
++	.rate_min = SF2000_RATE_MIN,
++	.rate_max = SF2000_RATE_MAX,
+ 	.channels_min = 1,
+ 	.channels_max = 1,
+ 	.buffer_bytes_max = SF2000_BUFFER_MAX,
+@@ -460,6 +510,10 @@
+ 
+ 	substream->runtime->hw = sf2000_pcm_hardware;
+ 	substream->runtime->hw.channels_max = chip->gb300 ? 2 : 1;
++	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
++		SNDRV_PCM_HW_PARAM_RATE, &sf2000_pcm_rate_list);
++	if (ret)
++		return ret;
+ 	ret = snd_pcm_hw_constraint_step(substream->runtime, 0,
+ 		SNDRV_PCM_HW_PARAM_BUFFER_BYTES, 16);
+ 	if (ret)
+@@ -497,6 +551,7 @@
+ {
+ 	struct sf2000_pcm *chip = snd_pcm_substream_chip(substream);
+ 	struct snd_pcm_runtime *runtime = substream->runtime;
++	const struct sf2000_pcm_rate *rate;
+ 	size_t bytes = frames_to_bytes(runtime, runtime->buffer_size);
+ 
+ 	if (!runtime->dma_area || !bytes || bytes > SF2000_BUFFER_MAX ||
+@@ -506,8 +561,14 @@
+ 		return -EINVAL;
+ 
+ 	sf2000_dac_init(chip);
+-	/* 294.912 MHz / 24 = 12.288 MHz; / (32 kHz * 32) = 288. */
+-	writel(SF2000_AUDIO_PLL_32K, chip->sys + SF2000_SYS_AUDIO_PLL);
++	rate = sf2000_pcm_rate_lookup(runtime->rate);
++	if (!rate)
++		return -EINVAL;
++	writel(rate->pll, chip->sys + SF2000_SYS_AUDIO_PLL);
++	writew(rate->i2s_div & 0xffff, chip->sys + SF2000_SYS_I2S_DIV_N);
++	writew(rate->i2s_div >> 16, chip->sys + SF2000_SYS_I2S_DIV_M);
++	sf2000_update_bits(chip->sys + SF2000_SYS_I2S_DIV_CTL,
++		SF2000_I2S_DIV_CTL_BITS, SF2000_I2S_DIV_CTL_BITS);
+ 	sf2000_update_bits(chip->sys + SF2000_SYS_AUDIO_GATE,
+ 		BIT(14), BIT(14));
+ 	sf2000_update_bits(chip->snd + SF2000_SND_CTL50,
+@@ -540,11 +601,12 @@
+ 	chip->concealing = false;
+ 	chip->ever_armed = false;
+ 	dev_info_once(chip->dev,
+-		"DMA base=%pad bytes=%zu period=%lu channels=%u config=%08x pll=%08x\n",
++		"DMA base=%pad bytes=%zu period=%lu channels=%u rate=%u config=%08x pll=%08x mn=%08x\n",
+ 		&runtime->dma_addr, bytes, runtime->period_size,
+-		runtime->channels,
++		runtime->channels, runtime->rate,
+ 		readl(chip->snd + SF2000_SND_DMA_SIZE),
+-		readl(chip->sys + SF2000_SYS_AUDIO_PLL));
++		readl(chip->sys + SF2000_SYS_AUDIO_PLL),
++		readl(chip->sys + SF2000_SYS_I2S_DIV_N));
+ 	return 0;
+ }
+ 
+@@ -681,7 +743,7 @@
+ 	if (ret)
+ 		goto err_card;
+ 	platform_set_drvdata(pdev, card);
+-	dev_info(dev, "32 kHz S16_LE PCM playback ready (%s) channels=%u build=audio-route-v3 route=%s l27=%u l_in=%08x l_dir=%08x l_out=%08x r_dir=%08x r_out=%08x\n",
++	dev_info(dev, "S16_LE PCM playback ready (%s) channels=%u build=audio-route-v3 route=%s l27=%u l_in=%08x l_dir=%08x l_out=%08x r_dir=%08x r_out=%08x\n",
+ 		chip->irq >= 0 ? "IRQ" : "polling",
+ 		chip->gb300 ? 2 : 1,
+ 		chip->gb300 ? "gb300_l15" : "sf2000_r07",
