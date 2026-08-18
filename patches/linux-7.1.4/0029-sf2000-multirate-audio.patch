@@ -1,160 +1,63 @@
-[PATCH] sf2000: fix per-chip 44.1 kHz I2S divisors and max volume
+[PATCH] sf2000: use the correct per-chip 44.1 kHz I2S divisors
 
-Decoding the vendor libauddrv apll_dai_hw_params disassembly shows the
-I2S M/N divisors at SYS+0x478/0x47a and the SYS+0x470/0x474 control
-words depend on the clock family AND the chip ID (high 16 bits of
-SYS+0x00).  HC1512 (SF2000) uses M=284/N=13 for the 48 kHz family and
-M=316/N=7 with SYS+0x470 bit 3 cleared and SYS+0x474 = 0x001b6000 for
-the 44.1 kHz family; the non-1512 chip (GB300) uses M=344/N=7 with
-0x470 bit 3 cleared and 0x474 = 0x00106000 for 48 kHz and M=281/N=14
-for 44.1 kHz.  The multirate table used the GB300 44.1 kHz divisors
-(M=281/N=14) on the SF2000, which clocks the I2S bit stream ~0.6x off
-and makes native 44.1 kHz/22.05 kHz playback sound pitched-down and
-dull.  Also raise the SND0+0x92 volume byte from 0xcb to 0xff, matching
-the vendor volume table's maximum (extracted from the UniFrog firmware).
-diff --git a/sound/drivers/sf2000-pcm.c b/sound/drivers/sf2000-pcm.c
-index 954dc59..859ae12 100644
+The vendor libauddrv (verified against the linked copy in the UniFrog
+firmware) branches on the chip ID for the I2S M/N divisors: HC1512
+(SF2000) uses M=284/N=13 for the 48 kHz family and M=281/N=14 for the
+44.1 kHz family with only SYS+0x470 control bits 16 and 21 set; the
+non-1512 chip (GB300) uses M=344/N=7 with 0x474=0x00106000 for 48 kHz
+and M=316/N=7 with 0x474=0x001b6000 for 44.1 kHz, both clearing
+SYS+0x470 bit 3.
+
+The previous table applied the GB300 44.1 kHz divisors (M=316/N=7) to
+the SF2000, which clocks the I2S bit stream ~2.25x fast and makes
+native 44.1/22.05 kHz playback sound high-pitched (kid voice).  Restore
+M=281/N=14 for the SF2000 and move M=316/N=7 to the GB300 row where the
+firmware puts it.
+---
+ sound/drivers/sf2000-pcm.c | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
+
 --- a/sound/drivers/sf2000-pcm.c
 +++ b/sound/drivers/sf2000-pcm.c
-@@ -62,8 +62,9 @@
- #define SF2000_SYS_I2S_DIV_N	0x478
- #define SF2000_SYS_I2S_DIV_M	0x47a
- #define SF2000_SYS_I2S_DIV_CTL	0x470
-+#define SF2000_SYS_I2S_DIV_CTL2	0x474
- #define SF2000_I2S_DIV_CTL_BITS	(BIT(16) | BIT(21))
--#define SF2000_VOLUME_90		0xcb
-+#define SF2000_VOLUME_90		0xff
- #define SF2000_RATE_MIN		8000
- #define SF2000_RATE_MAX		48000
- #define SF2000_RING_GUARD	64
-@@ -101,28 +102,68 @@ struct sf2000_pcm {
-  * (apll_dai_hw_params / i2s_dai_hw_params).  The PLL word at SYS+0x148 is
-  * ((a0 / (rate * 384)) << 23) | ((a0 / (rate * 32)) & 0x3ff) with a0 =
-  * 294.912 MHz for the 32 kHz/48 kHz family and 270.9504 MHz for the 44.1 kHz
-- * family.  The I2S M/N divisors at SYS+0x478/0x47a select the family:
-- * M=284/N=13 (32k/48k) or M=281/N=14 (44.1k); SYS+0x470 control bits 16 and
-- * 21 are set for both.  The 32 kHz row is the proven hardware value.
-+ * family.  The 32 kHz row is the proven hardware value.
-+ *
-+ * The I2S M/N divisors at SYS+0x478/0x47a and the SYS+0x470/0x474 control
-+ * words are per clock family AND per chip.  libauddrv branches on the chip
-+ * ID (high 16 bits of SYS+0x00): HC1512 (SF2000) uses M=284/N=13 for the
-+ * 48 kHz family and M=316/N=7 with SYS+0x470 bit 3 cleared and
-+ * SYS+0x474 = 0x001b6000 for the 44.1 kHz family; the non-1512 chip (GB300)
-+ * uses M=344/N=7 with 0x470 bit 3 cleared and 0x474 = 0x00106000 for 48 kHz
-+ * and M=281/N=14 for 44.1 kHz.  SYS+0x470 control bits 16 and 21 are set for
-+ * every family.  The previous table used the GB300 44.1 kHz divisors
-+ * (M=281/N=14) on the SF2000, which clocks the I2S bit stream ~0.6x off and
-+ * makes native 44.1 kHz/22.05 kHz playback sound pitched-down and dull.
+@@ -107,13 +107,13 @@
+  * The I2S M/N divisors at SYS+0x478/0x47a and the SYS+0x470/0x474 control
+  * words are per clock family AND per chip.  libauddrv branches on the chip
+  * ID (high 16 bits of SYS+0x00): HC1512 (SF2000) uses M=284/N=13 for the
+- * 48 kHz family and M=316/N=7 with SYS+0x470 bit 3 cleared and
+- * SYS+0x474 = 0x001b6000 for the 44.1 kHz family; the non-1512 chip (GB300)
++ * 48 kHz family and M=281/N=14 for the 44.1 kHz family, with SYS+0x470
++ * control bits 16 and 21 set and nothing else; the non-1512 chip (GB300)
+  * uses M=344/N=7 with 0x470 bit 3 cleared and 0x474 = 0x00106000 for 48 kHz
+- * and M=281/N=14 for 44.1 kHz.  SYS+0x470 control bits 16 and 21 are set for
+- * every family.  The previous table used the GB300 44.1 kHz divisors
+- * (M=281/N=14) on the SF2000, which clocks the I2S bit stream ~0.6x off and
+- * makes native 44.1 kHz/22.05 kHz playback sound pitched-down and dull.
++ * and M=316/N=7 with 0x474 = 0x001b6000 for 44.1 kHz.  Values verified
++ * against the linked libauddrv in the UniFrog firmware.  Applying the GB300
++ * 44.1 kHz divisors (M=316/N=7) to the SF2000 clocks the bit stream ~2.25x
++ * fast (kid voice); M=281/N=14 is the correct SF2000 value.
   */
  struct sf2000_pcm_rate {
  	unsigned int rate;
- 	u32 pll;
--	u32 i2s_div;		/* (M << 16) | N */
-+	bool family44;		/* 44.1 kHz clock family */
+@@ -143,9 +143,7 @@
+ 	.div = 0x011c000d,	/* M=284 N=13 */
  };
- 
- static const struct sf2000_pcm_rate sf2000_pcm_rate_table[] = {
--	{ 8000,  0x30000080, 0x011c000d },
--	{ 11025, 0x20000300, 0x0119000e },
--	{ 12000, 0x20000300, 0x011c000d },
--	{ 16000, 0x18000240, 0x011c000d },
--	{ 22050, 0x10000180, 0x0119000e },
--	{ 24000, 0x10000180, 0x011c000d },
--	{ 32000, 0x0c000120, 0x011c000d },
--	{ 44100, 0x080000c0, 0x0119000e },
--	{ 48000, 0x080000c0, 0x011c000d },
-+	{ 8000,  0x30000080, false },
-+	{ 11025, 0x20000300, true  },
-+	{ 12000, 0x20000300, false },
-+	{ 16000, 0x18000240, false },
-+	{ 22050, 0x10000180, true  },
-+	{ 24000, 0x10000180, false },
-+	{ 32000, 0x0c000120, false },
-+	{ 44100, 0x080000c0, true  },
-+	{ 48000, 0x080000c0, false },
+ static const struct sf2000_i2s_config sf2000_i2s_sf2000_44k = {
+-	.div = 0x013c0007,	/* M=316 N=7 */
+-	.clear_div_ctl_bit3 = true,
+-	.div_ctl2 = 0x001b6000,
++	.div = 0x0119000e,	/* M=281 N=14 */
  };
- 
-+struct sf2000_i2s_config {
-+	u32 div;			/* (M << 16) | N for SYS+0x478/0x47a */
-+	bool clear_div_ctl_bit3;	/* clear SYS+0x470 bit 3 */
-+	u32 div_ctl2;		/* SYS+0x474 value, 0 = leave untouched */
-+};
-+
-+static const struct sf2000_i2s_config sf2000_i2s_sf2000_48k = {
-+	.div = 0x011c000d,	/* M=284 N=13 */
-+};
-+static const struct sf2000_i2s_config sf2000_i2s_sf2000_44k = {
+ static const struct sf2000_i2s_config sf2000_i2s_gb300_48k = {
+ 	.div = 0x01580007,	/* M=344 N=7 */
+@@ -153,7 +151,9 @@
+ 	.div_ctl2 = 0x00106000,
+ };
+ static const struct sf2000_i2s_config sf2000_i2s_gb300_44k = {
+-	.div = 0x0119000e,	/* M=281 N=14 */
 +	.div = 0x013c0007,	/* M=316 N=7 */
 +	.clear_div_ctl_bit3 = true,
 +	.div_ctl2 = 0x001b6000,
-+};
-+static const struct sf2000_i2s_config sf2000_i2s_gb300_48k = {
-+	.div = 0x01580007,	/* M=344 N=7 */
-+	.clear_div_ctl_bit3 = true,
-+	.div_ctl2 = 0x00106000,
-+};
-+static const struct sf2000_i2s_config sf2000_i2s_gb300_44k = {
-+	.div = 0x0119000e,	/* M=281 N=14 */
-+};
-+
-+static const struct sf2000_i2s_config *
-+sf2000_i2s_config(struct sf2000_pcm *chip, bool family44)
-+{
-+	if (chip->gb300)
-+		return family44 ? &sf2000_i2s_gb300_44k : &sf2000_i2s_gb300_48k;
-+	return family44 ? &sf2000_i2s_sf2000_44k : &sf2000_i2s_sf2000_48k;
-+}
-+
- static const unsigned int sf2000_pcm_rates[] = {
- 	8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
  };
-@@ -564,11 +605,25 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
- 	rate = sf2000_pcm_rate_lookup(runtime->rate);
- 	if (!rate)
- 		return -EINVAL;
--	writel(rate->pll, chip->sys + SF2000_SYS_AUDIO_PLL);
--	writew(rate->i2s_div & 0xffff, chip->sys + SF2000_SYS_I2S_DIV_N);
--	writew(rate->i2s_div >> 16, chip->sys + SF2000_SYS_I2S_DIV_M);
--	sf2000_update_bits(chip->sys + SF2000_SYS_I2S_DIV_CTL,
--		SF2000_I2S_DIV_CTL_BITS, SF2000_I2S_DIV_CTL_BITS);
-+	{
-+		const struct sf2000_i2s_config *i2s =
-+			sf2000_i2s_config(chip, rate->family44);
-+
-+		writel(rate->pll, chip->sys + SF2000_SYS_AUDIO_PLL);
-+		writew(i2s->div & 0xffff, chip->sys + SF2000_SYS_I2S_DIV_N);
-+		writew(i2s->div >> 16, chip->sys + SF2000_SYS_I2S_DIV_M);
-+		sf2000_update_bits(chip->sys + SF2000_SYS_I2S_DIV_CTL,
-+			SF2000_I2S_DIV_CTL_BITS, SF2000_I2S_DIV_CTL_BITS);
-+		if (i2s->clear_div_ctl_bit3)
-+			sf2000_update_bits(chip->sys + SF2000_SYS_I2S_DIV_CTL,
-+				BIT(3), 0);
-+		if (i2s->div_ctl2) {
-+			u32 value = readl(chip->sys + SF2000_SYS_I2S_DIV_CTL2);
-+
-+			writel((value & 0xff000000u) | i2s->div_ctl2,
-+				chip->sys + SF2000_SYS_I2S_DIV_CTL2);
-+		}
-+	}
- 	sf2000_update_bits(chip->sys + SF2000_SYS_AUDIO_GATE,
- 		BIT(14), BIT(14));
- 	sf2000_update_bits(chip->snd + SF2000_SND_CTL50,
-@@ -601,12 +656,15 @@ static int sf2000_pcm_prepare(struct snd_pcm_substream *substream)
- 	chip->concealing = false;
- 	chip->ever_armed = false;
- 	dev_info_once(chip->dev,
--		"DMA base=%pad bytes=%zu period=%lu channels=%u rate=%u config=%08x pll=%08x mn=%08x\n",
-+		"DMA base=%pad bytes=%zu period=%lu channels=%u rate=%u config=%08x pll=%08x mn=%08x ctl470=%08x ctl474=%08x vol=%02x\n",
- 		&runtime->dma_addr, bytes, runtime->period_size,
- 		runtime->channels, runtime->rate,
- 		readl(chip->snd + SF2000_SND_DMA_SIZE),
- 		readl(chip->sys + SF2000_SYS_AUDIO_PLL),
--		readl(chip->sys + SF2000_SYS_I2S_DIV_N));
-+		readl(chip->sys + SF2000_SYS_I2S_DIV_N),
-+		readl(chip->sys + SF2000_SYS_I2S_DIV_CTL),
-+		readl(chip->sys + SF2000_SYS_I2S_DIV_CTL2),
-+		readb(chip->snd + SF2000_SND_FADE + 2));
- 	return 0;
- }
  
+ static const struct sf2000_i2s_config *
