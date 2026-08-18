@@ -326,7 +326,9 @@ static void topology_snapshot(char *snapshot, size_t snapshot_size)
 		if (!directory)
 			continue;
 		while ((entry = readdir(directory)) != NULL) {
-			char path[256];
+			/* Room for the longest root plus a NAME_MAX name plus the
+			 * /device/name suffix without tripping -Wformat-truncation. */
+			char path[320];
 			int length;
 
 			if (entry->d_name[0] == '.')

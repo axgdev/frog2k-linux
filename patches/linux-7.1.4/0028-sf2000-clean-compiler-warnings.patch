@@ -1,0 +1,147 @@
+[PATCH] sf2000: silence kernel build warnings
+
+Add a shared header for the asm/diagnostic boot hooks so the
+definitions in setup.c, process.c, fault.c and traps.c stop tripping
+-Wmissing-prototypes, drop the never-called sf2000_kthread_mark and
+sf2000_ioctl_mark helpers, and move the ioremap_prot locals that only
+the CONFIG_MMU path uses into that branch so NOMMU builds do not warn
+about unused variables.
+
+--- a/arch/mips/kernel/process.c	2026-08-17 23:21:31.672330835 +0100
++++ b/arch/mips/kernel/process.c	2026-08-17 23:11:15.526058757 +0100
+@@ -10,6 +10,7 @@
+  * Copyright (C) 2013  Imagination Technologies Ltd.
+  */
+ #include <linux/cpu.h>
++#include <asm/sf2000-boot.h>
+ #include <linux/errno.h>
+ #include <linux/init.h>
+ #include <linux/kallsyms.h>
+--- a/arch/mips/kernel/setup.c	2026-08-17 23:21:31.678333418 +0100
++++ b/arch/mips/kernel/setup.c	2026-08-17 23:21:15.090789009 +0100
+@@ -12,6 +12,7 @@
+  */
+ #include <linux/init.h>
+ #include <linux/cpu.h>
++#include <asm/sf2000-boot.h>
+ #include <linux/delay.h>
+ #include <linux/hex.h>
+ #include <linux/ioport.h>
+@@ -208,6 +209,8 @@
+ 	}
+ }
+ 
++int sf2000_rom_handoff_present(void);
++
+ int sf2000_rom_handoff_present(void)
+ {
+ 	unsigned int word = *SF2000_ROM_F_MOUNT_KSEG0;
+--- a/arch/mips/mm/fault.c	2026-08-17 23:21:31.673090543 +0100
++++ b/arch/mips/mm/fault.c	2026-08-17 23:11:15.526642007 +0100
+@@ -6,6 +6,7 @@
+  * Copyright (C) 1995 - 2000 by Ralf Baechle
+  */
+ #include <linux/context_tracking.h>
++#include <asm/sf2000-boot.h>
+ #include <linux/signal.h>
+ #include <linux/sched.h>
+ #include <linux/interrupt.h>
+--- a/arch/mips/kernel/traps.c	2026-08-17 23:21:31.678498293 +0100
++++ b/arch/mips/kernel/traps.c	2026-08-17 23:11:15.526711090 +0100
+@@ -13,6 +13,7 @@
+  * Copyright (C) 2014, Imagination Technologies Ltd.
+  */
+ #include <linux/bitops.h>
++#include <asm/sf2000-boot.h>
+ #include <linux/bug.h>
+ #include <linux/compiler.h>
+ #include <linux/context_tracking.h>
+--- a/arch/mips/mm/ioremap.c	2026-08-17 23:21:31.673172252 +0100
++++ b/arch/mips/mm/ioremap.c	2026-08-17 23:11:15.527178465 +0100
+@@ -47,10 +47,7 @@
+ 			   pgprot_t prot)
+ {
+ 	unsigned long flags = pgprot_val(prot) & _CACHE_MASK;
+-	unsigned long offset, pfn, last_pfn;
+-	struct vm_struct *area;
+ 	phys_addr_t last_addr;
+-	unsigned long vaddr;
+ 	void __iomem *cpu_addr;
+ 
+ 	cpu_addr = plat_ioremap(phys_addr, size, flags);
+@@ -79,6 +76,9 @@
+ #ifndef CONFIG_MMU
+ 	return NULL;
+ #else
++	unsigned long offset, pfn, last_pfn;
++	struct vm_struct *area;
++	unsigned long vaddr;
+ 
+ 	/*
+ 	 * Don't allow anybody to remap RAM that may be allocated by the page
+--- a/kernel/kthread.c	2026-08-17 23:21:31.675952793 +0100
++++ b/kernel/kthread.c	2026-08-17 23:11:15.526870257 +0100
+@@ -33,11 +33,6 @@
+ #ifdef CONFIG_MIPS
+ extern void sf2000_progress_mark(const char *name, unsigned int kind,
+ 				 unsigned int value);
+-
+-static void sf2000_kthread_mark(const char *name)
+-{
+-	sf2000_progress_mark(name, 4, 0);
+-}
+ #endif
+ 
+ static DEFINE_SPINLOCK(kthread_create_lock);
+--- a/fs/ioctl.c	2026-08-17 23:21:31.675366543 +0100
++++ b/fs/ioctl.c	2026-08-17 23:11:30.825027417 +0100
+@@ -27,19 +27,6 @@
+ 
+ #include <asm/ioctls.h>
+ 
+-#ifdef CONFIG_MIPS_SF2000
+-extern void sf2000_progress_mark(const char *name, unsigned int kind,
+-		unsigned int value);
+-
+-static void sf2000_ioctl_mark(const char *name, unsigned int value)
+-{
+-	(void)name;
+-	(void)value;
+-}
+-#else
+-static inline void sf2000_ioctl_mark(const char *name, unsigned int value) { }
+-#endif
+-
+ /* So that the fiemap access checks can't overflow on 32 bit machines. */
+ #define FIEMAP_MAX_EXTENTS	(UINT_MAX / sizeof(struct fiemap_extent))
+ 
+--- a/arch/mips/include/asm/sf2000-boot.h	1970-01-01 01:00:00.004000000 +0100
++++ b/arch/mips/include/asm/sf2000-boot.h	2026-08-17 23:21:15.078789009 +0100
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Data Frog SF2000 boot/diagnostic hooks.  These are called from assembly
++ * (entry.S, tlbex-fault.S, genex.S) or from other translation units, so the
++ * definitions in setup.c, process.c, fault.c and traps.c otherwise trip
++ * -Wmissing-prototypes.
++ */
++#ifndef _ASM_SF2000_BOOT_H
++#define _ASM_SF2000_BOOT_H
++
++#include <linux/types.h>
++#include <asm/ptrace.h>
++
++void sf2000_ret_after_kernel_thread(void);
++void sf2000_ret_syscall_exit(void);
++void sf2000_ret_before_restore(struct pt_regs *regs);
++void sf2000_live_user_write(unsigned int fd, const void *buf,
++	unsigned int count, int ret);
++void sf2000_visible_stage(const char *name, unsigned int pulses);
++void sf2000_visible_stage_nolog(const char *name, unsigned int pulses);
++void sf2000_visible_tick(const char *name);
++void sf2000_tlb_fault_asm_mark(unsigned long badvaddr, unsigned long epc,
++	unsigned long status, unsigned long cause);
++void sf2000_gen_exception_asm_mark(unsigned long cause, unsigned long epc,
++	unsigned long status, unsigned long badvaddr);
++
++#endif /* _ASM_SF2000_BOOT_H */
