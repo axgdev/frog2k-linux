@@ -459,7 +459,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
 	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
 	run-linux-buildroot-audio smoke-linux-buildroot-audio \
-	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-gb300 \
+	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-44100 \
+	smoke-linux-buildroot-audio-gb300 \
 	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
@@ -2585,7 +2586,7 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -q 'sf2000-frontend: ALSA mono DMA presenter ready' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
-	grep -q 'sf2000-frontend: timing .*audio_core_hz=22050 audio_output_hz=32000' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
+	grep -q 'sf2000-frontend: timing .*audio_core_hz=22050 audio_output_hz=22050' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	grep -Eq 'sf2000-frontend: first frame 240x160 .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' '$(BUILD_DIR)'/logs/linux-gpsp-real.log
 	awk '/sf2000-browser: launch gpSP/{launched=1} launched && /scanout-oracle/ && /distinct=([3-9]|1[0-7])/{visible=1} END{exit !visible}' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
@@ -3574,6 +3575,36 @@ smoke-linux-buildroot-audio: run-linux-buildroot-audio
 	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 	dd if='$(BUILD_DIR)'/sf2000-audio.wav bs=1 skip=44 2>/dev/null | \
+		od -An -v -td2 | \
+		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
+			END { exit !found }'
+
+run-linux-buildroot-audio-44100: qemu
+	$(MAKE) ROOTFS=buildroot \
+		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs
+	rm -f '$(BUILD_DIR)'/sf2000-audio-44100.wav
+	(sleep 6; printf 'quit\n') | \
+		'$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav44100 $(QEMU_CPU_ARGS) \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' \
+		-audiodev wav,id=sf2000wav44100,path='$(BUILD_DIR)'/sf2000-audio-44100.wav \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log \
+		> '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console 2>&1
+
+smoke-linux-buildroot-audio-44100: run-linux-buildroot-audio-44100
+	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -q 'sf2000-audio: ALSA PCM DMA tone active rate=44100' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	grep -q 'sf2000: audio guest DMA active' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console
+	! grep -q 'sf2000-audio: ALSA PCM write failed' \
+		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+	test -s '$(BUILD_DIR)'/sf2000-audio-44100.wav
+	dd if='$(BUILD_DIR)'/sf2000-audio-44100.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
 			END { exit !found }'
