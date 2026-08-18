@@ -1203,9 +1203,20 @@ $(LINUX_SRC)/Makefile:
 	# Prune the tree down to what this port builds; see scripts/kernel-slim.sh.
 	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
 
-# Re-prune (cheap, idempotent) whenever the slim script changes; the stamp
-# also forces a re-patch of the re-pruned tree without a full re-extract.
+# Re-prune whenever the slim script changes.  The prune deletes source and
+# header files from directories that only need their Kconfig/Makefile shells,
+# so it must never run on an already-patched tree: it would delete files the
+# patch series added (sf2000-pcm.c, sf2000-ge.c, ...) and leave the tree in a
+# state where no patch can apply forward or reverse.  When the tree is
+# patched, re-extract from the tarball first so the subsequent prune starts
+# from pristine content again.
 $(LINUX_SRC)/.slimmed: $(LINUX_SRC)/Makefile scripts/kernel-slim.sh
+	@if test -e '$(LINUX_SRC)/.patched'; then \
+		printf 'slim script changed on a patched tree; re-extracting cleanly\n'; \
+		rm -rf '$(LINUX_SRC)'; \
+		mkdir -p '$(LINUX_SRC)'; \
+		tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1; \
+	fi
 	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
 	touch '$@'
 
