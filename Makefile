@@ -3595,7 +3595,7 @@ run-linux-buildroot-audio-44100: qemu
 
 smoke-linux-buildroot-audio-44100: run-linux-buildroot-audio-44100
 	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
-	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e' \
+	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=013c0007 ctl470=[0-9a-f]+ ctl474=001b6000 vol=ff' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active rate=44100' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
@@ -3626,7 +3626,7 @@ run-linux-buildroot-audio-gb300: qemu
 smoke-linux-buildroot-audio-gb300: run-linux-buildroot-audio-gb300
 	grep -Eq 'sf2000-pcm .*channels=2 .*route=gb300_l15' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
-	grep -Eq 'sf2000-pcm .*DMA .*channels=2 config=0b11[0-9a-f]{4}' \
+	grep -Eq 'sf2000-pcm .*DMA .*channels=2 rate=[0-9]+ config=0b11[0-9a-f]{4} pll=[0-9a-f]+ mn=01580007 ctl470=[0-9a-f]+ ctl474=00106000' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
