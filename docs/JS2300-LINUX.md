@@ -17,7 +17,7 @@ HCRTOS SDK:
   /usr/bin/sf2000-js2300 --background /mnt/sd/sf2000/background.js
   ```
 
-  It runs with JS2300 mode `standalone` and is intended for polling, logging,
+  It runs with JS2300 mode `background` and is intended for polling, logging,
   and filesystem tasks. The normal boot supervisor does not start an arbitrary
   user script automatically.
 
