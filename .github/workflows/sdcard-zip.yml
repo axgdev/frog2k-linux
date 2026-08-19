@@ -54,6 +54,14 @@ jobs:
             .cache/toolchain-uclibc-static-*.tar.xz
           key: sf2000-linux-sources-${{ runner.os }}-${{ runner.arch }}-linux7.1.4-busybox1.38.0-frog-toolchain1.3.2
 
+      - name: Restore slim Linux source
+        uses: actions/cache@v4
+        with:
+          path: .cache/linux-*-slim-*.tar.xz
+          key: sf2000-linux-slim-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'scripts/kernel-slim.sh') }}
+          restore-keys: |
+            sf2000-linux-slim-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Restore ccache
         uses: actions/cache@v4
         with:

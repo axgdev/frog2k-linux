@@ -53,6 +53,10 @@ x86_64 frog-toolchain release, verifies its pinned SHA-256 digest, and
 extracts it to a disposable prefix. The full rootfs then downloads and hashes
 BusyBox and fb-test-app, assembles the curated base and overlay, and runs the
 ELF audit. No package-generator or target compiler build is required.
+The first kernel preparation also creates a 25-MB-class slim source archive in
+`.cache/`, keyed by the pinned kernel and `scripts/kernel-slim.sh` digests; CI
+caches that archive so later clean runners skip the large source download and
+pruning pass. Set `LINUX_SLIM_ARCHIVE` to place that derived cache elsewhere.
 
 For a fully separated setup, every generated location can be supplied without
 changing the source checkout:

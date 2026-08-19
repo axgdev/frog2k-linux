@@ -94,6 +94,9 @@ LINUX_SHA256 := 1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
 LINUX_ARCHIVE := .cache/$(LINUX_TARBALL)
 LINUX_ARCHIVE_CHECK := $(LINUX_ARCHIVE).verified
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
+LINUX_SLIM_SCRIPT_SHA256 := $(shell sha256sum scripts/kernel-slim.sh | awk '{print $$1}')
+LINUX_SLIM_ARCHIVE ?= $(patsubst %.tar.xz,%-slim-$(LINUX_SHA256)-$(LINUX_SLIM_SCRIPT_SHA256).tar.xz,$(LINUX_ARCHIVE))
+LINUX_SLIM_WORK ?= /tmp/sf2000-linux-slim-$(LINUX_VERSION)-$(LINUX_SLIM_SCRIPT_SHA256)
 BUSYBOX_VERSION := 1.38.0
 BUSYBOX_TARBALL := busybox-$(BUSYBOX_VERSION).tar.bz2
 BUSYBOX_URL := https://www.busybox.net/downloads/$(BUSYBOX_TARBALL)
@@ -1420,18 +1423,38 @@ $(LINUX_ARCHIVE_CHECK): $(LINUX_ARCHIVE) Makefile
 	printf 'sha256=%s\narchive=%s\n' '$(LINUX_SHA256)' '$(abspath $(LINUX_ARCHIVE))' > '$@.tmp'
 	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 
+# Build a reusable source cache after the full archive has been verified and
+# pruned. The source digest and slimming-script digest are part of the name,
+# so changing either cannot accidentally reuse an incompatible tree.
+$(LINUX_SLIM_ARCHIVE): scripts/kernel-slim.sh
+	set -eu; \
+	work='$(LINUX_SLIM_WORK)'; \
+	tmp='$(abspath $@.tmp)'; \
+	rm -rf "$$work"; \
+	rm -f "$$tmp"; \
+	mkdir -p '$(dir $@)'; \
+	mkdir -p "$$work"; \
+	$(MAKE) '$(LINUX_ARCHIVE_CHECK)'; \
+	tar -xf '$(LINUX_ARCHIVE)' -C "$$work" --strip-components=1; \
+	'$(abspath scripts/kernel-slim.sh)' "$$work"; \
+	XZ_OPT='-T0 -6' tar --create --xz --file "$$tmp" \
+		--sort=name --mtime='1970-01-01 00:00:00 UTC' \
+		--owner=0 --group=0 --numeric-owner --directory "$$work" .; \
+	test -s "$$tmp"; \
+	mv "$$tmp" '$@'; \
+	rm -rf "$$work"
+
 # The archive preserves upstream timestamps, so using its extracted Makefile
 # as the source target makes the verified archive marker look newer on every
 # invocation. Use a local stamp instead: it is touched after extraction and
 # pruning, and it is removed along with the managed source tree when a clean
-# setup is requested. Re-extract before every re-prune so patches never meet a
-# partially-pruned or already-patched tree.
-$(LINUX_SRC)/.slimmed: $(LINUX_ARCHIVE_CHECK) scripts/kernel-slim.sh
+# setup is requested. Re-extract before every patch application so patches
+# never meet a partially-pruned or already-patched tree.
+$(LINUX_SRC)/.slimmed: $(LINUX_SLIM_ARCHIVE) scripts/kernel-slim.sh
 	rm -rf '$(LINUX_SRC)'
 	mkdir -p '$(LINUX_SRC)'
-	tar -xf '$(LINUX_ARCHIVE)' -C '$(LINUX_SRC)' --strip-components=1
-	# Prune the tree down to what this port builds; see scripts/kernel-slim.sh.
-	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
+	test -s '$(LINUX_SLIM_ARCHIVE)'
+	XZ_OPT='-T0' tar -xJf '$(LINUX_SLIM_ARCHIVE)' -C '$(LINUX_SRC)'
 	touch '$@'
 
 $(LINUX_SRC)/.patched: $(LINUX_SRC)/.slimmed $(LINUX_PATCHES)
