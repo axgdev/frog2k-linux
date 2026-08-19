@@ -29,7 +29,7 @@ jobs:
         with:
           repository: axgdev/frog2k-linux-frontend
           # Update this pin deliberately when integrating a new frontend release.
-          ref: 5396f2c799df45054db4c440f29af26dda2a7a93
+          ref: 43f809097ceefe6b2cd9ac85a1e3ca12eca6e05f
           path: sf2000_linux_frontend
           fetch-depth: 1
 

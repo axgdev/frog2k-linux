@@ -1441,7 +1441,7 @@ $(LINUX_SLIM_ARCHIVE): scripts/kernel-slim.sh
 	mkdir -p "$$work"; \
 	case '$(LINUX_SOURCE_METHOD)' in \
 	git) \
-		git clone --filter=blob:none --no-checkout --depth=1 \
+		git clone --filter=blob:none --no-tags --no-checkout --depth=1 \
 			--branch '$(LINUX_GIT_TAG)' '$(LINUX_GIT_URL)' "$$work"; \
 		'$(abspath scripts/kernel-slim.sh)' --sparse-patterns | \
 			git -C "$$work" sparse-checkout set --no-cone --stdin; \
