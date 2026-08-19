@@ -14,16 +14,6 @@
 # The keep-lists below are derived from the built .o files of the reference
 # build (build/linux-sf2000-full), i.e. what the sf2000 defconfig +
 # patches actually compile.  If a new driver is enabled later, add it here.
-set -eu
-
-SRC=${1:?usage: kernel-slim.sh <linux-src-dir>}
-cd "$SRC"
-
-# Keep only Kconfig*/Makefile*/Kbuild files under $1, then drop empty dirs.
-prune() {
-    find "$1" -type f ! -name 'Kconfig*' ! -name 'Makefile*' ! -name 'Kbuild' -delete
-}
-
 # --- top-level dirs kept in full (recursively) -------------------------
 KEEP_FULL="include scripts init kernel mm lib block usr security \
            arch/mips sound/core sound/drivers"
@@ -37,6 +27,61 @@ DRV_FULL="auxdisplay base bus char clk input irqchip leds mfd misc mmc of \
 # --- driver subdirs (under the dirs above) that compile -----------------
 DRV_SUB="base/firmware_loader base/power base/regmap tty/serial \
          mmc/core mmc/host video/fbdev input/misc power/reset misc/eeprom"
+
+# Emit the non-cone sparse-checkout specification for the same keep-lists.
+# This avoids downloading blobs that kernel-slim.sh would immediately delete.
+# The final tools exclusion is intentional: tools/include and
+# tools/arch/mips are kept in full, while the rest of tools is removed rather
+# than reduced to Kconfig/Makefile shells.
+sparse_patterns() {
+    printf '%s\n' '/*' '!/*/'
+    for d in $KEEP_FULL; do
+        case "$d" in
+            arch/mips|sound/core|sound/drivers) ;;
+            *) printf '/%s/\n' "$d" ;;
+        esac
+    done
+    printf '%s\n' \
+        '/LICENSES/' \
+        '/arch/*' '!/arch/*/' '/arch/mips/' \
+        '/arch/.gitignore' \
+        '/arch/x86/entry/syscalls/syscall_32.tbl' \
+        '/sound/*' '!/sound/*/' '/sound/core/' '/sound/drivers/' \
+        '/drivers/*' '!/drivers/*/' \
+        '/fs/*' '!/fs/*/' \
+        '/io_uring/io-wq.h' \
+        '/tools/*' '!/tools/*/' '/tools/include/' \
+        '/tools/arch/*' '!/tools/arch/*/'
+    for d in $DRV_FULL; do
+        printf '/drivers/%s/*\n!/drivers/%s/*/\n' "$d" "$d"
+    done
+    for d in $DRV_SUB; do
+        printf '/drivers/%s/\n' "$d"
+    done
+    for d in $FS_KEEP; do
+        printf '/fs/%s/\n' "$d"
+    done
+    # Re-add metadata in pruned kernel directories, but not in tools: the
+    # tools pruning step removes those directories completely.
+    printf '%s\n' '**/Kconfig*' '**/Makefile*' '**/Kbuild' \
+        '!/tools/**' '/tools/Makefile' '/tools/include/**' \
+        '/tools/arch/mips/**'
+}
+
+if [ "${1-}" = --sparse-patterns ]; then
+    sparse_patterns
+    exit 0
+fi
+
+set -eu
+
+SRC=${1:?usage: kernel-slim.sh <linux-src-dir>}
+cd "$SRC"
+
+# Keep only Kconfig*/Makefile*/Kbuild files under $1, then drop empty dirs.
+prune() {
+    find "$1" -type f ! -name 'Kconfig*' ! -name 'Makefile*' ! -name 'Kbuild' -delete
+}
 
 # --- arch: keep only mips (arch/Kconfig stays) --------------------------
 # scripts/checksyscalls.sh diffs the arch's syscall set against the i386
@@ -118,4 +163,7 @@ for d in tools/arch/*/; do
 done
 
 # --- remove empty dirs left by pruning -----------------------------------
-find . -type d -empty -delete
+# A sparse Git checkout may still contain .git while this script runs. Keep
+# that metadata intact until the caller has finished validating the commit.
+# Excluding it explicitly also avoids find's implicit -depth mode for -delete.
+find . -type d -empty ! -path './.git' ! -path './.git/*' -delete

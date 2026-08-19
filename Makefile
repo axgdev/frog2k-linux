@@ -91,11 +91,14 @@ LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
 LINUX_SHA256 := 1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+LINUX_SOURCE_METHOD ?= git
+LINUX_GIT_URL ?= https://github.com/gregkh/linux.git
+LINUX_GIT_TAG := v$(LINUX_VERSION)
 LINUX_ARCHIVE := .cache/$(LINUX_TARBALL)
 LINUX_ARCHIVE_CHECK := $(LINUX_ARCHIVE).verified
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
 LINUX_SLIM_SCRIPT_SHA256 := $(shell sha256sum scripts/kernel-slim.sh | awk '{print $$1}')
-LINUX_SLIM_ARCHIVE ?= $(patsubst %.tar.xz,%-slim-$(LINUX_SHA256)-$(LINUX_SLIM_SCRIPT_SHA256).tar.xz,$(LINUX_ARCHIVE))
+LINUX_SLIM_ARCHIVE ?= $(patsubst %.tar.xz,%-slim-$(LINUX_GIT_TAG)-$(LINUX_SLIM_SCRIPT_SHA256).tar.xz,$(LINUX_ARCHIVE))
 LINUX_SLIM_WORK ?= /tmp/sf2000-linux-slim-$(LINUX_VERSION)-$(LINUX_SLIM_SCRIPT_SHA256)
 BUSYBOX_VERSION := 1.38.0
 BUSYBOX_TARBALL := busybox-$(BUSYBOX_VERSION).tar.bz2
@@ -1423,9 +1426,11 @@ $(LINUX_ARCHIVE_CHECK): $(LINUX_ARCHIVE) Makefile
 	printf 'sha256=%s\narchive=%s\n' '$(LINUX_SHA256)' '$(abspath $(LINUX_ARCHIVE))' > '$@.tmp'
 	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 
-# Build a reusable source cache after the full archive has been verified and
-# pruned. The source digest and slimming-script digest are part of the name,
-# so changing either cannot accidentally reuse an incompatible tree.
+# Build a reusable source cache from a filtered shallow Git checkout by
+# default. The sparse patterns come from the same keep-lists as the pruning
+# script, so blobs that would be deleted are never downloaded. The archive
+# method remains available as an explicit fallback for offline or mirrored
+# environments.
 $(LINUX_SLIM_ARCHIVE): scripts/kernel-slim.sh
 	set -eu; \
 	work='$(LINUX_SLIM_WORK)'; \
@@ -1434,9 +1439,22 @@ $(LINUX_SLIM_ARCHIVE): scripts/kernel-slim.sh
 	rm -f "$$tmp"; \
 	mkdir -p '$(dir $@)'; \
 	mkdir -p "$$work"; \
-	$(MAKE) '$(LINUX_ARCHIVE_CHECK)'; \
-	tar -xf '$(LINUX_ARCHIVE)' -C "$$work" --strip-components=1; \
+	case '$(LINUX_SOURCE_METHOD)' in \
+	git) \
+		git clone --filter=blob:none --no-checkout --depth=1 \
+			--branch '$(LINUX_GIT_TAG)' '$(LINUX_GIT_URL)' "$$work"; \
+		'$(abspath scripts/kernel-slim.sh)' --sparse-patterns | \
+			git -C "$$work" sparse-checkout set --no-cone --stdin; \
+		git -C "$$work" checkout --detach --force '$(LINUX_GIT_TAG)';; \
+	archive) \
+		$(MAKE) '$(LINUX_ARCHIVE_CHECK)'; \
+		tar -xf '$(LINUX_ARCHIVE)' -C "$$work" --strip-components=1;; \
+	*) \
+		printf 'unsupported LINUX_SOURCE_METHOD: %s\n' '$(LINUX_SOURCE_METHOD)' >&2; \
+		exit 2;; \
+	esac; \
 	'$(abspath scripts/kernel-slim.sh)' "$$work"; \
+	rm -rf "$$work/.git"; \
 	XZ_OPT='-T0 -6' tar --create --xz --file "$$tmp" \
 		--sort=name --mtime='1970-01-01 00:00:00 UTC' \
 		--owner=0 --group=0 --numeric-owner --directory "$$work" .; \
