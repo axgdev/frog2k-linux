@@ -254,7 +254,8 @@ endif
 # own -j budget.
 FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' \
 	-C '$(FRONTEND_PROJECT)' \
-	SF2000_LINUX_DIR='$(abspath .)' CCACHE='$(CCACHE)'
+	SF2000_LINUX_DIR='$(abspath .)' \
+	TOOLCHAIN_DIR='$(abspath $(TOOLCHAIN_DIR))' CCACHE='$(CCACHE)'
 # Kernel, frontend, and userspace recursive makes get private job budgets so
 # nested jobserver tokens cannot deadlock one another.
 ISOLATED_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)'

@@ -21,9 +21,12 @@ HCRTOS SDK:
   and filesystem tasks. The normal boot supervisor does not start an arbitrary
   user script automatically.
 
-The interpreter and MQuickJS are ordinary Linux static objects. The only
-interfaces that came from the original UniFrog libretro wrapper were replaced
-by local Linux adapters: process allocation uses the JS2300 calloc heap and
-directory enumeration uses POSIX `opendir`/`readdir`. The frontend no longer
-passes any HCRTOS SDK include path to Mufrog core builds. `MUFROG_ROOT` and the
-pinned core source trees remain build inputs, but `unifrog-hcrtos-sdk` is not.
+The interpreter and MQuickJS are ordinary Linux static objects built from the
+pinned [frog2k-javascript repository](https://github.com/axgdev/frog2k-javascript-private).
+The frontend supplies the JS2300 host callbacks locally: process allocation
+uses the JS2300 calloc heap, script/bytecode loading uses the file callback
+pair, and directory enumeration uses POSIX `opendir`/`readdir`. A fresh
+frontend checkout obtains the runtime with `make setup`; it does not clone a
+JS tree from `mufrog-commandc` or apply frontend-owned MQuickJS patches.
+`MUFROG_ROOT` and the pinned core source trees remain inputs for the separate
+Mufrog-family emulator cores, but they do not own JS2300.
