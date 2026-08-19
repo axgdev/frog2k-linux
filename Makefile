@@ -305,6 +305,7 @@ LINUX_ASD := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX).asd
 SDCARD_LINUX_ASD := $(BUILD_DIR)/sdcard/firmware/linux.asd
 SDCARD_FASTBOOT_BIN := $(BUILD_DIR)/sdcard/firmware/unifrog.bin
 SDCARD_BIOS_ASD := $(BUILD_DIR)/sdcard/bios/bisrv.asd
+SDCARD_RELEASE_ASD := $(BUILD_DIR)/sf2000-linux-full.asd
 SDCARD_BOOT_OPTIONS := $(BUILD_DIR)/sdcard/BOOT-OPTIONS.txt
 SDCARD_LOG_TXT := $(BUILD_DIR)/sdcard/log.txt
 SDCARD_USER_CONFIG := $(BUILD_DIR)/sdcard/sf2000.conf
@@ -390,6 +391,12 @@ SDCARD_MUFROG_LICENSES := \
 SDCARD_FRONTEND_CORES := sf2000-gambatte sf2000-gpsp sf2000-fceumm
 SDCARD_FRONTEND_LICENSES := gambatte-COPYING gpsp-COPYING fceumm-Copying
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
+SDCARD_RELEASE_ID ?= $(shell git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse --short HEAD)
+SDCARD_RELEASE_LABEL := $(subst /,-,$(SDCARD_RELEASE_ID))
+SDCARD_PACKAGE_ROOT := $(BUILD_DIR)/sdcard-packages
+SDCARD_BOOTLOADER_STAGE := $(SDCARD_PACKAGE_ROOT)/bootloader
+SDCARD_STANDALONE_ZIP ?= $(BUILD_DIR)/sf2000-linux-standalone-$(SDCARD_RELEASE_LABEL).zip
+SDCARD_BOOTLOADER_ZIP ?= $(BUILD_DIR)/sf2000-linux-bootloader-$(SDCARD_RELEASE_LABEL).zip
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
 BROWSER_TEST_SD := $(BUILD_DIR)/browser-test.sd.img
 BROWSER_TEST_ROM := $(BUILD_DIR)/browser-test.gb
@@ -479,7 +486,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 
 .PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
 	linux-full-asd linux-full-test-asd sdcard-linux sdcard-full linux-rom-sd \
-	linux-full-rom-sd run-linux smoke-linux run-linux-asd \
+	linux-full-rom-sd sdcard-zips run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-full-asd \
 	smoke-linux-full-asd smoke-linux-full-ge-no-irq smoke-linux-full-handoff-quiet smoke-linux-full-stale-ram run-linux-full-storage \
 	smoke-linux-full-storage run-linux-full-storage-fast \
@@ -560,6 +567,7 @@ help:
 		'make TOOLCHAIN_DIR=<prefix> linux-full-asd  use an already installed frog-toolchain' \
 		'make linux-full-asd        build the physical-device artifact' \
 		'make physical-linux-asd    explicit alias for the physical full-rootfs ASD' \
+		'make sdcard-zips           create standalone and bootloader SD-card ZIPs' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-full-asd  boot the full-rootfs artifact in QEMU' \
@@ -2278,6 +2286,49 @@ endif
 
 sdcard-full:
 	$(ISOLATED_MAKE) ROOTFS=full sdcard-linux
+
+sdcard-zips: $(SDCARD_STANDALONE_ZIP) $(SDCARD_BOOTLOADER_ZIP)
+	@printf 'SD-card packages:\n  %s\n  %s\n' \
+		'$(SDCARD_STANDALONE_ZIP)' '$(SDCARD_BOOTLOADER_ZIP)'
+
+$(SDCARD_STANDALONE_ZIP): sdcard-full Makefile
+	@set -eu; \
+	test -s '$(SDCARD_BIOS_ASD)'; \
+	(cd '$(BUILD_DIR)/sdcard' && sha256sum -c SHA256SUMS >/dev/null); \
+	tmp='$(abspath $@.tmp)'; \
+	zip_file='$(abspath $@.tmp)'; \
+	rm -f "$$tmp"; \
+	(cd '$(BUILD_DIR)/sdcard' && \
+		find . -type f ! -name '.*' -print | sed 's#^\\./##' | \
+		LC_ALL=C sort | zip -X -q "$$zip_file" -@); \
+	zip -T "$$tmp" >/dev/null; \
+	mv "$$tmp" '$@'
+
+$(SDCARD_BOOTLOADER_ZIP): sdcard-full Makefile
+	@set -eu; \
+	stage='$(SDCARD_BOOTLOADER_STAGE)'; \
+	rm -rf "$$stage"; \
+	mkdir -p "$$stage"; \
+	cp -a '$(BUILD_DIR)/sdcard/.' "$$stage/"; \
+	rm -f "$$stage/bios/bisrv.asd" "$$stage/firmware/linux.asd" \
+		"$$stage/SHA256SUMS"; \
+	test ! -e "$$stage/bios/bisrv.asd"; \
+	mkdir -p "$$stage/system/firmware"; \
+	cp '$(SDCARD_RELEASE_ASD)' \
+		"$$stage/system/firmware/frog2k-linux-$(SDCARD_RELEASE_LABEL).asd"; \
+	( cd "$$stage"; \
+		find . -type f ! -name '.*' ! -name SHA256SUMS -print | \
+			sed 's#^\\./##' | LC_ALL=C sort | \
+			while IFS= read -r file; do sha256sum "$$file"; done > SHA256SUMS; \
+		sha256sum -c SHA256SUMS >/dev/null ); \
+	tmp='$(abspath $@.tmp)'; \
+	zip_file='$(abspath $@.tmp)'; \
+	rm -f "$$tmp"; \
+	(cd "$$stage" && \
+		find . -type f ! -name '.*' -print | sed 's#^\\./##' | \
+		LC_ALL=C sort | zip -X -q "$$zip_file" -@); \
+	zip -T "$$tmp" >/dev/null; \
+	mv "$$tmp" '$@'
 
 linux-rom-sd: $(LINUX_ROM_SD_IMAGE)
 

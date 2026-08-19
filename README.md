@@ -169,6 +169,7 @@ make help
 make check
 make qemu
 make ROOTFS=full sdcard-linux
+make sdcard-zips
 make ROOTFS=full elf-audit
 make ROOTFS=full smoke-linux-full-asd
 make ROOTFS=full smoke-linux-full-rom
@@ -363,3 +364,12 @@ retained entries to `log.txt`; older entries are counted in a
 
 See `docs/LOW-POWER.md` for the measured HC15xx idle limitation, wake-source
 requirements, and the staged plan for safe clocked standby and suspend-to-RAM.
+
+`make sdcard-zips` builds the full image once and creates two archives under
+`build/`. The standalone archive contains `bios/bisrv.asd` and can be copied
+directly to a card. The bootloader archive leaves that path untouched and
+places the Linux image at
+`system/firmware/frog2k-linux-<release-or-commit>.asd`, so it can be merged
+with an SD card prepared by `sf2000_bootloader`. Set `SDCARD_RELEASE_ID` to
+override the label; otherwise an exact Git tag is used, falling back to the
+short commit ID.

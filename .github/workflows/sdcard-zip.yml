@@ -1,0 +1,86 @@
+name: SD card packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sdcard-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache curl device-tree-compiler gcc git make patch perl zip xz-utils
+
+      - name: Check out sf2000_linux
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Check out Linux frontend
+        uses: actions/checkout@v4
+        with:
+          repository: axgdev/frog2k-linux-frontend
+          # Update this pin deliberately when integrating a new frontend release.
+          ref: 5396f2c799df45054db4c440f29af26dda2a7a93
+          path: sf2000_linux_frontend
+          fetch-depth: 1
+
+      - name: Configure public dependency URLs
+        run: |
+          set -eu
+          git config --global \
+            url."https://github.com/axgdev/frog2k-javascript.git".insteadOf \
+            "git@github.com:axgdev/frog2k-javascript.git"
+          git config --global \
+            url."https://github.com/axgdev/frog2k-qpsx.git".insteadOf \
+            "git@github.com:axgdev/frog2k-qpsx.git"
+          echo "GIT_TERMINAL_PROMPT=0" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ccache
+          key: sf2000-linux-ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'boot/**', 'ge/**', 'include/**', 'linux/**', 'platform/**', 'userspace/**', 'vdec/**', 'dsc/**', 'efuse/**', 'sf2000_linux_frontend/Makefile', 'sf2000_linux_frontend/src/**', 'sf2000_linux_frontend/include/**', 'sf2000_linux_frontend/patches/**') }}
+          restore-keys: |
+            sf2000-linux-ccache-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build SD card packages
+        run: |
+          set -eu
+          jobs="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+          case "$GITHUB_REF" in
+            refs/tags/*) release_id="$GITHUB_REF_NAME" ;;
+            *) release_id="$(printf '%.7s' "$GITHUB_SHA")" ;;
+          esac
+          make sdcard-zips \
+            JOBS="$jobs" \
+            SDCARD_RELEASE_ID="$release_id" \
+            FRONTEND_PROJECT="$GITHUB_WORKSPACE/sf2000_linux_frontend" \
+            CCACHE="$(command -v ccache)"
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_ENV"
+
+      - name: Upload SD card packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf2000-linux-sdcard-${{ env.release_id }}
+          path: |
+            build/sf2000-linux-standalone-*.zip
+            build/sf2000-linux-bootloader-*.zip
+          if-no-files-found: error
+
+      - name: Upload draft release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            build/sf2000-linux-standalone-*.zip
+            build/sf2000-linux-bootloader-*.zip
