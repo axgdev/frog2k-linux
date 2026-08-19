@@ -2648,7 +2648,7 @@ $(QPSX_REAL_TEST_SD): $(QPSX_REAL_TEST_BASE_PROFILE)
 	fi; \
 	truncate -s "$${image_mib}M" '$(QPSX_REAL_TEST_SD)'
 	mkfs.vfat -F 32 -n SFTEST '$(QPSX_REAL_TEST_SD)' >/dev/null
-	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/sf2000 ::/sf2000/cores ::/cores
+	mmd -i '$(QPSX_REAL_TEST_SD)' ::/PSX ::/saves ::/sf2000 ::/sf2000/cores ::/cores
 	mmd -i '$(QPSX_REAL_TEST_SD)' ::/cores/config
 	mattrib +h -i '$(QPSX_REAL_TEST_SD)' ::/cores
 	@case '$(QPSX_REAL_IMAGE)' in \
@@ -3047,6 +3047,14 @@ smoke-linux-qpsx-no-menu: run-linux-qpsx-no-menu
 	grep -q 'sf2000-frontend: ROM load complete' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
 	grep -q 'QPSX: .*Skipping menu at startup (menu_at_start=OFF)' \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	@case '$(QPSX_REAL_IMAGE)' in \
+		*.[cC][uU][eE]) expected='00-TEST';; \
+		*) expected='TEST';; \
+	esac; \
+	grep -q "QPSX: Per-game memcard will be created on first save: /mnt/sd/saves/PSX/$$expected.mcd" \
+		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
+	grep -q 'SIO: LoadMcd: file not found, deferring creation until first save' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
 	grep -Eq 'sf2000-frontend: first frame [0-9]+x[0-9]+ .*source_hash=[0-9a-f]{8} scanout_hash=[0-9a-f]{8}' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log
