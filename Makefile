@@ -329,6 +329,15 @@ SDCARD_CORE_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.stamp-built
 # Core staging atomically replaces its output directory, so keep the input
 # signature beside that directory rather than inside it.
 SDCARD_CORE_PROFILE := $(BUILD_DIR)/sdcard/.core-build-profile
+# The frontend has one shared build directory. Build its two userspace
+# programs in one recursive make before the rootfs and core-packaging branches
+# can use that checkout. Without this barrier, core-packages may run the
+# frontend's JS2300 clean rule while the standalone JS2300 binary is linking.
+FRONTEND_UI_STAMP := $(BUILD_DIR)/.frontend-ui.stamp
+FRONTEND_UI_SOURCES := $(shell find '$(FRONTEND_PROJECT)'/src \
+	'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
+	ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
+	$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 # The sdcard core copies are re-staged from the frontend's freshly built
 # executables.  Depending the stamp on those executables - not just frontend
 # sources - makes a forced core rebuild in the frontend repo (e.g. `make
@@ -407,6 +416,7 @@ SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 SDCARD_RELEASE_ID ?= $(shell git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse --short HEAD)
 SDCARD_RELEASE_LABEL := $(subst /,-,$(SDCARD_RELEASE_ID))
 SDCARD_PACKAGE_ROOT := $(BUILD_DIR)/sdcard-packages
+BUILD_PROVENANCE := $(BUILD_DIR)/sf2000-linux-build-info.txt
 SDCARD_BOOTLOADER_STAGE := $(SDCARD_PACKAGE_ROOT)/bootloader
 SDCARD_STANDALONE_ZIP ?= $(BUILD_DIR)/sf2000-linux-standalone-$(SDCARD_RELEASE_LABEL).zip
 SDCARD_BOOTLOADER_ZIP ?= $(BUILD_DIR)/sf2000-linux-bootloader-$(SDCARD_RELEASE_LABEL).zip
@@ -497,7 +507,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
+.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status build-info qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
 	linux-full-asd linux-full-test-asd sdcard-linux sdcard-full linux-rom-sd \
 	linux-full-rom-sd sdcard-zips run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-full-asd \
@@ -1141,23 +1151,20 @@ $(USERSPACE_POWERD): $(USERSPACE_POWERD_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Mak
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
 		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(USERSPACE_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
-		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
-		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
-		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
-		$(TOOLCHAIN_STAMP) Makefile
-	$(FRONTEND_MAKE) browser \
+
+$(FRONTEND_UI_STAMP): $(FRONTEND_UI_SOURCES)
+	$(FRONTEND_MAKE) browser js2300-ui \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
+	test -s '$(FRONTEND_PROJECT)/build/sf2000-browser'
+	test -s '$(FRONTEND_PROJECT)/build/sf2000-js2300-ui'
+	mkdir -p '$(dir $@)'
+	touch '$@'
+
+$(USERSPACE_FRONTEND): $(FRONTEND_UI_STAMP)
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
-$(USERSPACE_JS2300): $(shell find '$(FRONTEND_PROJECT)'/src \
-		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
-		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
-		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
-		$(TOOLCHAIN_STAMP) Makefile
-	$(FRONTEND_MAKE) js2300-ui \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
+$(USERSPACE_JS2300): $(FRONTEND_UI_STAMP)
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-js2300-ui '$@'
 
@@ -2202,6 +2209,7 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/patches/prosystem \
 		'$(FRONTEND_PROJECT)'/patches/mufrog \
 		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(SDCARD_CORE_PROFILE) \
+		$(FRONTEND_UI_STAMP) \
 		$(FRONTEND_CORE_OUTPUTS)
 	$(FRONTEND_MAKE) core-packages \
 		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
@@ -2344,9 +2352,48 @@ endif
 sdcard-full:
 	$(ISOLATED_MAKE) ROOTFS=full sdcard-linux
 
+.PHONY: build-info
+build-info:
+	@set -eu; \
+	frontend='$(abspath $(FRONTEND_PROJECT))'; \
+	mkdir -p '$(dir $(BUILD_PROVENANCE))'; \
+	{ \
+		printf 'sf2000_linux build provenance\n'; \
+		printf 'release_id=%s\n' '$(SDCARD_RELEASE_ID)'; \
+		printf 'rootfs=%s\n' '$(ROOTFS)'; \
+		repo() { \
+			label="$$1"; path="$$2"; \
+			if git -C "$$path" rev-parse --git-dir >/dev/null 2>&1; then \
+				commit="$$(git -C "$$path" rev-parse HEAD)"; \
+				ref="$$(git -C "$$path" symbolic-ref --short -q HEAD 2>/dev/null || \
+					git -C "$$path" describe --tags --exact-match HEAD 2>/dev/null || \
+					printf 'detached')"; \
+				printf '%s: path=%s ref=%s commit=%s\n' \
+					"$$label" "$$path" "$$ref" "$$commit"; \
+			else \
+				printf '%s: path=%s unavailable\n' "$$label" "$$path"; \
+			fi; \
+		}; \
+		repo linux '$(abspath .)'; \
+		repo frontend "$$frontend"; \
+		repo js2300 "$$frontend/.deps/frog2k-javascript"; \
+		repo qpsx "$$frontend/.deps/core-sources/.deps/cores/sf2000-qpsx-playstation-emulator"; \
+		printf 'kernel: method=%s url=%s tag=%s slim_script_sha256=%s\n' \
+			'$(LINUX_SOURCE_METHOD)' '$(LINUX_GIT_URL)' '$(LINUX_GIT_TAG)' \
+			'$(LINUX_SLIM_SCRIPT_SHA256)'; \
+		printf 'toolchain: version=%s tuple=%s arch=%s sha256=%s path=%s\n' \
+			'$(FROG_TOOLCHAIN_VERSION)' '$(TOOLCHAIN_TUPLE)' \
+			'$(FROG_TOOLCHAIN_ARCH)' '$(FROG_TOOLCHAIN_SHA256)' \
+			'$(TOOLCHAIN_DIR)'; \
+	} > '$(BUILD_PROVENANCE).tmp'; \
+	mv '$(BUILD_PROVENANCE).tmp' '$(BUILD_PROVENANCE)'
+
 sdcard-zips: $(SDCARD_STANDALONE_ZIP) $(SDCARD_BOOTLOADER_ZIP)
+	@$(MAKE) --no-print-directory build-info
 	@printf 'SD-card packages:\n  %s\n  %s\n' \
 		'$(SDCARD_STANDALONE_ZIP)' '$(SDCARD_BOOTLOADER_ZIP)'
+	@printf 'Build provenance:\n'
+	@cat '$(BUILD_PROVENANCE)'
 
 $(SDCARD_STANDALONE_ZIP): sdcard-full Makefile
 	@set -eu; \

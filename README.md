@@ -102,6 +102,11 @@ make \
 by default in `.cache/ccache`; set `CCACHE_DIR` to share a cache between
 worktrees or `USE_CCACHE=0` to disable it.
 
+The default `FRONTEND_PROJECT=../sf2000_linux_frontend` keeps local builds
+independent of checkout location. `make sdcard-zips` prints the resolved
+Linux, frontend, JS2300, and QPSX revisions at the end and saves the same
+provenance in `build/sf2000-linux-build-info.txt`.
+
 The optional vendor ABI tests do not require a manually installed SDK:
 
 ```sh
