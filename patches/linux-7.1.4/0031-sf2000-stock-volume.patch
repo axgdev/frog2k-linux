@@ -1,0 +1,36 @@
+[PATCH] sf2000: default SF2000 volume to the stock level (90 -> 0xcb)
+
+The stock SF2000 device tree runs the i2so platform at volume 90, which
+maps to 0xcb on the vendor volume curve - the same byte the bootloader
+writes.  The previous patch set SF2000 to UniFrog runtime value 65 (0x61),
+which is quieter than the reference firmware; restore the stock level and
+keep UniFrog value 75 (0x8f) for GB300.
+
+Signed-off-by: SF2000 Linux project <noreply@example.com>
+---
+diff --git a/sound/drivers/sf2000-pcm.c b/sound/drivers/sf2000-pcm.c
+index 1111111..2222222 100644
+@@ -65,14 +65,16 @@
+ #define SF2000_SYS_I2S_DIV_CTL2	0x474
+ #define SF2000_I2S_DIV_CTL_BITS	(BIT(16) | BIT(21))
+ /*
+- * Default SND0+0x92 FADE volume bytes, taken from the vendor libauddrv
+- * volume curve (extracted from the UniFrog firmware).  The vendor maps a
+- * 0-100 user volume through a non-linear table onto this byte, 100 -> 0xff;
+- * UniFrog's defaults are 65 on SF2000 (-> 0x61) and 75 on GB300 (-> 0x8f).
+- * Writing the raw maximum (0xff) with full-scale game samples overdrives
+- * the small analog speaker: audible clipping, harsh treble and crackle.
++ * Default SND0+0x92 FADE volume bytes.  The vendor libauddrv maps a 0-100
++ * volume through a non-linear table onto this byte (100 -> 0xff); the stock
++ * SF2000 device tree ships the i2so platform at volume 90, which lands at
++ * 0xcb on that curve - the same byte the bootloader uses.  UniFrog lowers
++ * it to 65 (0x61) on SF2000 and 75 (0x8f) on GB300 at runtime.  The raw
++ * maximum (0xff) with full-scale game samples overdrives the small analog
++ * speaker: audible clipping, harsh treble and crackle; match the stock
++ * default instead.
+  */
+-#define SF2000_VOLUME_SF2000	0x61
++#define SF2000_VOLUME_SF2000	0xcb
+ #define SF2000_VOLUME_GB300	0x8f
+ #define SF2000_RATE_MIN		8000
+ #define SF2000_RATE_MAX		48000
