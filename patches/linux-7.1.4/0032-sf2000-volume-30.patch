@@ -1,0 +1,37 @@
+[PATCH] sf2000: SF2000 volume to 30 (0x1e) for the low-gain experiment
+
+Physical-device runs 370-372 showed no quality change between volume
+bytes 0xff/0xcb/0x61, so analog overdrive is probably not the crackle
+source.  Lower the SF2000 gain to volume 30 on the vendor curve (0x1e)
+for the requested experiment; the unit has a hardware volume rocker so
+the digital gain can stay low.  GB300 stays at UniFrog value 75 (0x8f).
+
+Signed-off-by: SF2000 Linux project <noreply@example.com>
+---
+diff --git a/sound/drivers/sf2000-pcm.c b/sound/drivers/sf2000-pcm.c
+index 1111111..2222222 100644
+@@ -66,15 +66,16 @@
+ #define SF2000_I2S_DIV_CTL_BITS	(BIT(16) | BIT(21))
+ /*
+  * Default SND0+0x92 FADE volume bytes.  The vendor libauddrv maps a 0-100
+- * volume through a non-linear table onto this byte (100 -> 0xff); the stock
+- * SF2000 device tree ships the i2so platform at volume 90, which lands at
+- * 0xcb on that curve - the same byte the bootloader uses.  UniFrog lowers
+- * it to 65 (0x61) on SF2000 and 75 (0x8f) on GB300 at runtime.  The raw
+- * maximum (0xff) with full-scale game samples overdrives the small analog
+- * speaker: audible clipping, harsh treble and crackle; match the stock
+- * default instead.
++ * volume through a non-linear table onto this byte (100 -> 0xff, 90 -> 0xcb,
++ * 65 -> 0x61, 30 -> 0x1e).  The stock SF2000 device tree ships the i2so
++ * platform at volume 90; the bootloader writes 0xcb and UniFrog lowers to
++ * 65 (SF2000) / 75 (GB300).  The SF2000 value here is the low-gain
++ * experiment requested on the physical unit (volume 30 -> 0x1e) to test
++ * whether the remaining crackle is analog overdrive; the unit has a
++ * hardware volume rocker so the digital gain can stay low.  GB300 stays at
++ * UniFrog's 0x8f.
+  */
+-#define SF2000_VOLUME_SF2000	0xcb
++#define SF2000_VOLUME_SF2000	0x1e
+ #define SF2000_VOLUME_GB300	0x8f
+ #define SF2000_RATE_MIN		8000
+ #define SF2000_RATE_MAX		48000

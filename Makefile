@@ -3595,7 +3595,7 @@ run-linux-buildroot-audio-44100: qemu
 
 smoke-linux-buildroot-audio-44100: run-linux-buildroot-audio-44100
 	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
-	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e ctl470=[0-9a-f]+ ctl474=[0-9a-f]+ vol=cb' \
+	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e ctl470=[0-9a-f]+ ctl474=[0-9a-f]+ vol=1e' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active rate=44100' \
 		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
