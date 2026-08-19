@@ -44,6 +44,16 @@ jobs:
             "git@github.com:axgdev/frog2k-qpsx.git"
           echo "GIT_TERMINAL_PROMPT=0" >> "$GITHUB_ENV"
 
+      - name: Restore source archives
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/linux-7.1.4.tar.xz
+            .cache/busybox-1.38.0.tar.bz2
+            .cache/fb-test-app-1.1.1.tar.gz
+            .cache/toolchain-uclibc-static-*.tar.xz
+          key: sf2000-linux-sources-${{ runner.os }}-${{ runner.arch }}-linux7.1.4-busybox1.38.0-frog-toolchain1.3.2
+
       - name: Restore ccache
         uses: actions/cache@v4
         with:

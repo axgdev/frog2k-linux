@@ -37,6 +37,10 @@ CCACHE_COMPILE := $(if $(strip $(CCACHE)),$(CCACHE) ,)
 CCACHE_DIR ?= $(abspath .cache/ccache)
 CCACHE_COMPILERCHECK ?= content
 export CCACHE_DIR CCACHE_COMPILERCHECK
+# Kernel.org intermittently closes large HTTP/2 streams on hosted runners.
+# Keep downloads on HTTP/1.1 and never promote a failed partial transfer from
+# the temporary path to the verified archive path.
+CURL_DOWNLOAD ?= curl --http1.1 --fail --location --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 30
 AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
 AUDIO_AVSYNC_TEST := $(BUILD_DIR)/hc15xx-avsync-test
 AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
@@ -195,8 +199,11 @@ FROG_TOOLCHAIN_SETUP_STAMP := $(BUILD_DIR)/toolchain/.stamp-frog-toolchain
 ifeq ($(abspath $(TOOLCHAIN_DIR)),$(abspath $(FROG_TOOLCHAIN_PREFIX)))
 $(FROG_TOOLCHAIN_ARCHIVE):
 	mkdir -p '$(dir $@)'
+	set -eu; \
 	tmp='$@.tmp'; \
-	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(FROG_TOOLCHAIN_URL)'; \
+	rm -f "$$tmp"; \
+	$(CURL_DOWNLOAD) -o "$$tmp" '$(FROG_TOOLCHAIN_URL)'; \
+	test -s "$$tmp"; \
 	mv "$$tmp" '$@'
 
 $(FROG_TOOLCHAIN_ARCHIVE_CHECK): $(FROG_TOOLCHAIN_ARCHIVE) Makefile
@@ -938,8 +945,11 @@ full-reconfigure:
 
 $(BUSYBOX_ARCHIVE):
 	mkdir -p '$(dir $@)'
+	set -eu; \
 	tmp='$@.tmp'; \
-	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(BUSYBOX_URL)'; \
+	rm -f "$$tmp"; \
+	$(CURL_DOWNLOAD) -o "$$tmp" '$(BUSYBOX_URL)'; \
+	test -s "$$tmp"; \
 	mv "$$tmp" '$@'
 
 $(BUSYBOX_ARCHIVE_CHECK): $(BUSYBOX_ARCHIVE) Makefile
@@ -992,8 +1002,11 @@ $(BUSYBOX_STAMP): $(BUSYBOX_OUT)/.config $(TOOLCHAIN_SPECS) Makefile
 
 $(FB_TEST_APP_ARCHIVE):
 	mkdir -p '$(dir $@)'
+	set -eu; \
 	tmp='$@.tmp'; \
-	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(FB_TEST_APP_URL)'; \
+	rm -f "$$tmp"; \
+	$(CURL_DOWNLOAD) -o "$$tmp" '$(FB_TEST_APP_URL)'; \
+	test -s "$$tmp"; \
 	mv "$$tmp" '$@'
 
 $(FB_TEST_APP_ARCHIVE_CHECK): $(FB_TEST_APP_ARCHIVE) Makefile
@@ -1395,8 +1408,11 @@ elf-audit: $(ROOTFS_FULL_CPIO)
 
 $(LINUX_ARCHIVE):
 	mkdir -p '$(dir $@)'
+	set -eu; \
 	tmp='$@.tmp'; \
-	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(LINUX_URL)'; \
+	rm -f "$$tmp"; \
+	$(CURL_DOWNLOAD) -o "$$tmp" '$(LINUX_URL)'; \
+	test -s "$$tmp"; \
 	mv "$$tmp" '$@'
 
 $(LINUX_ARCHIVE_CHECK): $(LINUX_ARCHIVE) Makefile
