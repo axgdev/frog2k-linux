@@ -1,0 +1,9 @@
+NAME="SF2000 Linux"
+VERSION="7.1.4"
+VERSION_ID=7.1.4
+ID=sf2000
+ID_LIKE=linux
+HOME_URL="https://github.com/"
+SUPPORT_URL="https://github.com/"
+BUG_REPORT_URL="https://github.com/"
+PRETTY_NAME="SF2000 Linux 7.1.4"

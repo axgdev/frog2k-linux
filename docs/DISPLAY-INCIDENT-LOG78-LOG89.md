@@ -13,7 +13,7 @@ alternated between a blank panel and moving, scrambled pixels.
 
 The panel was not relying on the G1--G8 pictures as a magic initialization
 sequence.  Those pictures merely kept an older, working `sf2000-screen` binary
-in the generated Buildroot overlay.
+in the generated direct-userspace overlay.
 
 ## Root cause
 
@@ -47,7 +47,7 @@ timestamp is fixed through `SOURCE_DATE_EPOCH`, making clean builds reproducible
 Future display work must satisfy all three checks before replacing this base:
 
 1. build from a clean output directory;
-2. pass the QEMU display and Buildroot boot smoke tests; and
+2. pass the QEMU display and full-rootfs boot smoke tests; and
 3. compare the generated `sf2000-screen` hash and retained marker layout with
    the executable intended by the source revision.
 

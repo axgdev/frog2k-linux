@@ -7,7 +7,7 @@ related HC15xx/SF2000-family handhelds. The first hardware target is SF2000.
 
 The goal is a small, fast iteration loop:
 
-1. build the SF2000 NOMMU kernel and soft-float Buildroot userspace;
+1. build the SF2000 NOMMU kernel and direct soft-float userspace;
 2. boot the same ASD in the sibling `sf2000_qemu` board model;
 3. verify the physical display, SD, input, audio, and retained-log contracts.
 
@@ -21,7 +21,8 @@ behave differently.
 
 - `../sf2000_qemu`: separate emulator checkout used for bring-up. Set
   `QEMU_DIR` if it lives elsewhere.
-- `external/hclinux/2024.02.y.2`: symlink to the Hichip Linux/Buildroot SDK.
+- `external/hclinux/2024.02.y.2`: optional Hichip driver/platform reference;
+  it is not part of the direct build graph.
 - `/root/host-frogdev/universal/sf2000_hcrtos`: HC15xx HCRTOS/AVP board data.
 - `/root/host-frogdev/universal/unifrog`: working FreeRTOS-derived open stack.
 
@@ -38,21 +39,15 @@ initial SF2000 target small:
 - Initramfs first; SD rootfs later.
 - No desktop stack, no package manager, no X11/Wayland during bring-up.
 
-Buildroot is the preferred userspace generator for phase 1 because it can make
-tiny reproducible soft-float root filesystems. It uses the prebuilt
-`frog-toolchain`; it is not asked to build a second cross toolchain. The
-Buildroot toolchain path remains available only as an explicit legacy fallback.
-Alpine/postmarketOS can be revisited after the kernel ABI and core devices are
-proven.
-
-The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, frog-toolchain
-GCC 16.2.0/binutils 2.47/uClibc-ng 1.0.59, and BusyBox 1.38.0. Userspace is ELF-only
-and defaults entirely to static-PIE `ET_DYN`. Fixed-address static `ET_EXEC`
-is optional compatibility support enabled explicitly with `FIXED_ET_EXEC=1`.
-`make toolchain` downloads the host-appropriate arm64 or x86_64
-`frog-toolchain` release, verifies its pinned SHA-256 digest, and extracts it
-to a disposable prefix. Use `EXTERNAL_TOOLCHAIN=0` only when the legacy
-Buildroot toolchain must be rebuilt deliberately.
+The versioned baseline is Linux 7.1.4, frog-toolchain GCC 16.2.0/binutils
+2.47/uClibc-ng 1.0.59, BusyBox 1.38.0, and fb-test-app 1.1.1. Userspace is
+ELF-only and defaults entirely to static-PIE `ET_DYN`. Fixed-address static
+`ET_EXEC` is optional compatibility support enabled explicitly with
+`FIXED_ET_EXEC=1`. `make toolchain` downloads the host-appropriate arm64 or
+x86_64 frog-toolchain release, verifies its pinned SHA-256 digest, and
+extracts it to a disposable prefix. The full rootfs then downloads and hashes
+BusyBox and fb-test-app, assembles the curated base and overlay, and runs the
+ELF audit. No package-generator or target compiler build is required.
 
 For a fully separated setup, every generated location can be supplied without
 changing the source checkout:
@@ -61,15 +56,33 @@ changing the source checkout:
 make \
   BUILD_DIR=/tmp/sf2000-build \
   LINUX_SRC=/tmp/sf2000-linux-7.1.4 \
-  BUILDROOT_WORK=/tmp/sf2000-buildroot \
+  LINUX_ARCHIVE=/tmp/sf2000-cache/linux-7.1.4.tar.xz \
+  BUSYBOX_WORK=/tmp/sf2000-busybox-1.38.0 \
+  BUSYBOX_ARCHIVE=/tmp/sf2000-cache/busybox-1.38.0.tar.bz2 \
+  FB_TEST_APP_WORK=/tmp/sf2000-fb-test-app-1.1.1 \
+  FB_TEST_APP_ARCHIVE=/tmp/sf2000-cache/fb-test-app-1.1.1.tar.gz \
   FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
   FROG_TOOLCHAIN_ARCHIVE=/tmp/sf2000-cache/frog-toolchain.tar.xz \
+  QEMU_DIR=/tmp/sf2000-qemu-source \
+  QEMU_WORK=/tmp/sf2000-qemu-build \
+  FRONTEND_PROJECT=/tmp/sf2000-linux-frontend \
+  CCACHE_DIR=/tmp/sf2000-cache/ccache \
   toolchain
 make \
   BUILD_DIR=/tmp/sf2000-build \
-  BUILDROOT_WORK=/tmp/sf2000-buildroot \
+  BUSYBOX_WORK=/tmp/sf2000-busybox-1.38.0 \
+  BUSYBOX_ARCHIVE=/tmp/sf2000-cache/busybox-1.38.0.tar.bz2 \
+  FB_TEST_APP_WORK=/tmp/sf2000-fb-test-app-1.1.1 \
+  FB_TEST_APP_ARCHIVE=/tmp/sf2000-cache/fb-test-app-1.1.1.tar.gz \
+  LINUX_SRC=/tmp/sf2000-linux-7.1.4 \
+  LINUX_ARCHIVE=/tmp/sf2000-cache/linux-7.1.4.tar.xz \
   FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
-  ROOTFS=buildroot linux-buildroot-test-asd
+  FROG_TOOLCHAIN_ARCHIVE=/tmp/sf2000-cache/frog-toolchain.tar.xz \
+  QEMU_DIR=/tmp/sf2000-qemu-source \
+  QEMU_WORK=/tmp/sf2000-qemu-build \
+  FRONTEND_PROJECT=/tmp/sf2000-linux-frontend \
+  CCACHE_DIR=/tmp/sf2000-cache/ccache \
+  ROOTFS=full linux-full-test-asd
 ```
 
 `JOBS` and `KERNEL_JOBS` default to the host CPU count, and ccache is enabled
@@ -97,9 +110,10 @@ Additional cores are SD packages, not boot-image payload. `make sdcard-linux`
 stages them below `build/sdcard/sf2000/cores` with their licenses and includes
 them in `SHA256SUMS`. The current verified packages are QuickNES, ProSystem,
 Snes9x 2005, Snes9x 2002, Stella 2014, Gearboy, and PCE Fast. Opening
-`.nes`, `.sfc`, or `.gb` content displays the corresponding core chooser; the directory
-controls only the initial selection. Gambatte, gpSP, and FCEUmm remain in the
-boot image because they are part of the QEMU launch gates.
+`.nes`, `.sfc`, or `.gb` content displays the corresponding core chooser; the
+directory controls only the initial selection. QEMU launch gates stage
+Gambatte, gpSP, and FCEUmm into their private test images when those tests
+are run; none of these emulator cores is compiled into the boot ASD.
 The browser also records a durable log checkpoint immediately before every
 player/core `execve`; START+RIGHT requests the same checkpoint while the
 browser or a running core is active. The logger independently recognizes the
@@ -134,19 +148,19 @@ vendor-driver/FFmpeg porting process, and prioritized roadmap.
 make help
 make check
 make qemu
-make ROOTFS=buildroot sdcard-linux
-make ROOTFS=buildroot elf-audit
-make ROOTFS=buildroot smoke-linux-buildroot-asd
-make ROOTFS=buildroot smoke-linux-buildroot-rom
+make ROOTFS=full sdcard-linux
+make ROOTFS=full elf-audit
+make ROOTFS=full smoke-linux-full-asd
+make ROOTFS=full smoke-linux-full-rom
 make smoke-qemu-board-contract
 make smoke-qemu-display
-make ROOTFS=buildroot smoke-linux-buildroot-storage
-make ROOTFS=buildroot smoke-linux-buildroot-storage-enumeration
-make ROOTFS=buildroot smoke-linux-buildroot-storage-probe-writeback
-make ROOTFS=buildroot smoke-linux-buildroot-persistent-storage
-make ROOTFS=buildroot smoke-linux-buildroot-display
-make ROOTFS=buildroot smoke-linux-buildroot-fb-test
-make smoke-linux-buildroot-audio
+make ROOTFS=full smoke-linux-full-storage
+make ROOTFS=full smoke-linux-full-storage-enumeration
+make ROOTFS=full smoke-linux-full-storage-probe-writeback
+make ROOTFS=full smoke-linux-full-persistent-storage
+make ROOTFS=full smoke-linux-full-display
+make ROOTFS=full smoke-linux-full-fb-test
+make smoke-linux-full-audio
 make smoke-qemu-unifrog
 make smoke-qemu-mufrog
 make smoke-qemu-unifrog-display
@@ -154,22 +168,22 @@ make smoke-qemu-mufrog-display
 make status
 ```
 
-`smoke-linux-buildroot-storage` now delegates to the sibling
+`smoke-linux-full-storage` now delegates to the sibling
 `sf2000_qemu` raw-image DMA writeback smoke, so the default storage
 regression path uses the stronger emulator-side oracle instead of the brittle
 direct guest probe.
 
-`smoke-linux-buildroot-storage-enumeration` exercises the in-tree QEMU model
+`smoke-linux-full-storage-enumeration` exercises the in-tree QEMU model
 and Linux HC15 host together. It checks SCR DMA, SD card registration,
 `mmcblk0`, and the first 4 KiB block read.
 
-`smoke-linux-buildroot-storage-probe-writeback` boots the minimal NOMMU
+`smoke-linux-full-storage-probe-writeback` boots the minimal NOMMU
 storage helper, writes through `mmcblk0`, flushes and reads the data back, and
 then verifies the same signature in QEMU's SD image. Linux QEMU runs default
 to the MIPS32r1 `4Km` fixed-mapping CPU model; `4Kc` models an R4000-style TLB
 and is not an appropriate stand-in for the SF2000's MMU-less CPU.
 
-Normal Buildroot boots keep the detected VFAT card mounted at `/mnt/sd`. The
+Normal full-rootfs boots keep the detected VFAT card mounted at `/mnt/sd`. The
 `sf2000-logd` service appends `/loglinux.txt` on that card. Every record carries
 the 100 Hz monotonic tick, monotonic microseconds, process elapsed ticks, and
 logger user/system CPU ticks. It drains `/dev/kmsg`, records input events and
@@ -195,9 +209,9 @@ failure all release it. Storage smoke targets retain explicit
 destructive/readback coverage for development, but normal device boots do not
 create a recurring test file.
 
-`smoke-linux-buildroot-asd` now covers the normal multi-exec init path through
+`smoke-linux-full-asd` now covers the normal multi-exec init path through
 the screen service's ready marker and rejects data-bus faults.
-`smoke-linux-buildroot-display` additionally requires a mode-6 RGB565 GMA
+`smoke-linux-full-display` additionally requires a mode-6 RGB565 GMA
 scanout and a captured 320x240 framebuffer. The kernel reserves that scanout
 as a 320x240 RGB565 simple framebuffer and exposes it as `/dev/fb0`; the smoke
 requires device registration and a successful userspace write through the
@@ -207,7 +221,7 @@ the uncached KSEG1 alias while validating it against the framebuffer physical
 address, so ordinary applications can use fbdev `mmap` as well as `read`,
 `write`, and ioctls.
 
-The Buildroot image includes the upstream `fb-test-app` 1.1.1 utilities. Once
+The full image includes the upstream `fb-test-app` 1.1.1 utilities. Once
 the physical display contract has been validated, normal boots retain the
 working console instead of stopping it for diagnostic test screens. Append
 `SF2000_FB_TEST=1` to the kernel command line to run `fb-test` automatically.
@@ -236,16 +250,16 @@ is configurable:
 
 ```sh
 # Immediate diagnostic console
-make ROOTFS=buildroot SF2000_BOOT_VISUAL=console sdcard-linux
+make ROOTFS=full SF2000_BOOT_VISUAL=console sdcard-linux
 
 # Black conditioning frame followed directly by the browser (default)
-make ROOTFS=buildroot SF2000_BOOT_VISUAL=browser sdcard-linux
+make ROOTFS=full SF2000_BOOT_VISUAL=browser sdcard-linux
 
 # Built-in logo, held for 750 ms
-make ROOTFS=buildroot SF2000_BOOT_VISUAL=logo sdcard-linux
+make ROOTFS=full SF2000_BOOT_VISUAL=logo sdcard-linux
 
 # RGB565 solid color, held for 1200 ms
-make ROOTFS=buildroot SF2000_BOOT_VISUAL=color \
+make ROOTFS=full SF2000_BOOT_VISUAL=color \
 	SF2000_BOOT_COLOR=0x001f SF2000_BOOT_HOLD_MS=1200 sdcard-linux
 ```
 
@@ -261,7 +275,7 @@ disturbing the live GMA descriptor. It then executes `fb-test -p 0` directly. No
 intermediate shell, `killall`, or timeout process is involved in the handoff.
 The expected final screen is a sharp test card with a green top edge, yellow
 bottom edge, blue left field, red right field, RGB labels, and diagonals. The
-`smoke-linux-buildroot-fb-test` alias runs the full display smoke and checks
+`smoke-linux-full-fb-test` alias runs the full display smoke and checks
 representative pixels in QEMU's continuously refreshed scanout. This covers a
 real independently maintained static Linux ELF program, signal/child handling, all
 eight o32 syscall argument slots, fbdev ioctls, framebuffer `mmap`, and CPU
@@ -269,7 +283,7 @@ writes becoming visible through the same GMA scanout used by the device. Add
 `SF2000_FB_TEST=1` explicitly because the production default leaves the
 accelerated console running.
 
-`smoke-linux-buildroot-audio` opens the in-kernel SF2000 ALSA PCM device from
+`smoke-linux-full-audio` opens the in-kernel SF2000 ALSA PCM device from
 NOMMU userspace, streams a 32 kHz S16 mono test signal through a coherent SND0
 DMA ring, and requires QEMU's WAV backend to receive the guest samples.  The
 same driver and device-tree node are used by the physical image.
@@ -282,7 +296,7 @@ override and session edge run from the MUSB `set_mode` callback after core has
 finished clearing `POWER` and `DEVCTL`. HC15xx uses opposite ID-override
 polarity on its two ports: host mode sets USB0 UTMI bit 7 and clears USB1 UTMI
 bit 6, matching the vendor `USB_DR_MODE_HOST` branch and the SF2000 USB-A
-routing to USB1. The normal Buildroot smoke
+routing to USB1. The normal full-rootfs smoke
 requires both USB buses to register. USB1 uses SYSINT sources 51 and 50,
 matching the proven SF2000 firmware contract.
 `sf2000-logd` dynamically opens `/dev/input/event0` through `event15`, so a

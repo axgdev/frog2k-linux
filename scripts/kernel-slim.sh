@@ -12,7 +12,7 @@
 # port never enables are removed.
 #
 # The keep-lists below are derived from the built .o files of the reference
-# build (build/linux-sf2000-buildroot), i.e. what the sf2000 defconfig +
+# build (build/linux-sf2000-full), i.e. what the sf2000 defconfig +
 # patches actually compile.  If a new driver is enabled later, add it here.
 set -eu
 

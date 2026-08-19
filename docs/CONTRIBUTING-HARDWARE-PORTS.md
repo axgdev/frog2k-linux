@@ -113,14 +113,14 @@ Run the cheapest useful gate first:
 
 1. `make check`
 2. vendor/source differential tests for the changed library
-3. `make ROOTFS=buildroot elf-audit`
+3. `make ROOTFS=full elf-audit`
 4. the subsystem QEMU smoke
 5. lifecycle and repeated-exec smoke
 6. full ASD boot smoke
 7. physical device, retained log, and artifact hash confirmation
 
 The final commit body lists every command and result. A physical test artifact
-must be copied to both `build/sf2000-linux-buildroot.asd` and
+must be copied to both `build/sf2000-linux-full.asd` and
 `build/sdcard/bios/bisrv.asd`, with matching hashes.
 
 ## 6. Review Checklist

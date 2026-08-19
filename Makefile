@@ -2,6 +2,8 @@
 
 QEMU_DIR ?= $(abspath ../sf2000_qemu)
 QEMU_ORACLE_DIR ?= $(abspath $(QEMU_DIR))
+QEMU_VERSION ?= 10.2.2
+QEMU_WORK ?= /tmp/sf2000-qemu
 HCLINUX_DIR := external/hclinux/2024.02.y.2
 BUILD_DIR ?= build
 INITRAMFS := $(BUILD_DIR)/initramfs.cpio
@@ -9,7 +11,9 @@ INITRAMFS_LIST := $(BUILD_DIR)/initramfs.list
 INIT_BIN := $(BUILD_DIR)/initramfs-init
 GEN_INIT_CPIO := $(BUILD_DIR)/gen_init_cpio
 ASDPACK := $(BUILD_DIR)/asdpack
-QEMU_BIN := /tmp/sf2000-qemu/qemu-10.2.2/build/qemu-system-mipsel
+INITRAMFS_DATE ?= 1970-01-01 UTC
+INITRAMFS_EPOCH ?= 0
+QEMU_BIN ?= $(QEMU_WORK)/qemu-$(QEMU_VERSION)/build/qemu-system-mipsel
 QEMU_MKSD := $(QEMU_DIR)/build/mksf2000sd
 # The SF2000 kernel is built for MIPS32r1 but deliberately uses MIPS32r2 CP0
 # features (IntCtl/EBase select-1, ehb) in per_cpu_trap_init(); the 4Km model
@@ -25,7 +29,6 @@ QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
-EXTERNAL_TOOLCHAIN ?= 1
 USE_CCACHE ?= 1
 CCACHE ?= $(if $(filter 1,$(USE_CCACHE)),$(shell command -v ccache 2>/dev/null),)
 CCACHE_COMPILE := $(if $(strip $(CCACHE)),$(CCACHE) ,)
@@ -44,7 +47,6 @@ EFUSE_TEST := $(BUILD_DIR)/hc15xx-efuse-test
 VDEC_TEST := $(BUILD_DIR)/hc15xx-vdec-test
 VDEC_CODEC_TEST := $(BUILD_DIR)/hc15xx-vdec-codec-test
 DSC_TEST := $(BUILD_DIR)/hc15xx-dsc-test
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
 FROG_TOOLCHAIN_VERSION ?= 1.3.2
 FROG_TOOLCHAIN_GCC_VERSION ?= 16.2.0
 FROG_TOOLCHAIN_BINUTILS_VERSION ?= 2.47
@@ -63,12 +65,8 @@ FROG_TOOLCHAIN_ARCHIVE ?= .cache/$(FROG_TOOLCHAIN_NAME)
 FROG_TOOLCHAIN_WORK ?= /tmp/sf2000-linux-frog-toolchain-v$(FROG_TOOLCHAIN_VERSION)-$(FROG_TOOLCHAIN_ARCH)
 FROG_TOOLCHAIN_PREFIX ?= $(FROG_TOOLCHAIN_WORK)/mipsel-unknown-linux-uclibc
 TOOLCHAIN_DIR ?= $(FROG_TOOLCHAIN_PREFIX)
-BUILDROOT_TARGET_TUPLE ?= mipsel-unknown-linux-uclibc
-else
-TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
-BUILDROOT_TARGET_TUPLE ?= mipsel-buildroot-linux-uclibc
-endif
-CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-
+TOOLCHAIN_TUPLE ?= mipsel-unknown-linux-uclibc
+CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/$(TOOLCHAIN_TUPLE)-
 CC_MIPS = $(CROSS_COMPILE)gcc
 CC_MIPS_RUN = $(CCACHE_COMPILE)$(CC_MIPS)
 KERNEL_CC = $(CCACHE_COMPILE)$(CROSS_COMPILE)gcc
@@ -87,101 +85,109 @@ ROOTFS ?= tiny
 LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
 LINUX_URL := https://cdn.kernel.org/pub/linux/kernel/v7.x/$(LINUX_TARBALL)
+LINUX_SHA256 := 1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+LINUX_ARCHIVE := .cache/$(LINUX_TARBALL)
+LINUX_ARCHIVE_CHECK := $(LINUX_ARCHIVE).verified
 LINUX_SRC ?= /tmp/sf2000-linux-next-kernel-$(LINUX_VERSION)
-BUILDROOT_VERSION := 2026.05.1
-BUILDROOT_TARBALL := buildroot-$(BUILDROOT_VERSION).tar.xz
-BUILDROOT_URL := https://buildroot.org/downloads/$(BUILDROOT_TARBALL)
-BUILDROOT_WORK ?= /tmp/sf2000-linux-next-buildroot
-BUILDROOT_SRC ?= $(BUILDROOT_WORK)/buildroot-$(BUILDROOT_VERSION)
-BUILDROOT_OUT ?= $(BUILDROOT_WORK)/buildroot-sf2000
-BUILDROOT_DEFCONFIG := buildroot/sf2000_defconfig
-BUILDROOT_BUSYBOX_CONFIG := buildroot/sf2000_busybox.config
-BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
-BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
-BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
-BUILDROOT_CONFIG_INPUTS := $(BUILD_DIR)/.stamp-buildroot-config-inputs
-BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
-BUILDROOT_INIT_CLONE := buildroot/sf2000-init-clone.S
-BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
-BUILDROOT_SUPERVISOR := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-init
-BUILDROOT_PAD_SRC := buildroot/sf2000-pad.c
-BUILDROOT_PAD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
-BUILDROOT_POWERD_SRC := buildroot/sf2000-powerd.c
-BUILDROOT_POWERD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
+BUSYBOX_VERSION := 1.38.0
+BUSYBOX_TARBALL := busybox-$(BUSYBOX_VERSION).tar.bz2
+BUSYBOX_URL := https://www.busybox.net/downloads/$(BUSYBOX_TARBALL)
+BUSYBOX_SHA256 := 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
+BUSYBOX_WORK ?= /tmp/sf2000-linux-busybox-$(BUSYBOX_VERSION)
+BUSYBOX_SRC ?= $(BUSYBOX_WORK)/busybox-$(BUSYBOX_VERSION)
+BUSYBOX_ARCHIVE ?= .cache/$(BUSYBOX_TARBALL)
+BUSYBOX_ARCHIVE_CHECK := $(BUSYBOX_ARCHIVE).verified
+BUSYBOX_OUT := $(BUILD_DIR)/busybox
+BUSYBOX_ROOT := $(BUILD_DIR)/busybox-root
+BUSYBOX_CONFIG := userspace/busybox.config
+BUSYBOX_PATCHES := $(wildcard userspace/patches/busybox/*.patch)
+BUSYBOX_SOURCE_STAMP := $(BUSYBOX_OUT)/.stamp-source
+BUSYBOX_PATCH_STAMP := $(BUSYBOX_OUT)/.stamp-patched
+BUSYBOX_STAMP := $(BUSYBOX_OUT)/.stamp-built
+ROOTFS_BASE := userspace/rootfs-base
+ROOTFS_OVERLAY := userspace/rootfs-overlay
+ROOTFS_DIR := $(BUILD_DIR)/rootfs-full
+ROOTFS_DEVICE_CPIO_LIST := $(BUILD_DIR)/rootfs-device-nodes.list
+ROOTFS_FULL_CPIO := $(BUILD_DIR)/rootfs-full.cpio
+ROOTFS_GENERATED_OVERLAY := $(BUILD_DIR)/userspace-generated-overlay
+ROOTFS_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-userspace-generated-overlay
+ROOTFS_OVERLAY_FILES := $(shell find '$(ROOTFS_OVERLAY)' -type f 2>/dev/null)
+ROOTFS_BASE_FILES := $(shell find '$(ROOTFS_BASE)' -type f 2>/dev/null)
+FB_TEST_APP_VERSION := 1.1.1
+FB_TEST_APP_TARBALL := fb-test-app-$(FB_TEST_APP_VERSION).tar.gz
+FB_TEST_APP_URL := https://github.com/andy-shev/fb-test-app/archive/rosetta-$(FB_TEST_APP_VERSION)/$(FB_TEST_APP_TARBALL)
+FB_TEST_APP_SHA256 := 45d490ed78a6e4425d9a760e81e99dc503af01704e17ab5bf186b87a31c5e3db
+FB_TEST_APP_WORK ?= /tmp/sf2000-linux-fb-test-app-$(FB_TEST_APP_VERSION)
+FB_TEST_APP_SRC ?= $(FB_TEST_APP_WORK)/fb-test-app-rosetta-$(FB_TEST_APP_VERSION)
+FB_TEST_APP_ARCHIVE ?= .cache/$(FB_TEST_APP_TARBALL)
+FB_TEST_APP_ARCHIVE_CHECK := $(FB_TEST_APP_ARCHIVE).verified
+FB_TEST_APP_OUT := $(BUILD_DIR)/fb-test-app
+FB_TEST_APP_SOURCE_STAMP := $(FB_TEST_APP_OUT)/.stamp-source
+FB_TEST_APP_STAMP := $(FB_TEST_APP_OUT)/.stamp-built
 ENABLE_EXPERIMENTAL_DEVTESTS ?= 0
 FIXED_ET_EXEC ?= 0
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
-BUILDROOT_FRONTEND := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
-BUILDROOT_JS2300 := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-js2300
-BUILDROOT_AUDIO_SRC := buildroot/sf2000-audio.c
-BUILDROOT_AUDIO := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
-BUILDROOT_HEARTBEAT_SRC := buildroot/sf2000-heartbeat.c
-BUILDROOT_HEARTBEAT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
-BUILDROOT_LOGD_SRC := buildroot/sf2000-logd.c
-BUILDROOT_LOGD := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-logd
-BUILDROOT_MOUNT_SRC := buildroot/sf2000-mount.c
-BUILDROOT_MOUNT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-mount
-BUILDROOT_SCREEN_SRC := buildroot/sf2000-screen.c
-BUILDROOT_SCREEN_CFLAGS :=
-BUILDROOT_SCREEN := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
-BUILDROOT_SCREEN_SOURCE_STAMP := $(BUILD_DIR)/.stamp-buildroot-screen-source
-BUILDROOT_PANEL_PROBE_LINK := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe
-BUILDROOT_PANEL_PROBE_TARGET ?= sf2000-screen
-BUILDROOT_PANEL_INIT := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
-BUILDROOT_PANEL_INIT_SRC := buildroot/sf2000-panel-init.c
-BUILDROOT_PANEL_FASTPROBE_SRC := buildroot/sf2000-panel-fastprobe.c
-BUILDROOT_PANEL_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-fastprobe
-BUILDROOT_STORAGE_PROBE_SRC := buildroot/sf2000-storage-probe.c
-BUILDROOT_STORAGE_PROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
-BUILDROOT_STORAGE_FASTPROBE_SRC := buildroot/sf2000-storage-fastprobe.c
-BUILDROOT_STORAGE_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
-BUILDROOT_RESET_FASTPROBE_SRC := buildroot/sf2000-reset-fastprobe.c
-BUILDROOT_RESET_FASTPROBE := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
-BUILDROOT_RESET_RESTORE_SCRIPT := scripts/qmp_restore_smoke.py
-BUILDROOT_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migration
-BUILDROOT_RESET_RESTORE_SOCKET := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe.qmp
-BUILDROOT_RESET_RESTORE_SOCKET_DEST := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe-restore.qmp
-BUILDROOT_RESET_RESTORE_PREFIX := $(BUILD_DIR)/logs/linux-buildroot-reset-restore
-BUILDROOT_DEVICE_TABLE := buildroot/sf2000_device_table.txt
-BUILDROOT_PATCHES := buildroot/patches
-BUILDROOT_OVERLAY_FILES := $(shell find '$(BUILDROOT_OVERLAY)' -type f 2>/dev/null)
-BUILDROOT_PATCH_FILES := $(shell find '$(BUILDROOT_PATCHES)' -type f 2>/dev/null)
-BUILDROOT_CORE_PATCHES := $(wildcard buildroot/patches/buildroot/*.patch)
-BUILDROOT_CPIO := $(BUILD_DIR)/rootfs-buildroot.cpio
-BUILDROOT_TARGET_STAMP := $(BUILDROOT_OUT)/.stamp-target
-BUILDROOT_REPACK_DIR := $(BUILD_DIR)/buildroot-repack-root
-BUILDROOT_DEVICE_CPIO_LIST := $(BUILD_DIR)/buildroot-device-nodes.list
-BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
+USERSPACE_GENERATED_OVERLAY := $(ROOTFS_GENERATED_OVERLAY)
+USERSPACE_INIT_SRC := userspace/sf2000-init.c
+USERSPACE_INIT_CLONE := userspace/sf2000-init-clone.S
+USERSPACE_INIT := $(USERSPACE_GENERATED_OVERLAY)/init
+USERSPACE_SUPERVISOR := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-init
+USERSPACE_PAD_SRC := userspace/sf2000-pad.c
+USERSPACE_PAD := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-pad
+USERSPACE_POWERD_SRC := userspace/sf2000-powerd.c
+USERSPACE_POWERD := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-powerd
+USERSPACE_FRONTEND := $(USERSPACE_GENERATED_OVERLAY)/usr/bin/sf2000-frontend
+USERSPACE_JS2300 := $(USERSPACE_GENERATED_OVERLAY)/usr/bin/sf2000-js2300
+USERSPACE_AUDIO_SRC := userspace/sf2000-audio.c
+USERSPACE_AUDIO := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-audio
+USERSPACE_HEARTBEAT_SRC := userspace/sf2000-heartbeat.c
+USERSPACE_HEARTBEAT := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-heartbeat
+USERSPACE_LOGD_SRC := userspace/sf2000-logd.c
+USERSPACE_LOGD := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-logd
+USERSPACE_MOUNT_SRC := userspace/sf2000-mount.c
+USERSPACE_MOUNT := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-mount
+USERSPACE_SCREEN_SRC := userspace/sf2000-screen.c
+USERSPACE_SCREEN_CFLAGS :=
+USERSPACE_SCREEN := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-screen
+USERSPACE_SCREEN_SOURCE_STAMP := $(BUILD_DIR)/.stamp-userspace-screen-source
+USERSPACE_PANEL_PROBE_LINK := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-probe
+USERSPACE_PANEL_PROBE_TARGET ?= sf2000-screen
+USERSPACE_PANEL_INIT := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-init
+USERSPACE_PANEL_INIT_SRC := userspace/sf2000-panel-init.c
+USERSPACE_PANEL_FASTPROBE_SRC := userspace/sf2000-panel-fastprobe.c
+USERSPACE_PANEL_FASTPROBE := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-panel-fastprobe
+USERSPACE_STORAGE_PROBE_SRC := userspace/sf2000-storage-probe.c
+USERSPACE_STORAGE_PROBE := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-probe
+USERSPACE_STORAGE_FASTPROBE_SRC := userspace/sf2000-storage-fastprobe.c
+USERSPACE_STORAGE_FASTPROBE := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-storage-fastprobe
+USERSPACE_RESET_FASTPROBE_SRC := userspace/sf2000-reset-fastprobe.c
+USERSPACE_RESET_FASTPROBE := $(USERSPACE_GENERATED_OVERLAY)/usr/sbin/sf2000-reset-fastprobe
+USERSPACE_RESET_RESTORE_SCRIPT := scripts/qmp_restore_smoke.py
+USERSPACE_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migration
+USERSPACE_RESET_RESTORE_SOCKET := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe.qmp
+USERSPACE_RESET_RESTORE_SOCKET_DEST := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe-restore.qmp
+USERSPACE_RESET_RESTORE_PREFIX := $(BUILD_DIR)/logs/linux-full-reset-restore
+USERSPACE_CPIO := $(ROOTFS_FULL_CPIO)
+USERSPACE_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
 PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
 
-# The prebuilt frog-toolchain is the normal userspace/compiler ABI.  Set
-# EXTERNAL_TOOLCHAIN=0 only for an explicit legacy Buildroot-toolchain build.
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-BUILDROOT_TOOLCHAIN_STAMP := $(BUILD_DIR)/external-toolchain/.stamp-verified
-BUILDROOT_CC := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
-BUILDROOT_CXX := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-g++
-BUILDROOT_STRIP := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-strip
-PIE_SYSROOT := $(TOOLCHAIN_DIR)/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
-BUILDROOT_CC_RUN = $(CCACHE_COMPILE)$(BUILDROOT_CC)
-# The crosstool-ng gcc startfile spec lists -static before -static-pie, so
-# `-static -static-pie` (which Buildroot packages such as BusyBox emit) selects
-# the non-PIC crt1.o and the MIPS static-PIE link fails with R_MIPS_HI16
-# against _gp.  Generate a specs override that lets -static-pie win and hand it
-# to every package link through BR2_TARGET_LDFLAGS.
-EXTERNAL_SPECS := $(BUILD_DIR)/external-toolchain/static-pie.specs
+# The pinned frog-toolchain is the only supported target compiler. It is
+# downloaded as an artifact; no target toolchain is built in this repository.
+TOOLCHAIN_STAMP := $(BUILD_DIR)/toolchain/.stamp-verified
+TARGET_CC := $(TOOLCHAIN_DIR)/bin/$(TOOLCHAIN_TUPLE)-gcc
+TARGET_CXX := $(TOOLCHAIN_DIR)/bin/$(TOOLCHAIN_TUPLE)-g++
+TARGET_STRIP := $(TOOLCHAIN_DIR)/bin/$(TOOLCHAIN_TUPLE)-strip
+PIE_SYSROOT := $(TOOLCHAIN_DIR)/$(TOOLCHAIN_TUPLE)/sysroot/usr/lib
+TARGET_CC_RUN = $(CCACHE_COMPILE)$(TARGET_CC)
+# The frog-toolchain GCC startfile spec lists -static before -static-pie, so
+# `-static -static-pie` selects the non-PIC crt1.o and the MIPS static-PIE link
+# fails with R_MIPS_HI16 against _gp. Generate a specs override once and use it
+# for every direct userspace link.
+TOOLCHAIN_SPECS := $(BUILD_DIR)/toolchain/static-pie.specs
 FROG_TOOLCHAIN_ARCHIVE_CHECK := $(FROG_TOOLCHAIN_ARCHIVE).verified
-FROG_TOOLCHAIN_SETUP_STAMP := $(BUILD_DIR)/external-toolchain/.stamp-frog-toolchain
-else
-BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
-BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
-BUILDROOT_CXX := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-g++
-BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-strip
-PIE_SYSROOT := $(BUILDROOT_OUT)/host/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
-BUILDROOT_CC_RUN = $(CCACHE_COMPILE)$(BUILDROOT_CC)
-endif
+FROG_TOOLCHAIN_SETUP_STAMP := $(BUILD_DIR)/toolchain/.stamp-frog-toolchain
 
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
 # Fetch the pinned host-appropriate frog-toolchain only when the default
 # prefix is being used.  An explicitly supplied TOOLCHAIN_DIR is treated as
 # an already managed installation and is verified below without overwriting
@@ -196,102 +202,72 @@ $(FROG_TOOLCHAIN_ARCHIVE):
 $(FROG_TOOLCHAIN_ARCHIVE_CHECK): $(FROG_TOOLCHAIN_ARCHIVE) Makefile
 	test "$$(sha256sum '$<' | awk '{print $$1}')" = '$(FROG_TOOLCHAIN_SHA256)'
 	printf 'sha256=%s\narchive=%s\n' '$(FROG_TOOLCHAIN_SHA256)' '$(abspath $(FROG_TOOLCHAIN_ARCHIVE))' > '$@.tmp'
-	mv '$@.tmp' '$@'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 
 $(FROG_TOOLCHAIN_SETUP_STAMP): FORCE $(FROG_TOOLCHAIN_ARCHIVE_CHECK) Makefile
 	mkdir -p '$(FROG_TOOLCHAIN_WORK)' '$(dir $@)'
-	if test ! -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc'; then \
+	if test ! -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(TOOLCHAIN_TUPLE)-gcc'; then \
 		tar -xJf '$(FROG_TOOLCHAIN_ARCHIVE)' -C '$(FROG_TOOLCHAIN_WORK)'; \
 	fi
-	test -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc'
+	test -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(TOOLCHAIN_TUPLE)-gcc'
 	printf 'prefix=%s\narchive=%s\nsha256=%s\n' \
 		'$(abspath $(FROG_TOOLCHAIN_PREFIX))' \
 		'$(abspath $(FROG_TOOLCHAIN_ARCHIVE))' \
 		'$(FROG_TOOLCHAIN_SHA256)' > '$@.tmp'
 	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 else
-$(FROG_TOOLCHAIN_SETUP_STAMP): FORCE Makefile
+$(FROG_TOOLCHAIN_SETUP_STAMP): Makefile
 	mkdir -p '$(dir $@)'
-	test -x '$(BUILDROOT_CC)'
-	printf 'prefix=%s\ncompiler=%s\n' \
-		'$(abspath $(TOOLCHAIN_DIR))' '$(abspath $(BUILDROOT_CC))' > '$@.tmp'
+	test -x '$(TARGET_CC)'
+	test "$$( $(TARGET_CC) -dumpmachine )" = '$(TOOLCHAIN_TUPLE)'
+	printf 'prefix=%s\ncompiler=%s\ntuple=%s\n' \
+		'$(abspath $(TOOLCHAIN_DIR))' '$(abspath $(TARGET_CC))' \
+		'$(TOOLCHAIN_TUPLE)' > '$@.tmp'
 	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 endif
 
 # Regenerate the specs override from the toolchain's own -dumpspecs output so
 # it stays in sync with that toolchain's startfile spec.
-$(EXTERNAL_SPECS): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(TOOLCHAIN_SPECS): $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -dumpspecs | \
+	'$(TARGET_CC)' -dumpspecs | \
 		awk '/^\*startfile:/{p=1; print; next} p && /^\*[a-zA-Z_]+:/{exit} p{print}' | \
 		sed 's/static:crt1\.o%s;[[:space:]]*static-pie:rcrt1\.o%s;/static-pie:rcrt1.o%s; static:crt1.o%s;/' > '$@'
-endif
 
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-# The specs override must exist before the rootfs packages link.
-$(BUILDROOT_TARGET_STAMP): $(EXTERNAL_SPECS)
-endif
-
-BUILDROOT_PIE_CFLAGS := -Os -Wall -Wextra -march=mips32 -mabi=32 -msoft-float \
+USERSPACE_PIE_CFLAGS := -Os -Wall -Wextra -march=mips32 -mabi=32 -msoft-float \
 	-fPIC -mabicalls -ffunction-sections -fdata-sections
-BUILDROOT_PIE_LDFLAGS := -nostartfiles -static -Wl,-pie \
+USERSPACE_PIE_LDFLAGS := -nostartfiles -static -Wl,-pie \
 	-Wl,--no-dynamic-linker -Wl,-z,text \
 	-Wl,--gc-sections
-BUILDROOT_SUPERVISOR_CFLAGS := $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin
-BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
+USERSPACE_SUPERVISOR_CFLAGS := $(USERSPACE_PIE_CFLAGS) -ffreestanding -fno-builtin
+USERSPACE_INIT_SOURCE ?= $(INIT_BIN)
 INIT_CFLAGS ?=
-BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
-BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-BUILDROOT_TARGET_CC := $(CCACHE_COMPILE)$(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
-BUILDROOT_TARGET_CXX := $(CCACHE_COMPILE)$(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-g++
-BUILDROOT_TARGET_COMPILER_ARGS := TARGET_CC='$(BUILDROOT_TARGET_CC)' TARGET_GCC='$(BUILDROOT_TARGET_CC)' TARGET_CXX='$(BUILDROOT_TARGET_CXX)'
-else
-BUILDROOT_TARGET_COMPILER_ARGS :=
-endif
 ifeq ($(ENABLE_EXPERIMENTAL_DEVTESTS),1)
-BUILDROOT_EXPERIMENTAL_DEVTESTS := $(BUILDROOT_DEVTEST) \
-	$(BUILDROOT_EFUSE_DEVICE) $(BUILDROOT_VDEC_DEVICE) \
-	$(BUILDROOT_DSC_DEVICE)
-BUILDROOT_POWERD_CPPFLAGS := -DSF2000_EXPERIMENTAL_DEVTESTS
-endif
-BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))' $(BUILDROOT_TARGET_COMPILER_ARGS)
-BUILDROOT_INTERNAL_CCACHE ?= 0
-ifeq ($(BUILDROOT_INTERNAL_CCACHE),1)
-ifneq ($(strip $(CCACHE)),)
-BUILDROOT_CCACHE_OPTIONS := --enable BR2_CCACHE --set-str BR2_CCACHE_DIR '$(abspath $(CCACHE_DIR))' --enable BR2_CCACHE_USE_BASEDIR
-else
-BUILDROOT_CCACHE_OPTIONS := --disable BR2_CCACHE
-endif
-else
-BUILDROOT_CCACHE_OPTIONS := --disable BR2_CCACHE
+USERSPACE_EXPERIMENTAL_DEVTESTS := $(USERSPACE_DEVTEST) \
+	$(USERSPACE_EFUSE_DEVICE) $(USERSPACE_VDEC_DEVICE) \
+	$(USERSPACE_DSC_DEVICE)
+USERSPACE_POWERD_CPPFLAGS := -DSF2000_EXPERIMENTAL_DEVTESTS
 endif
 # Frontend Makefiles nest further into libretro core trees.  Inheriting the
-# outer jobserver (make buildroot -jN) deadlocks when several cores rebuild in
-# parallel and each child waits for tokens the parent still holds.  Drop the
-# jobserver and give each frontend invocation its own -j budget.
+# outer jobserver deadlocks nested makes and each child waits for tokens the
+# parent still holds. Drop the jobserver and give each frontend invocation its
+# own -j budget.
 FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' \
 	-C '$(FRONTEND_PROJECT)' \
 	SF2000_LINUX_DIR='$(abspath .)' CCACHE='$(CCACHE)'
-# The kernel build, the frontend core-packages (20 nested libretro core
-# makes), and the linux-buildroot/physical-linux-asd wrappers all recurse into
-# make trees of their own.  They must not inherit the outer jobserver either:
-# GNU make 4.3 deadlocks nested makes that share one token pool (the frontend
-# hit exactly this with `make buildroot -jN`), so give every stage a private
-# -j budget.  Without this, `make -j9 physical-linux-asd` hangs with the kernel
-# make blocked before syncconfig while core sub-makes wait for tokens the
-# parent still holds (observed 19 minutes of zero progress on device builds).
+# Kernel, frontend, and userspace recursive makes get private job budgets so
+# nested jobserver tokens cannot deadlock one another.
 ISOLATED_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)'
 ifeq ($(ROOTFS),tiny)
 ROOTFS_SUFFIX :=
 ROOTFS_CPIO := $(INITRAMFS)
 LINUX_OUT := $(BUILD_DIR)/linux-sf2000
-else ifeq ($(ROOTFS),buildroot)
-ROOTFS_SUFFIX := -buildroot
-ROOTFS_CPIO := $(BUILDROOT_CPIO)
-LINUX_OUT := $(BUILD_DIR)/linux-sf2000-buildroot
+else ifeq ($(ROOTFS),full)
+ROOTFS_SUFFIX := -full
+ROOTFS_CPIO := $(ROOTFS_FULL_CPIO)
+LINUX_OUT := $(BUILD_DIR)/linux-sf2000-full
 else
-$(error unsupported ROOTFS '$(ROOTFS)', expected tiny or buildroot)
+$(error unsupported ROOTFS '$(ROOTFS)', expected tiny or full)
 endif
 LINUX_VMLINUX := $(LINUX_OUT)/vmlinux
 LINUX_CONFIG_STAMP := $(LINUX_OUT)/.stamp-config
@@ -438,7 +414,7 @@ QPSX_TEST_CORE ?= $(BUILD_DIR)/sdcard/sf2000/cores/sf2000-qpsx
 QPSX_AUDIT_STAMP := $(BUILD_DIR)/sdcard/sf2000/cores/.qpsx-mips32r1-audited
 QPSX_REAL_CORE_DEP ?= qpsx-mips32r1-audit
 QPSX_BENCHMARK_SD_TARGET ?= qpsx-no-menu-test-sd
-QPSX_BENCHMARK_ASD_TARGET ?= linux-buildroot-asd
+QPSX_BENCHMARK_ASD_TARGET ?= linux-full-asd
 QPSX_BENCHMARK_SECONDS ?= 25
 SDCARD_QPSX_STARTUP_CONFIG := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg
 SDCARD_QPSX_STARTUP_CHECKSUM := $(BUILD_DIR)/sdcard/cores/config/psx_startup.cfg.sha256
@@ -460,7 +436,7 @@ QEMU_BOOT_TIMEOUT ?= 90s
 QEMU_PANEL_PROBE_TIMEOUT ?= 10s
 METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0027.txt
 PHYSICAL_CONTRACT_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/log92.txt
-QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-buildroot-display.log
+QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-full-display.log
 QEMU_BENCH_SECONDS ?= 15
 QEMU_DISPLAY_ARGS ?=
 QEMU_FIDELITY_ARGS ?= -icount shift=1,sleep=on,align=on
@@ -473,7 +449,7 @@ GE_VENDOR_CAPTURE := $(BUILD_DIR)/hcge-vendor-capture
 GE_SOURCE_CAPTURE := $(BUILD_DIR)/hcge-source-capture
 GE_VENDOR_CAPTURE_GOLDEN := ge/hcge_vendor_capture.golden
 GE_SOURCE_CAPTURE_GOLDEN := ge/hcge_source_capture.golden
-GE_ELF_CC := $(BUILDROOT_CC_RUN)
+GE_ELF_CC := $(TARGET_CC_RUN)
 
 FFMPEG_VERSION ?= 8.1.2
 FFMPEG_URL := https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
@@ -482,12 +458,12 @@ FFMPEG_OUT := $(BUILD_DIR)/ffmpeg
 FFMPEG_INSTALL := $(abspath $(FFMPEG_OUT)/install)
 FFMPEG_STAMP := $(FFMPEG_OUT)/.stamp-built
 
-BUILDROOT_DEVTEST_SRC := buildroot/sf2000-devtest.c
-BUILDROOT_DEVTEST := $(BUILDROOT_GENERATED_OVERLAY)/usr/sbin/sf2000-devtest
-BUILDROOT_EFUSE_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_efuse_device
-BUILDROOT_VDEC_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_vdec_device
-BUILDROOT_DSC_DEVICE := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/test_dsc_device
-BUILDROOT_PLAYER := $(BUILDROOT_GENERATED_OVERLAY)/usr/bin/sf2000-player
+USERSPACE_DEVTEST_SRC := userspace/sf2000-devtest.c
+USERSPACE_DEVTEST := $(ROOTFS_GENERATED_OVERLAY)/usr/sbin/sf2000-devtest
+USERSPACE_EFUSE_DEVICE := $(ROOTFS_GENERATED_OVERLAY)/usr/bin/test_efuse_device
+USERSPACE_VDEC_DEVICE := $(ROOTFS_GENERATED_OVERLAY)/usr/bin/test_vdec_device
+USERSPACE_DSC_DEVICE := $(ROOTFS_GENERATED_OVERLAY)/usr/bin/test_dsc_device
+USERSPACE_PLAYER := $(ROOTFS_GENERATED_OVERLAY)/usr/bin/sf2000-player
 
 PLAYER_TEST_SD := $(BUILD_DIR)/player-test.sd.img
 PLAYER_TEST_WAV := $(BUILD_DIR)/test-tone.wav
@@ -498,29 +474,29 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor elf-audit status qemu rootfs toolchain buildroot buildroot-reconfigure audio-test linux linux-reextract linux-reconfigure linux-asd linux-buildroot physical-linux-asd \
-	linux-buildroot-asd linux-buildroot-test-asd sdcard-linux sdcard-buildroot linux-rom-sd \
-	linux-buildroot-rom-sd run-linux smoke-linux run-linux-asd \
-	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-buildroot-asd \
-	smoke-linux-buildroot-asd smoke-linux-buildroot-ge-no-irq smoke-linux-buildroot-handoff-quiet smoke-linux-buildroot-stale-ram run-linux-buildroot-storage \
-	smoke-linux-buildroot-storage run-linux-buildroot-storage-fast \
-	smoke-linux-buildroot-storage-fast run-linux-buildroot-storage-writeback \
-smoke-linux-buildroot-storage-writeback run-linux-buildroot-storage-probe-writeback \
-smoke-linux-buildroot-storage-probe-writeback run-linux-buildroot-storage-enumeration \
-smoke-linux-buildroot-storage-enumeration smoke-linux-buildroot-persistent-storage \
-smoke-linux-buildroot-partitioned-storage \
-smoke-linux-buildroot-fat16-storage \
-smoke-linux-buildroot-exfat-storage \
-smoke-linux-buildroot-mixed-fs-storage \
-smoke-linux-buildroot-superfloppy-storage \
-run-linux-buildroot-rom \
-run-linux-buildroot-storage-launch smoke-linux-buildroot-storage-launch \
+.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor elf-audit status qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
+	linux-full-asd linux-full-test-asd sdcard-linux sdcard-full linux-rom-sd \
+	linux-full-rom-sd run-linux smoke-linux run-linux-asd \
+	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-full-asd \
+	smoke-linux-full-asd smoke-linux-full-ge-no-irq smoke-linux-full-handoff-quiet smoke-linux-full-stale-ram run-linux-full-storage \
+	smoke-linux-full-storage run-linux-full-storage-fast \
+	smoke-linux-full-storage-fast run-linux-full-storage-writeback \
+smoke-linux-full-storage-writeback run-linux-full-storage-probe-writeback \
+smoke-linux-full-storage-probe-writeback run-linux-full-storage-enumeration \
+smoke-linux-full-storage-enumeration smoke-linux-full-persistent-storage \
+smoke-linux-full-partitioned-storage \
+smoke-linux-full-fat16-storage \
+smoke-linux-full-exfat-storage \
+smoke-linux-full-mixed-fs-storage \
+smoke-linux-full-superfloppy-storage \
+run-linux-full-rom \
+run-linux-full-storage-launch smoke-linux-full-storage-launch \
 run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
-	smoke-linux-buildroot-rom run-linux-buildroot-display \
-	smoke-linux-buildroot-display \
-	smoke-linux-buildroot-fb-test run-linux-buildroot-panel \
-	smoke-linux-buildroot-panel run-linux-buildroot-panel-fast \
-	smoke-linux-buildroot-panel-fast buildroot-panel-probe-link run-linux-input smoke-linux-input \
+	smoke-linux-full-rom run-linux-full-display \
+	smoke-linux-full-display \
+	smoke-linux-full-fb-test run-linux-full-panel \
+	smoke-linux-full-panel run-linux-full-panel-fast \
+	smoke-linux-full-panel-fast full-panel-probe-link run-linux-input smoke-linux-input \
 	run-linux-power smoke-linux-power \
 	run-linux-frontend smoke-linux-frontend \
 	run-linux-js2300 smoke-linux-js2300 \
@@ -536,20 +512,20 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	qpsx-no-menu-physical \
 	gpsp-smc-test-roms run-linux-gpsp-smc smoke-linux-gpsp-smc \
 	run-linux-frontend-lifecycle smoke-linux-frontend-lifecycle \
-	run-linux-buildroot-input smoke-linux-buildroot-input \
+	run-linux-full-input smoke-linux-full-input \
 	metrics-linux metrics-frontend metrics-qemu-fidelity benchmark-qemu-linux \
-	run-linux-buildroot-fidelity smoke-linux-buildroot-fidelity \
+	run-linux-full-fidelity smoke-linux-full-fidelity \
 	smoke-linux-physical-contract metrics-qemu-timing \
-	run-linux-reboot smoke-linux-reboot run-linux-buildroot-reboot \
-	smoke-linux-buildroot-reboot run-linux-buildroot-reset-snapshot \
-	run-linux-buildroot-audio smoke-linux-buildroot-audio \
-	run-linux-buildroot-audio-gb300 smoke-linux-buildroot-audio-44100 \
-	smoke-linux-buildroot-audio-gb300 \
+	run-linux-reboot smoke-linux-reboot run-linux-full-reboot \
+	smoke-linux-full-reboot run-linux-full-reset-snapshot \
+	run-linux-full-audio smoke-linux-full-audio \
+	run-linux-full-audio-gb300 smoke-linux-full-audio-44100 \
+	smoke-linux-full-audio-gb300 \
 	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
 	run-qemu-mufrog-display smoke-qemu-mufrog-display \
-	smoke-linux-buildroot-reset-snapshot run-linux-buildroot-reset-restore \
-	smoke-linux-buildroot-reset-restore reverse-ge test-ge-node \
+	smoke-linux-full-reset-snapshot run-linux-full-reset-restore \
+	smoke-linux-full-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
 	test-ge-source-capture test-ge-formats test-ge-effects \
 	test-ge-mask test-ge-custom-keys test-ge-utils test-ge-matrix \
@@ -578,16 +554,15 @@ help:
 		'make check                 fast host-side regression suite' \
 		'make check-vendor          source/vendor GE parity tests' \
 		'make toolchain              download, verify, and unpack the pinned frog-toolchain' \
-		'make EXTERNAL_TOOLCHAIN=0 toolchain  explicitly build the legacy Buildroot toolchain' \
-		'make TOOLCHAIN_DIR=<prefix> linux-buildroot-asd  use an already installed uClibc toolchain' \
-		'make linux-buildroot-asd   build the physical-device artifact' \
-		'make physical-linux-asd    explicit alias for the physical buildroot ASD' \
+		'make TOOLCHAIN_DIR=<prefix> linux-full-asd  use an already installed frog-toolchain' \
+		'make linux-full-asd        build the physical-device artifact' \
+		'make physical-linux-asd    explicit alias for the physical full-rootfs ASD' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
-		'make smoke-linux-buildroot-asd  boot the artifact in QEMU' \
-		'make smoke-linux-buildroot-ge-no-irq  boot with the GE completion IRQ suppressed' \
-		'make smoke-linux-buildroot-stale-ram  boot with stale garbage prefill in RAM' \
-		'make ROOTFS=buildroot qpsx-no-menu-physical  stage a temporary direct-game QPSX SD diagnostic'
+		'make smoke-linux-full-asd  boot the full-rootfs artifact in QEMU' \
+		'make smoke-linux-full-ge-no-irq  boot with the GE completion IRQ suppressed' \
+		'make smoke-linux-full-stale-ram  boot with stale garbage prefill in RAM' \
+		'make ROOTFS=full qpsx-no-menu-physical  stage a temporary direct-game QPSX SD diagnostic'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
 	memory-layout-audit check-linux-early-handoff check-linux-cacheflush
@@ -619,12 +594,12 @@ status:
 	@printf '  qemu:    %s\n' '$(QEMU_DIR)'
 	@printf '  hclinux: %s\n' '$(HCLINUX_DIR)'
 	@printf '  host cc: %s\n' '$(HOSTCC)'
-	@printf '  toolchain mode: %s\n' '$(if $(filter 1,$(EXTERNAL_TOOLCHAIN)),prebuilt frog-toolchain,legacy Buildroot)'
+	@printf '  userspace: direct BusyBox + fb-test-app\n'
 	@printf '  toolchain: %s\n' '$(CROSS_COMPILE)'
 	@printf '  ccache:  %s\n' '$(if $(strip $(CCACHE)),$(CCACHE),disabled)'
 	@printf '  ccache dir: %s\n' '$(abspath $(CCACHE_DIR))'
 	@printf '  rootfs:  %s\n' '$(ROOTFS)'
-	@printf '  buildroot out: %s\n' '$(BUILDROOT_OUT)'
+	@printf '  rootfs build: %s\n' '$(ROOTFS_FULL_CPIO)'
 	@printf '  jobs:    %s\n' '$(JOBS)'
 	@printf '  qemu bin exists: '
 	@test -x '$(QEMU_BIN)' && printf 'yes\n' || printf 'no\n'
@@ -636,8 +611,8 @@ status:
 	@test -f '$(LINUX_VMLINUX)' && printf 'yes\n' || printf 'no\n'
 	@printf '  linux asd exists: '
 	@test -f '$(LINUX_ASD)' && printf 'yes\n' || printf 'no\n'
-	@printf '  buildroot cpio exists: '
-	@test -f '$(BUILDROOT_CPIO)' && printf 'yes\n' || printf 'no\n'
+	@printf '  full rootfs cpio exists: '
+	@test -f '$(ROOTFS_FULL_CPIO)' && printf 'yes\n' || printf 'no\n'
 	@printf '  bugfix ROM exists: '
 	@test -f '$(BOOTROM_BUGFIX)' && printf 'yes\n' || printf 'no\n'
 
@@ -666,7 +641,7 @@ $(GE_UTILS_TEST): ge/hcge_utils.c ge/hcge_utils_test.c ge/ge_api.h
 		-o '$@' ge/hcge_utils.c ge/hcge_utils_test.c
 
 $(GE_VENDOR_UTILS_TEST): ge/hcge_utils_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_utils_test.c '$(GE_VENDOR_ARCHIVE)'
 
@@ -675,12 +650,12 @@ test-ge-utils: $(GE_UTILS_TEST) $(GE_VENDOR_UTILS_TEST)
 	'$(GE_UTILS_TEST)' | cmp - '$(BUILD_DIR)/hcge-utils.vendor'
 
 $(GE_MATRIX_TEST): ge/hcge_matrix.c ge/hcge_matrix_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_matrix.c ge/hcge_matrix_test.c -lm
 
 $(GE_VENDOR_MATRIX_TEST): ge/hcge_matrix_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_matrix_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
@@ -689,13 +664,13 @@ test-ge-matrix: $(GE_MATRIX_TEST) $(GE_VENDOR_MATRIX_TEST)
 	qemu-mipsel '$(GE_MATRIX_TEST)' | cmp - '$(BUILD_DIR)/hcge-matrix.vendor'
 
 $(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_queue_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -ffunction-sections \
 		-Wl,--gc-sections -o '$@' ge/hcge_linux.c ge/hcge_node.c \
 		ge/hcge_queue_test.c
 
 $(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_queue_test.c '$(GE_VENDOR_ARCHIVE)'
 
@@ -704,7 +679,7 @@ test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
 	qemu-mipsel '$(GE_QUEUE_TEST)' | cmp - '$(BUILD_DIR)/hcge-queue.vendor'
 
 $(GE_BATCH_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_batch_test.c \
-		ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
+		ge/ge_api.h $(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -ffunction-sections \
 		-Wl,--gc-sections -Wl,--wrap=ioctl -o '$@' ge/hcge_linux.c \
 		ge/hcge_node.c ge/hcge_batch_test.c
@@ -714,12 +689,12 @@ test-ge-batch: $(GE_BATCH_TEST)
 		'^ret=0 calls=2 words=7 data=1,2,3,4,5,6,7$$'
 
 $(GE_FILTER_TEST): ge/hcge_filter.c ge/hcge_filter_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_filter.c ge/hcge_filter_test.c -lm
 
 $(GE_VENDOR_FILTER_TEST): ge/hcge_filter_test.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_filter_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
@@ -748,7 +723,7 @@ test-ge-symbol-coverage: reverse-ge
 		{ printf 'missing vendor exports:\n'; cat '$(BUILD_DIR)/ge-symbol-audit/missing'; false; }
 
 $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
-		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge
+		ge/hcge_vendor_compare.c $(TOOLCHAIN_STAMP) reverse-ge
 	$(GE_ELF_CC) -std=c99 -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -static -Ige -o '$@' ge/hcge_node.c \
 		ge/hcge_vendor_compare.c '$(GE_REVERSE_DIR)'/hcge_node_ctx.c.o
@@ -756,12 +731,12 @@ $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 test-ge-node-vendor: $(GE_VENDOR_NODE_TEST)
 	qemu-mipsel '$(GE_VENDOR_NODE_TEST)'
 
-$(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
+$(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
+	$(TARGET_CC_RUN) -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
 
 $(GE_VENDOR_CAPTURE): ge/hcge_vendor_capture.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' '$<' \
 		'$(GE_VENDOR_ARCHIVE)' -lm -Wl,--wrap=open -Wl,--wrap=close \
 		-Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap \
@@ -774,7 +749,7 @@ test-ge-vendor-capture: $(GE_VENDOR_CAPTURE) $(GE_VENDOR_CAPTURE_GOLDEN)
 	qemu-mipsel '$(GE_VENDOR_CAPTURE)' | cmp - '$(GE_VENDOR_CAPTURE_GOLDEN)'
 
 $(GE_SOURCE_CAPTURE): ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -DHCGE_SOURCE_CAPTURE \
 		-o '$@' ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c \
 		-Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl \
@@ -886,15 +861,111 @@ $(QEMU_MKSD): $(QEMU_DIR)/tools/mksf2000sd.c
 	$(MAKE) -C '$(QEMU_DIR)' build/mksf2000sd
 
 rootfs: $(ROOTFS_CPIO)
-toolchain: $(BUILDROOT_TOOLCHAIN_STAMP)
-buildroot: $(BUILDROOT_CPIO)
+toolchain: $(TOOLCHAIN_STAMP)
+direct-rootfs: $(ROOTFS_FULL_CPIO)
+full: $(ROOTFS_FULL_CPIO)
 
-buildroot-reconfigure:
-	$(BUILDROOT_MAKE) clean
-	rm -f '$(BUILDROOT_OUT)/.config'
-	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
+rootfs-reconfigure:
+	$(MAKE) ROOTFS=full direct-rootfs
 
-$(INIT_BIN): init/sf2000-init.S $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+full-reconfigure:
+	$(MAKE) ROOTFS=full direct-rootfs
+
+$(BUSYBOX_ARCHIVE):
+	mkdir -p '$(dir $@)'
+	tmp='$@.tmp'; \
+	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(BUSYBOX_URL)'; \
+	mv "$$tmp" '$@'
+
+$(BUSYBOX_ARCHIVE_CHECK): $(BUSYBOX_ARCHIVE) Makefile
+	test "$$(sha256sum '$<' | awk '{print $$1}')" = '$(BUSYBOX_SHA256)'
+	printf 'sha256=%s\narchive=%s\n' '$(BUSYBOX_SHA256)' '$(abspath $(BUSYBOX_ARCHIVE))' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+
+$(BUSYBOX_SOURCE_STAMP): $(BUSYBOX_ARCHIVE_CHECK)
+	mkdir -p '$(BUSYBOX_WORK)' '$(dir $@)'
+	rm -rf '$(BUSYBOX_SRC)'
+	mkdir -p '$(BUSYBOX_SRC)'
+	tar -xjf '$(BUSYBOX_ARCHIVE)' -C '$(BUSYBOX_SRC)' --strip-components=1
+	touch '$@'
+
+$(BUSYBOX_PATCH_STAMP): $(BUSYBOX_SOURCE_STAMP) $(BUSYBOX_PATCHES)
+	@for patch_file in $(BUSYBOX_PATCHES); do \
+		patch -d '$(BUSYBOX_SRC)' --dry-run -p1 < "$$patch_file" >/dev/null 2>&1 || \
+			{ printf 'cannot apply %s to the clean BusyBox tree\n' "$$patch_file" >&2; exit 1; }; \
+		patch -d '$(BUSYBOX_SRC)' -p1 < "$$patch_file"; \
+	done
+	touch '$@'
+
+$(BUSYBOX_OUT)/.config: $(BUSYBOX_PATCH_STAMP) $(BUSYBOX_CONFIG) Makefile
+	mkdir -p '$(BUSYBOX_OUT)'
+	cp '$(BUSYBOX_CONFIG)' '$@.tmp'
+	mv '$@.tmp' '$@'
+	yes '' | KCONFIG_NOTIMESTAMP=1 $(MAKE) -C '$(BUSYBOX_SRC)' \
+		O='$(abspath $(BUSYBOX_OUT))' oldconfig
+
+BUSYBOX_CFLAGS := -Os -g0 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE \
+	-D_FILE_OFFSET_BITS=64 -G0 -fPIC -mabicalls -march=mips32 -mabi=32 \
+	-msoft-float -ffunction-sections -fdata-sections -fno-guess-branch-probability \
+	-funsigned-char -fomit-frame-pointer -fno-unwind-tables \
+	-fno-asynchronous-unwind-tables -fno-builtin-printf -Oz
+BUSYBOX_LDFLAGS := -static-pie -specs=$(abspath $(TOOLCHAIN_SPECS))
+BUSYBOX_CC := $(CCACHE_COMPILE)$(TARGET_CC)
+
+$(BUSYBOX_STAMP): $(BUSYBOX_OUT)/.config $(TOOLCHAIN_SPECS) Makefile
+	mkdir -p '$(BUSYBOX_ROOT)'
+	rm -rf '$(BUSYBOX_ROOT)'
+	mkdir -p '$(BUSYBOX_ROOT)'
+	$(MAKE) -C '$(BUSYBOX_SRC)' O='$(abspath $(BUSYBOX_OUT))' -j'$(JOBS)' \
+		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' \
+		CC='$(BUSYBOX_CC)' AR='$(CROSS_COMPILE)ar' NM='$(CROSS_COMPILE)nm' \
+		RANLIB='$(CROSS_COMPILE)ranlib' CFLAGS='$(BUSYBOX_CFLAGS)' \
+		EXTRA_LDFLAGS='$(BUSYBOX_LDFLAGS)' CONFIG_PREFIX='$(abspath $(BUSYBOX_ROOT))' \
+		PREFIX='$(abspath $(BUSYBOX_ROOT))' SKIP_STRIP=y install-noclobber
+	'$(TARGET_STRIP)' --strip-all '$(BUSYBOX_ROOT)'/bin/busybox
+	touch '$@'
+
+$(FB_TEST_APP_ARCHIVE):
+	mkdir -p '$(dir $@)'
+	tmp='$@.tmp'; \
+	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(FB_TEST_APP_URL)'; \
+	mv "$$tmp" '$@'
+
+$(FB_TEST_APP_ARCHIVE_CHECK): $(FB_TEST_APP_ARCHIVE) Makefile
+	test "$$(sha256sum '$<' | awk '{print $$1}')" = '$(FB_TEST_APP_SHA256)'
+	printf 'sha256=%s\narchive=%s\n' '$(FB_TEST_APP_SHA256)' '$(abspath $(FB_TEST_APP_ARCHIVE))' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+
+$(FB_TEST_APP_SOURCE_STAMP): $(FB_TEST_APP_ARCHIVE_CHECK)
+	mkdir -p '$(FB_TEST_APP_WORK)' '$(dir $@)'
+	rm -rf '$(FB_TEST_APP_SRC)'
+	mkdir -p '$(FB_TEST_APP_SRC)'
+	tar -xzf '$(FB_TEST_APP_ARCHIVE)' -C '$(FB_TEST_APP_SRC)' --strip-components=1
+	touch '$@'
+
+FB_TEST_APP_CFLAGS := -Os -G0 -fPIC -mabicalls -march=mips32 -mabi=32 -msoft-float
+FB_TEST_APP_LDFLAGS := -static-pie -specs=$(abspath $(TOOLCHAIN_SPECS))
+
+$(FB_TEST_APP_STAMP): $(FB_TEST_APP_SOURCE_STAMP) $(TOOLCHAIN_SPECS) Makefile
+	mkdir -p '$(FB_TEST_APP_OUT)/install'
+	$(MAKE) -C '$(FB_TEST_APP_SRC)' -j'$(JOBS)' \
+		CROSS_COMPILE='$(CCACHE_COMPILE)$(CROSS_COMPILE)' \
+		CFLAGS='$(FB_TEST_APP_CFLAGS)' LDFLAGS='$(FB_TEST_APP_LDFLAGS)'
+	for program in perf rect fb-test offset fb-string; do \
+		case "$$program" in \
+			perf) installed=fb-test-perf ;; \
+			rect) installed=fb-test-rect ;; \
+			fb-test) installed=fb-test ;; \
+			offset) installed=fb-test-offset ;; \
+			fb-string) installed=fb-test-string ;; \
+			*) printf 'unexpected fb-test-app program: %s\n' "$$program" >&2; exit 1 ;; \
+		esac; \
+		cp '$(FB_TEST_APP_SRC)'/$$program '$(FB_TEST_APP_OUT)/install/'"$$installed"; \
+		'$(TARGET_STRIP)' --strip-all '$(FB_TEST_APP_OUT)/install/'"$$installed"; \
+	done
+	touch '$@'
+
+$(INIT_BIN): init/sf2000-init.S $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	$(CC_MIPS_RUN) $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mabicalls \
@@ -919,331 +990,264 @@ $(INITRAMFS): $(INIT_BIN) $(GEN_INIT_CPIO) Makefile
 		printf 'nod /dev/kmsg 0600 0 0 c 1 11\n'; \
 		printf 'file /init %s 0755 0 0\n' '$(abspath $(INIT_BIN))'; \
 	} > '$(INITRAMFS_LIST)'
-	'$(GEN_INIT_CPIO)' '$(INITRAMFS_LIST)' > '$@'
+	'$(GEN_INIT_CPIO)' -t '$(INITRAMFS_EPOCH)' '$(INITRAMFS_LIST)' > '$@'
 
-$(BUILDROOT_SRC)/Makefile:
-	mkdir -p '$(BUILD_DIR)' .cache
-	test -f '.cache/$(BUILDROOT_TARBALL)' || curl -L -o '.cache/$(BUILDROOT_TARBALL)' '$(BUILDROOT_URL)'
-	rm -rf '$(BUILDROOT_SRC)'
-	mkdir -p '$(BUILDROOT_SRC)'
-	tar -xf '.cache/$(BUILDROOT_TARBALL)' -C '$(BUILDROOT_SRC)' --strip-components=1
-
-$(BUILDROOT_GENERATED_OVERLAY_STAMP):
-	mkdir -p '$(dir $@)' '$(BUILDROOT_GENERATED_OVERLAY)'
+$(ROOTFS_GENERATED_OVERLAY_STAMP):
+	mkdir -p '$(dir $@)' '$(ROOTFS_GENERATED_OVERLAY)'
 	touch '$@'
 
-$(BUILDROOT_SRC)/.patched: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_CORE_PATCHES)
-	@for patch in $(BUILDROOT_CORE_PATCHES); do \
-		if test -e '$@' && ! test "$$patch" -nt '$@'; then \
-			continue; \
-		fi; \
-		if patch -d '$(BUILDROOT_SRC)' --dry-run -p1 < "$$patch" >/dev/null 2>&1; then \
-			printf 'applying %s\n' "$$patch"; \
-			patch -d '$(BUILDROOT_SRC)' -p1 < "$$patch"; \
-		elif patch -d '$(BUILDROOT_SRC)' --dry-run -R -p1 < "$$patch" >/dev/null 2>&1; then \
-			printf 'already applied %s\n' "$$patch"; \
-		else \
-			printf 'cannot apply %s; remove %s for a clean Buildroot tree\n' "$$patch" '$(BUILDROOT_SRC)' >&2; \
-			exit 1; \
-		fi; \
-	done
-	touch '$@'
-
-$(BUILDROOT_CONFIG_INPUTS): FORCE Makefile
+$(TOOLCHAIN_STAMP): $(FROG_TOOLCHAIN_SETUP_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	@set -eu; \
-	tmp='$@.tmp'; \
-	{ \
-		printf 'EXTERNAL_TOOLCHAIN=%s\n' '$(EXTERNAL_TOOLCHAIN)'; \
-		printf 'TOOLCHAIN_DIR=%s\n' '$(abspath $(TOOLCHAIN_DIR))'; \
-		printf 'BUILDROOT_TARGET_TUPLE=%s\n' '$(BUILDROOT_TARGET_TUPLE)'; \
-		printf 'CCACHE=%s\n' '$(CCACHE)'; \
-		printf 'CCACHE_DIR=%s\n' '$(abspath $(CCACHE_DIR))'; \
-		printf 'BUILDROOT_INTERNAL_CCACHE=%s\n' '$(BUILDROOT_INTERNAL_CCACHE)'; \
-		printf 'BUILDROOT_TARGET_CC=%s\n' '$(BUILDROOT_TARGET_CC)'; \
-		printf 'BUILDROOT_TARGET_CXX=%s\n' '$(BUILDROOT_TARGET_CXX)'; \
-		printf 'BUILDROOT_CCACHE_OPTIONS=%s\n' '$(BUILDROOT_CCACHE_OPTIONS)'; \
-	} > "$$tmp"; \
-	if cmp -s "$$tmp" '$@' 2>/dev/null; then rm -f "$$tmp"; else mv "$$tmp" '$@'; fi
-
-$(BUILDROOT_OUT)/.config: Makefile $(BUILDROOT_CONFIG_INPUTS) $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
-	mkdir -p '$(BUILDROOT_OUT)'
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-	@if test -x '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper'; then \
-		strings '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper' | \
-			grep -Fq '$(abspath $(TOOLCHAIN_DIR))/bin/' || { \
-			printf 'Buildroot output is tied to a different external toolchain: %s\n' '$(BUILDROOT_OUT)' >&2; \
-			printf 'use a fresh BUILDROOT_OUT or run make buildroot-reconfigure\n' >&2; \
-			exit 1; \
-		}; \
-	fi
-endif
-	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
-	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
-		--set-str GLOBAL_PATCH_DIR '$(abspath $(BUILDROOT_PATCHES))' \
-		--set-str PACKAGE_BUSYBOX_CONFIG '$(abspath $(BUILDROOT_BUSYBOX_CONFIG))' \
-		--set-str ROOTFS_OVERLAY '$(abspath $(BUILDROOT_OVERLAY)) $(abspath $(BUILDROOT_GENERATED_OVERLAY))' \
-		--set-str ROOTFS_DEVICE_TABLE 'system/device_table.txt $(abspath $(BUILDROOT_DEVICE_TABLE))'
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-	# Point Buildroot's own target build (busybox etc.) at the prebuilt
-	# toolchain instead of building a second one.  The feature flags below
-	# match the crosstool-ng uClibc toolchain this mode is designed for:
-	# gcc 16, uClibc-ng without threads/locale, wchar, C++, SSP.  Buildroot
-	# probes the toolchain and errors if a flag is wrong.
-	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
-		--disable BR2_TOOLCHAIN_BUILDROOT_UCLIBC \
-		--disable BR2_TOOLCHAIN_BUILDROOT_CXX \
-		--enable BR2_TOOLCHAIN_EXTERNAL \
-		--enable BR2_TOOLCHAIN_EXTERNAL_CUSTOM \
-		--enable BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED \
-		--set-str BR2_TOOLCHAIN_EXTERNAL_PATH '$(abspath $(TOOLCHAIN_DIR))' \
-		--set-str BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX '$(BUILDROOT_TARGET_TUPLE)' \
-		--enable BR2_TOOLCHAIN_EXTERNAL_GCC_16 \
-		--enable BR2_TOOLCHAIN_EXTERNAL_HEADERS_7_0 \
-		--enable BR2_TOOLCHAIN_EXTERNAL_CUSTOM_UCLIBC \
-		--enable BR2_TOOLCHAIN_EXTERNAL_WCHAR \
-		--disable BR2_TOOLCHAIN_EXTERNAL_LOCALE \
-		--disable BR2_TOOLCHAIN_EXTERNAL_HAS_THREADS \
-		--enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP \
-		--enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP_STRONG \
-		--enable BR2_TOOLCHAIN_EXTERNAL_CXX \
-		--disable BR2_TOOLCHAIN_EXTERNAL_FORTRAN \
-			--disable BR2_TOOLCHAIN_EXTERNAL_OPENMP \
-			--set-str BR2_TOOLCHAIN_GCC_AT_LEAST 16 \
-			--disable BR2_TARGET_ROOTFS_CPIO \
-			--enable BR2_SSP_NONE \
-		--disable BR2_SSP_REGULAR \
-		--disable BR2_SSP_STRONG \
-			--disable BR2_SSP_ALL \
-			--set-str BR2_TARGET_LDFLAGS "-static-pie -specs=$(abspath $(EXTERNAL_SPECS))" \
-			$(BUILDROOT_CCACHE_OPTIONS)
-endif
-	$(BUILDROOT_MAKE) olddefconfig
-
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-# With a prebuilt toolchain the stamp is a verification gate, not a build.
-$(BUILDROOT_TOOLCHAIN_STAMP): $(FROG_TOOLCHAIN_SETUP_STAMP) Makefile
-	mkdir -p '$(dir $@)'
-	test -x '$(BUILDROOT_CC)'
-	test -x '$(BUILDROOT_CXX)'
-	test "$$( $(BUILDROOT_CC) -dumpmachine )" = '$(BUILDROOT_TARGET_TUPLE)'
+	test -x '$(TARGET_CC)'
+	test -x '$(TARGET_CXX)'
+	test -x '$(TARGET_STRIP)'
+	test "$$( $(TARGET_CC) -dumpmachine )" = '$(TOOLCHAIN_TUPLE)'
 	test -f '$(PIE_SYSROOT)/rcrt1.o'
 	test -f '$(PIE_SYSROOT)/crti.o'
 	test -f '$(PIE_SYSROOT)/crtn.o'
 	test -f '$(PIE_SYSROOT)/libc.a'
-	test -f "$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o)"
+	test -f "$$( '$(TARGET_CC)' -print-file-name=crtbeginS.o)"
 	printf 'compiler=%s\ntuple=%s\nsysroot=%s\n' \
-		'$(abspath $(BUILDROOT_CC))' '$(BUILDROOT_TARGET_TUPLE)' \
+		'$(abspath $(TARGET_CC))' '$(TOOLCHAIN_TUPLE)' \
 		'$(abspath $(PIE_SYSROOT))' > '$@.tmp'
 	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
-else
-$(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
-	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' toolchain \
-		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
-		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
-	touch '$@'
-endif
 
-$(PIE_STAMP): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(PIE_STAMP): $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	test -f '$(PIE_SYSROOT)/rcrt1.o'
-	test -f "$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o)"
+	test -f "$$('$(TARGET_CC)' -print-file-name=crtbeginS.o)"
 	touch '$@'
 
 
-# The panel-probe targets deliberately override BUILDROOT_INIT_SOURCE to run
+# The panel-probe targets deliberately override USERSPACE_INIT_SOURCE to run
 # sf2000-screen as /init.  A later normal build must restore the real init
 # binary; without a content check, make sees the same destination and silently
 # leaves the probe executable in the rootfs (and therefore in the ASD image).
-$(BUILDROOT_INIT): FORCE $(BUILDROOT_INIT_SOURCE) Makefile
+$(USERSPACE_INIT): FORCE $(USERSPACE_INIT_SOURCE) Makefile
 	mkdir -p '$(dir $@)'
-	if ! cmp -s '$(BUILDROOT_INIT_SOURCE)' '$@' 2>/dev/null; then \
-		cp '$(BUILDROOT_INIT_SOURCE)' '$@'; \
+	if ! cmp -s '$(USERSPACE_INIT_SOURCE)' '$@' 2>/dev/null; then \
+		cp '$(USERSPACE_INIT_SOURCE)' '$@'; \
 		chmod 0755 '$@'; \
 	fi
 
-$(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_CLONE) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_SUPERVISOR): $(USERSPACE_INIT_SRC) $(USERSPACE_INIT_CLONE) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_SUPERVISOR_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_SUPERVISOR_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_INIT_CLONE)' '$(BUILDROOT_INIT_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_INIT_CLONE)' '$(USERSPACE_INIT_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_PAD): $(USERSPACE_PAD_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_PAD_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_PAD_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_POWERD): $(USERSPACE_POWERD_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		$(BUILDROOT_POWERD_CPPFLAGS) '$<' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		$(USERSPACE_POWERD_CPPFLAGS) '$<' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
+$(USERSPACE_FRONTEND): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
 		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
 		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
-		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+		$(TOOLCHAIN_STAMP) Makefile
 	$(FRONTEND_MAKE) browser \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-browser '$@'
 
-$(BUILDROOT_JS2300): $(shell find '$(FRONTEND_PROJECT)'/src \
+$(USERSPACE_JS2300): $(shell find '$(FRONTEND_PROJECT)'/src \
 		'$(FRONTEND_PROJECT)'/include -type f 2>/dev/null) \
 		ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h ge/hcge_node.h \
 		$(FRONTEND_PROJECT)/Makefile $(PIE_STAMP) \
-		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+		$(TOOLCHAIN_STAMP) Makefile
 	$(FRONTEND_MAKE) js2300-ui \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
 	mkdir -p '$(dir $@)'
 	cp '$(FRONTEND_PROJECT)'/build/sf2000-js2300-ui '$@'
 
-$(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_AUDIO): $(USERSPACE_AUDIO_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_AUDIO_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_AUDIO_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_HEARTBEAT): $(USERSPACE_HEARTBEAT_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_LOGD): $(USERSPACE_LOGD_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_MOUNT): $(USERSPACE_MOUNT_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
+$(USERSPACE_SCREEN_SOURCE_STAMP): FORCE $(USERSPACE_SCREEN_SRC) \
 		ge/hcge_linux.c ge/hcge_node.c \
 		ge/hcge_node.h ge/ge_api.h Makefile
 	mkdir -p '$(dir $@)'
-	{ sha256sum '$(BUILDROOT_SCREEN_SRC)' \
+	{ sha256sum '$(USERSPACE_SCREEN_SRC)' \
 		ge/hcge_linux.c ge/hcge_node.c ge/hcge_node.h ge/ge_api.h; \
-		printf '%s\n' '$(BUILDROOT_PIE_CFLAGS)' '$(BUILDROOT_SCREEN_CFLAGS)' \
-			'$(BUILDROOT_PIE_LDFLAGS)'; \
+		printf '%s\n' '$(USERSPACE_PIE_CFLAGS)' '$(USERSPACE_SCREEN_CFLAGS)' \
+			'$(USERSPACE_PIE_LDFLAGS)'; \
 	} > '$@.tmp'
 	if cmp -s '$@.tmp' '$@'; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 
-$(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
+$(USERSPACE_SCREEN): $(USERSPACE_SCREEN_SOURCE_STAMP) $(PIE_STAMP) $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	SOURCE_DATE_EPOCH=0 $(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
-		-Ige $(BUILDROOT_PIE_LDFLAGS) -o '$@' \
+	SOURCE_DATE_EPOCH=0 $(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_SCREEN_CFLAGS) \
+		-Ige $(USERSPACE_PIE_LDFLAGS) -o '$@' \
 		'$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_SCREEN_SRC)' ge/hcge_linux.c ge/hcge_node.c \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_SCREEN_SRC)' ge/hcge_linux.c ge/hcge_node.c \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-buildroot-panel-probe-link: $(BUILDROOT_PANEL_PROBE_LINK)
+full-panel-probe-link: $(USERSPACE_PANEL_PROBE_LINK)
 
-$(BUILDROOT_PANEL_PROBE_LINK): $(BUILDROOT_PANEL_FASTPROBE) Makefile
-	mkdir -p '$(dir $(BUILDROOT_PANEL_PROBE_LINK))'
-	ln -sf '$(BUILDROOT_PANEL_PROBE_TARGET)' '$(BUILDROOT_PANEL_PROBE_LINK)'
+$(USERSPACE_PANEL_PROBE_LINK): $(USERSPACE_PANEL_FASTPROBE) Makefile
+	mkdir -p '$(dir $(USERSPACE_PANEL_PROBE_LINK))'
+	ln -sf '$(USERSPACE_PANEL_PROBE_TARGET)' '$(USERSPACE_PANEL_PROBE_LINK)'
 
-$(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_PANEL_INIT): $(USERSPACE_PANEL_INIT_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_PANEL_INIT_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_PANEL_INIT_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_PANEL_FASTPROBE): $(USERSPACE_PANEL_FASTPROBE_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_PANEL_FASTPROBE_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_PANEL_FASTPROBE_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_STORAGE_PROBE): $(USERSPACE_STORAGE_PROBE_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin \
-		$(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) -ffreestanding -fno-builtin \
+		$(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_STORAGE_PROBE_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_STORAGE_PROBE_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_STORAGE_FASTPROBE): $(USERSPACE_STORAGE_FASTPROBE_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_STORAGE_FASTPROBE_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_STORAGE_FASTPROBE_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_RESET_FASTPROBE): $(BUILDROOT_RESET_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_RESET_FASTPROBE): $(USERSPACE_RESET_FASTPROBE_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
-		'$(BUILDROOT_RESET_FASTPROBE_SRC)' \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
+		'$(USERSPACE_RESET_FASTPROBE_SRC)' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
-	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
-		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
-		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
-ifeq ($(EXTERNAL_TOOLCHAIN),1)
-	strings '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper' | \
-		grep -Fq '$(abspath $(TOOLCHAIN_DIR))/bin/'
-endif
-	touch '$@'
-
-
-$(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPERVISOR) $(BUILDROOT_PAD) $(BUILDROOT_POWERD) $(BUILDROOT_FRONTEND) $(BUILDROOT_JS2300) $(BUILDROOT_AUDIO) $(BUILDROOT_HEARTBEAT) $(BUILDROOT_LOGD) $(BUILDROOT_MOUNT) $(BUILDROOT_SCREEN) $(BUILDROOT_PANEL_INIT) $(BUILDROOT_PANEL_FASTPROBE) $(BUILDROOT_PANEL_PROBE_LINK) $(BUILDROOT_STORAGE_PROBE) $(BUILDROOT_STORAGE_FASTPROBE) $(BUILDROOT_RESET_FASTPROBE) $(BUILDROOT_EXPERIMENTAL_DEVTESTS) $(BUILDROOT_PLAYER) $(BUILDROOT_OVERLAY_FILES) $(BUILDROOT_DEVICE_TABLE) $(GEN_INIT_CPIO) Makefile
+$(ROOTFS_FULL_CPIO): $(BUSYBOX_STAMP) $(FB_TEST_APP_STAMP) \
+	$(USERSPACE_INIT) $(USERSPACE_SUPERVISOR) $(USERSPACE_PAD) \
+	$(USERSPACE_POWERD) $(USERSPACE_FRONTEND) $(USERSPACE_JS2300) \
+	$(USERSPACE_AUDIO) $(USERSPACE_HEARTBEAT) $(USERSPACE_LOGD) \
+	$(USERSPACE_MOUNT) $(USERSPACE_SCREEN) $(USERSPACE_PANEL_INIT) \
+	$(USERSPACE_PANEL_FASTPROBE) $(USERSPACE_PANEL_PROBE_LINK) \
+	$(USERSPACE_STORAGE_PROBE) $(USERSPACE_STORAGE_FASTPROBE) \
+	$(USERSPACE_RESET_FASTPROBE) $(USERSPACE_EXPERIMENTAL_DEVTESTS) \
+	$(USERSPACE_PLAYER) $(ROOTFS_BASE_FILES) $(ROOTFS_OVERLAY_FILES) \
+	$(ROOTFS_GENERATED_OVERLAY_STAMP) $(GEN_INIT_CPIO) Makefile
 	mkdir -p '$(dir $@)'
-	rm -rf '$(BUILDROOT_REPACK_DIR)'
-	mkdir -p '$(BUILDROOT_REPACK_DIR)'
-	rsync -a --delete --exclude=/THIS_IS_NOT_YOUR_ROOT_FILESYSTEM \
-		'$(BUILDROOT_OUT)'/target/ '$(BUILDROOT_REPACK_DIR)'/
-	rsync -a '$(BUILDROOT_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
-	rsync -a '$(BUILDROOT_GENERATED_OVERLAY)'/ '$(BUILDROOT_REPACK_DIR)'/
+	rm -rf '$(ROOTFS_DIR)'
+	mkdir -p '$(ROOTFS_DIR)'
+	cp -a '$(ROOTFS_BASE)'/. '$(ROOTFS_DIR)'/
+	cp -a '$(BUSYBOX_ROOT)'/. '$(ROOTFS_DIR)'/
+	cp -a '$(ROOTFS_OVERLAY)'/. '$(ROOTFS_DIR)'/
+	cp -a '$(ROOTFS_GENERATED_OVERLAY)'/. '$(ROOTFS_DIR)'/
+	mkdir -p '$(ROOTFS_DIR)'/usr/bin '$(ROOTFS_DIR)'/usr/sbin \
+		'$(ROOTFS_DIR)'/bin '$(ROOTFS_DIR)'/dev '$(ROOTFS_DIR)'/etc \
+		'$(ROOTFS_DIR)'/lib '$(ROOTFS_DIR)'/run '$(ROOTFS_DIR)'/tmp \
+		'$(ROOTFS_DIR)'/var '$(ROOTFS_DIR)'/var/lib \
+		'$(ROOTFS_DIR)'/media '$(ROOTFS_DIR)'/mnt '$(ROOTFS_DIR)'/opt \
+		'$(ROOTFS_DIR)'/proc '$(ROOTFS_DIR)'/root '$(ROOTFS_DIR)'/sys \
+		'$(ROOTFS_DIR)'/run/lock \
+		'$(ROOTFS_DIR)'/etc/network/if-down.d \
+		'$(ROOTFS_DIR)'/etc/network/if-post-down.d \
+		'$(ROOTFS_DIR)'/etc/network/if-up.d
+	cp '$(FB_TEST_APP_OUT)'/install/fb-test-perf \
+		'$(ROOTFS_DIR)'/usr/bin/fb-test-perf
+	cp '$(FB_TEST_APP_OUT)'/install/fb-test-rect \
+		'$(ROOTFS_DIR)'/usr/bin/fb-test-rect
+	cp '$(FB_TEST_APP_OUT)'/install/fb-test \
+		'$(ROOTFS_DIR)'/usr/bin/fb-test
+	cp '$(FB_TEST_APP_OUT)'/install/fb-test-offset \
+		'$(ROOTFS_DIR)'/usr/bin/fb-test-offset
+	cp '$(FB_TEST_APP_OUT)'/install/fb-test-string \
+		'$(ROOTFS_DIR)'/usr/bin/fb-test-string
+	ln -sfn ../proc/self/mounts '$(ROOTFS_DIR)'/etc/mtab
+	ln -sfn ../run/resolv.conf '$(ROOTFS_DIR)'/etc/resolv.conf
+	ln -sfn ../usr/lib/os-release '$(ROOTFS_DIR)'/etc/os-release
+	ln -sfn ../proc/self/fd '$(ROOTFS_DIR)'/dev/fd
+	ln -sfn ../tmp/log '$(ROOTFS_DIR)'/dev/log
+	ln -sfn ../proc/self/fd/2 '$(ROOTFS_DIR)'/dev/stderr
+	ln -sfn ../proc/self/fd/0 '$(ROOTFS_DIR)'/dev/stdin
+	ln -sfn ../proc/self/fd/1 '$(ROOTFS_DIR)'/dev/stdout
+	ln -sfn lib '$(ROOTFS_DIR)'/lib32
+	ln -sfn lib '$(ROOTFS_DIR)'/usr/lib32
+	ln -sfn bin/busybox '$(ROOTFS_DIR)'/linuxrc
+	ln -sfn ../tmp '$(ROOTFS_DIR)'/var/cache
+	ln -sfn ../../tmp '$(ROOTFS_DIR)'/var/lib/misc
+	ln -sfn ../run/lock '$(ROOTFS_DIR)'/var/lock
+	ln -sfn ../tmp '$(ROOTFS_DIR)'/var/log
+	ln -sfn ../run '$(ROOTFS_DIR)'/var/run
+	ln -sfn ../tmp '$(ROOTFS_DIR)'/var/spool
+	ln -sfn ../tmp '$(ROOTFS_DIR)'/var/tmp
 	# These cores are SD extensions, not part of the boot ASD.  Remove stale
 	# copies left by an older build before generating the new initramfs.
-	rm -f '$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-gambatte \
-		'$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-gpsp \
-		'$(BUILDROOT_REPACK_DIR)'/usr/bin/sf2000-fceumm
+	rm -f '$(ROOTFS_DIR)'/usr/bin/sf2000-gambatte \
+		'$(ROOTFS_DIR)'/usr/bin/sf2000-gpsp \
+		'$(ROOTFS_DIR)'/usr/bin/sf2000-fceumm
 	@set -e; \
-	find '$(BUILDROOT_REPACK_DIR)' -type f -perm /111 -print | \
+	find '$(ROOTFS_DIR)' -type f -perm /111 -print | \
 	while IFS= read -r executable; do \
 		magic=$$(od -An -N4 -tx1 "$$executable" | tr -d ' \n'); \
 		if test "$$magic" = 62464c54; then \
@@ -1291,9 +1295,10 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 			fi; \
 		fi; \
 	done
-	rm -rf '$(BUILDROOT_REPACK_DIR)'/run/* '$(BUILDROOT_REPACK_DIR)'/tmp/*
-	mkdir -p '$(BUILDROOT_REPACK_DIR)'/dev/input '$(BUILDROOT_REPACK_DIR)'/dev/snd \
-		'$(BUILDROOT_REPACK_DIR)'/dev/pts '$(BUILDROOT_REPACK_DIR)'/dev/shm
+	rm -rf '$(ROOTFS_DIR)'/run/* '$(ROOTFS_DIR)'/tmp/*
+	mkdir -p '$(ROOTFS_DIR)'/run/lock
+	mkdir -p '$(ROOTFS_DIR)'/dev/input '$(ROOTFS_DIR)'/dev/snd \
+		'$(ROOTFS_DIR)'/dev/pts '$(ROOTFS_DIR)'/dev/shm
 	{ \
 		printf 'nod /dev/console 0622 0 0 c 5 1\n'; \
 		printf 'nod /dev/null 0666 0 0 c 1 3\n'; \
@@ -1312,40 +1317,39 @@ $(BUILDROOT_CPIO): $(BUILDROOT_TARGET_STAMP) $(BUILDROOT_INIT) $(BUILDROOT_SUPER
 		printf 'nod /dev/input/event1 0660 0 0 c 13 65\n'; \
 		printf 'nod /dev/input/event2 0660 0 0 c 13 66\n'; \
 		printf 'nod /dev/input/event3 0660 0 0 c 13 67\n'; \
-	} > '$(BUILDROOT_DEVICE_CPIO_LIST)'
+	} > '$(ROOTFS_DEVICE_CPIO_LIST)'
 	mkdir -p '$(BUILD_DIR)'/usr
 	ln -sf ../gen_init_cpio '$(BUILD_DIR)'/usr/gen_init_cpio
 	cd '$(BUILD_DIR)' && '$(abspath $(LINUX_SRC))'/usr/gen_initramfs.sh \
-		-o '$(abspath $@)' -u squash -g squash \
-		'$(abspath $(BUILDROOT_REPACK_DIR))' \
-		'$(abspath $(BUILDROOT_DEVICE_CPIO_LIST))'
+		-o '$(abspath $@)' -d '$(INITRAMFS_DATE)' -u squash -g squash \
+		'$(abspath $(ROOTFS_DIR))' \
+		'$(abspath $(ROOTFS_DEVICE_CPIO_LIST))'
 
-elf-audit: $(BUILDROOT_CPIO)
-	@printf 'ELF-only rootfs audit passed: %s\n' '$(BUILDROOT_REPACK_DIR)'
+elf-audit: $(ROOTFS_FULL_CPIO)
+	@printf 'ELF-only rootfs audit passed: %s\n' '$(ROOTFS_DIR)'
 
-$(LINUX_SRC)/Makefile:
-	mkdir -p '$(BUILD_DIR)' .cache
-	test -f '.cache/$(LINUX_TARBALL)' || curl -L -o '.cache/$(LINUX_TARBALL)' '$(LINUX_URL)'
+$(LINUX_ARCHIVE):
+	mkdir -p '$(dir $@)'
+	tmp='$@.tmp'; \
+	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(LINUX_URL)'; \
+	mv "$$tmp" '$@'
+
+$(LINUX_ARCHIVE_CHECK): $(LINUX_ARCHIVE) Makefile
+	test "$$(sha256sum '$<' | awk '{print $$1}')" = '$(LINUX_SHA256)'
+	printf 'sha256=%s\narchive=%s\n' '$(LINUX_SHA256)' '$(abspath $(LINUX_ARCHIVE))' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+
+# The archive preserves upstream timestamps, so using its extracted Makefile
+# as the source target makes the verified archive marker look newer on every
+# invocation. Use a local stamp instead: it is touched after extraction and
+# pruning, and it is removed along with the managed source tree when a clean
+# setup is requested. Re-extract before every re-prune so patches never meet a
+# partially-pruned or already-patched tree.
+$(LINUX_SRC)/.slimmed: $(LINUX_ARCHIVE_CHECK) scripts/kernel-slim.sh
 	rm -rf '$(LINUX_SRC)'
 	mkdir -p '$(LINUX_SRC)'
-	tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1
+	tar -xf '$(LINUX_ARCHIVE)' -C '$(LINUX_SRC)' --strip-components=1
 	# Prune the tree down to what this port builds; see scripts/kernel-slim.sh.
-	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
-
-# Re-prune whenever the slim script changes.  The prune deletes source and
-# header files from directories that only need their Kconfig/Makefile shells,
-# so it must never run on an already-patched tree: it would delete files the
-# patch series added (sf2000-pcm.c, sf2000-ge.c, ...) and leave the tree in a
-# state where no patch can apply forward or reverse.  When the tree is
-# patched, re-extract from the tarball first so the subsequent prune starts
-# from pristine content again.
-$(LINUX_SRC)/.slimmed: $(LINUX_SRC)/Makefile scripts/kernel-slim.sh
-	@if test -e '$(LINUX_SRC)/.patched'; then \
-		printf 'slim script changed on a patched tree; re-extracting cleanly\n'; \
-		rm -rf '$(LINUX_SRC)'; \
-		mkdir -p '$(LINUX_SRC)'; \
-		tar -xf '.cache/$(LINUX_TARBALL)' -C '$(LINUX_SRC)' --strip-components=1; \
-	fi
 	'$(abspath scripts/kernel-slim.sh)' '$(LINUX_SRC)'
 	touch '$@'
 
@@ -1455,23 +1459,23 @@ dsc-test: $(DSC_TEST)
 DEVICE_TESTS := $(BUILD_DIR)/test_efuse_device $(BUILD_DIR)/test_vdec_device \
 		$(BUILD_DIR)/test_dsc_device
 
-$(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
+$(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
+	$(TARGET_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
-		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
+		$(USERSPACE_ELF_LDFLAGS) -o '$@' '$<'
 
-$(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
+$(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
+	$(TARGET_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
-		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
+		$(USERSPACE_ELF_LDFLAGS) -o '$@' '$<'
 
-$(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
+$(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
+	$(TARGET_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
-		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
+		$(USERSPACE_ELF_LDFLAGS) -o '$@' '$<'
 
 device-tests: $(DEVICE_TESTS)
 
@@ -1509,7 +1513,7 @@ FFMPEG_CONFIGURE_FLAGS := \
 	--disable-runtime-cpudetect --disable-autodetect \
 	--pkg-config=/bin/false
 
-$(FFMPEG_STAMP): $(FFMPEG_SRC)/configure $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(FFMPEG_STAMP): $(FFMPEG_SRC)/configure $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(FFMPEG_OUT)'
 	cd '$(FFMPEG_OUT)' && '$(FFMPEG_SRC)/configure' $(FFMPEG_CONFIGURE_FLAGS)
 	sed -i 's/#define HAVE_POSIX_MEMALIGN 1/#define HAVE_POSIX_MEMALIGN 0/' \
@@ -1526,38 +1530,38 @@ ffmpeg: $(FFMPEG_STAMP)
 
 # --- Device test runner + overlay installs ---
 
-$(BUILDROOT_DEVTEST): $(BUILDROOT_DEVTEST_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_DEVTEST): $(USERSPACE_DEVTEST_SRC) $(PIE_STAMP) $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-$(BUILDROOT_EFUSE_DEVICE): $(BUILD_DIR)/test_efuse_device
+$(USERSPACE_EFUSE_DEVICE): $(BUILD_DIR)/test_efuse_device
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(BUILDROOT_VDEC_DEVICE): $(BUILD_DIR)/test_vdec_device
+$(USERSPACE_VDEC_DEVICE): $(BUILD_DIR)/test_vdec_device
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(BUILDROOT_DSC_DEVICE): $(BUILD_DIR)/test_dsc_device
+$(USERSPACE_DSC_DEVICE): $(BUILD_DIR)/test_dsc_device
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
-$(BUILDROOT_PLAYER): player/sf2000-player.c $(PIE_STAMP) \
-		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(USERSPACE_PLAYER): player/sf2000-player.c $(PIE_STAMP) \
+		$(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(TARGET_CC_RUN) $(USERSPACE_PIE_CFLAGS) $(USERSPACE_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
+		$$('$(TARGET_CC)' -print-file-name=crtbeginS.o) \
 		player/sf2000-player.c \
 		-L'$(PIE_SYSROOT)' -lc -lgcc \
-		$$('$(BUILDROOT_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
+		$$('$(TARGET_CC)' -print-file-name=crtendS.o) '$(PIE_SYSROOT)'/crtn.o
 
-player: $(BUILDROOT_PLAYER)
+player: $(USERSPACE_PLAYER)
 
 # --- Test WAV generator ---
 
@@ -1578,11 +1582,11 @@ $(PLAYER_TEST_SD): $(PLAYER_TEST_WAV) Makefile
 
 # --- QEMU device test smoke ---
 
-run-linux-devtest: $(BUILDROOT_CPIO) qemu linux-buildroot-asd
+run-linux-devtest: $(ROOTFS_FULL_CPIO) qemu linux-full-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	{ sleep 8; printf 'sendkey ret-x 500\n'; sleep 10; printf 'quit\n'; } | \
 		timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append '$(LINUX_CMDLINE)' \
 		-display none -serial none -monitor stdio \
 		-d '$(QEMU_DEBUG)' -D '$(BUILD_DIR)'/logs/linux-devtest.log \
@@ -1596,7 +1600,7 @@ smoke-linux-devtest: run-linux-devtest
 
 # --- QEMU player smoke ---
 
-run-linux-player: $(BUILDROOT_CPIO) qemu linux-buildroot-asd $(PLAYER_TEST_SD)
+run-linux-player: $(ROOTFS_FULL_CPIO) qemu linux-full-asd $(PLAYER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	{ sleep 8; printf 'sendkey x 100\n'; sleep 2; \
 		printf 'sendkey x 100\n'; sleep 2; \
@@ -1604,7 +1608,7 @@ run-linux-player: $(BUILDROOT_CPIO) qemu linux-buildroot-asd $(PLAYER_TEST_SD)
 		printf 'sendkey z 100\n'; sleep 3; \
 		printf 'sendkey ret-q 500\n'; sleep 3; printf 'quit\n'; } | \
 		timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append '$(LINUX_CMDLINE)' \
 		-drive if=none,id=sd0,file='$(PLAYER_TEST_SD)',format=raw \
 		-audiodev wav,id=sf2000wav,path='$(BUILD_DIR)'/sf2000-player.wav \
@@ -1629,8 +1633,8 @@ $(LINUX_MODE_STAMP): Makefile FORCE | $(LINUX_SRC)/.patched
 	printf 'FIXED_ET_EXEC=%s\n' '$(FIXED_ET_EXEC)' > '$@.tmp'
 	if ! cmp -s '$@.tmp' '$@' 2>/dev/null; then mv '$@.tmp' '$@'; else rm -f '$@.tmp'; fi
 
-$(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
-		Makefile $(LINUX_CMDLINE_STAMP) $(LINUX_MODE_STAMP) | $(LINUX_SRC)/.patched
+$(LINUX_CONFIG_STAMP): $(TOOLCHAIN_STAMP) Makefile \
+		$(LINUX_CMDLINE_STAMP) $(LINUX_MODE_STAMP) | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
 		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' CC='$(KERNEL_CC)' '$(LINUX_DEFCONFIG)'
@@ -1916,10 +1920,11 @@ $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
 linux: $(LINUX_VMLINUX) $(SF2000_DTB)
 
 # Re-extracting is intentionally rootfs-independent: switching between tiny
-# and Buildroot must not retain a kernel config from the other output tree.
+# and the full userspace build must not retain a kernel config from the other
+# output tree.
 linux-reextract:
 	rm -rf '$(LINUX_SRC)' '$(BUILD_DIR)/linux-sf2000' \
-		'$(BUILD_DIR)/linux-sf2000-buildroot'
+		'$(BUILD_DIR)/linux-sf2000-full'
 
 linux-reconfigure:
 	rm -f '$(LINUX_OUT)/.config' '$(LINUX_CONFIG_STAMP)'
@@ -1929,12 +1934,12 @@ $(ASDPACK): tools/asdpack.c Makefile
 	mkdir -p '$(dir $@)'
 	'$(HOSTCC)' -O2 -Wall -Wextra -o '$@' '$<'
 
-$(LINUX_LOADER_ENTRY_OBJ): boot/linux-loader-entry.S $(BUILDROOT_TOOLCHAIN_STAMP) \
+$(LINUX_LOADER_ENTRY_OBJ): boot/linux-loader-entry.S $(TOOLCHAIN_STAMP) \
 		Makefile
 	mkdir -p '$(dir $@)'
 	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
-$(LINUX_LOADER_OBJ): boot/linux-loader.c $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
+$(LINUX_LOADER_OBJ): boot/linux-loader.c $(TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
@@ -1958,7 +1963,7 @@ $(LINUX_LOADER_BLOBS_S): $(LINUX_VMLINUX) $(SF2000_DTB) Makefile
 	} > '$@'
 
 $(LINUX_LOADER_BLOBS_OBJ): $(LINUX_LOADER_BLOBS_S) \
-		$(BUILDROOT_TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP)
 	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
 $(LINUX_LOADER_ELF): $(LINUX_LOADER_ENTRY_OBJ) $(LINUX_LOADER_OBJ) \
@@ -2024,7 +2029,7 @@ $(SDCARD_LOG_TXT): Makefile
 	mkdir -p '$(dir $@)'
 	dd if=/dev/zero of='$@' bs=262144 count=1 >/dev/null 2>&1
 
-$(SDCARD_USER_CONFIG): buildroot/sf2000-rootfs-overlay/etc/sf2000.conf
+$(SDCARD_USER_CONFIG): $(ROOTFS_OVERLAY)/etc/sf2000.conf
 	mkdir -p '$(dir $@)'
 	cp '$<' '$@'
 
@@ -2049,17 +2054,17 @@ $(SDCARD_UI_FONT_LICENSE): fonts/OFL.txt
 # unrelated QEMU or packaging edit rebuild every emulator.  The phony profile
 # recipe still runs each time, but compare-and-replace preserves its timestamp
 # until a relevant value or cross compiler actually changes.
-$(SDCARD_CORE_PROFILE): FORCE $(BUILDROOT_TOOLCHAIN_STAMP)
+$(SDCARD_CORE_PROFILE): FORCE $(TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
 	@set -eu; \
 	tmp='$@.tmp'; \
 	{ \
 		printf '%s\n' \
 			'FRONTEND_PROJECT=$(abspath $(FRONTEND_PROJECT))' \
-			'BUILDROOT_CC=$(BUILDROOT_CC)' \
+			'TARGET_CC=$(TARGET_CC)' \
 			'FRONTEND_CORES=$(SDCARD_FRONTEND_CORES)' \
 			'MUFROG_CORES=$(SDCARD_MUFROG_CORES)'; \
-		stat -c 'compiler=%n|size=%s|mtime=%y' '$(BUILDROOT_CC)'; \
+		stat -c 'compiler=%n|size=%s|mtime=%y' '$(TARGET_CC)'; \
 	} > "$$tmp"; \
 	if cmp -s "$$tmp" '$@' 2>/dev/null; then \
 		rm -f "$$tmp"; \
@@ -2077,7 +2082,7 @@ $(SDCARD_CORE_STAMP): $(shell find '$(FRONTEND_PROJECT)'/src \
 		-type f 2>/dev/null) $(FRONTEND_PROJECT)/Makefile $(SDCARD_CORE_PROFILE) \
 		$(FRONTEND_CORE_OUTPUTS)
 	$(FRONTEND_MAKE) core-packages \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
 	rm -rf '$(dir $@)'
 	mkdir -p '$(dir $@)/licenses'
 	cp '$(FRONTEND_PROJECT)'/build/core-packages/sf2000-quicknes \
@@ -2183,26 +2188,26 @@ linux-asd: $(LINUX_ASD)
 	@echo "diagnostic ASD: leaving build/sdcard normal artifacts unchanged"
 endif
 
-linux-buildroot:
-	$(ISOLATED_MAKE) ROOTFS=buildroot linux
+linux-full:
+	$(ISOLATED_MAKE) ROOTFS=full linux
 
-linux-buildroot-asd:
-	$(ISOLATED_MAKE) ROOTFS=buildroot linux-asd
+linux-full-asd:
+	$(ISOLATED_MAKE) ROOTFS=full linux-asd
 
 # QEMU tests need the kernel/rootfs artifact, not a synchronized physical SD
 # layout.  Keeping that distinction explicit prevents an emulator iteration
 # from rebuilding and checksumming every libretro core.
-linux-buildroot-test-asd:
-	$(ISOLATED_MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=0 linux-asd
+linux-full-test-asd:
+	$(ISOLATED_MAKE) ROOTFS=full SDCARD_ASD_SYNC=0 linux-asd
 
-# The SD-card artifact must contain the Buildroot userspace/menu.  Keep this
+# The SD-card artifact must contain the full userspace/menu.  Keep this
 # explicit alias next to the historical target so a bare `make linux-asd`
 # (which intentionally defaults to the tiny diagnostic rootfs) cannot be
 # mistaken for a physical-device build.
 physical-linux-asd:
 	# Remove a prior diagnostic before syncing the normal physical artifact.
 	rm -f '$(SDCARD_QPSX_STARTUP_CONFIG)' '$(SDCARD_QPSX_STARTUP_CHECKSUM)'
-	$(ISOLATED_MAKE) ROOTFS=buildroot SDCARD_ASD_SYNC=1 linux-asd
+	$(ISOLATED_MAKE) ROOTFS=full SDCARD_ASD_SYNC=1 linux-asd
 
 ifeq ($(SDCARD_ASD_SYNC),1)
 sdcard-linux: $(SDCARD_LINUX_ASD) $(SDCARD_BIOS_ASD) \
@@ -2214,13 +2219,13 @@ sdcard-linux:
 	@exit 2
 endif
 
-sdcard-buildroot:
-	$(ISOLATED_MAKE) ROOTFS=buildroot sdcard-linux
+sdcard-full:
+	$(ISOLATED_MAKE) ROOTFS=full sdcard-linux
 
 linux-rom-sd: $(LINUX_ROM_SD_IMAGE)
 
-linux-buildroot-rom-sd:
-	$(ISOLATED_MAKE) ROOTFS=buildroot linux-rom-sd
+linux-full-rom-sd:
+	$(ISOLATED_MAKE) ROOTFS=full linux-rom-sd
 
 run-linux: qemu linux
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -2265,12 +2270,12 @@ smoke-linux-input: run-linux-input
 	grep -q 'sf2000-pad: state=.*RIGHT' '$(BUILD_DIR)'/logs/linux-input.log
 	grep -q 'sf2000-pad: state=.*A' '$(BUILD_DIR)'/logs/linux-input.log
 
-run-linux-power: qemu linux-buildroot-asd
+run-linux-power: qemu linux-full-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-a 500\n'; sleep 4; \
 		printf 'sendkey x 2500\n'; sleep 4; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-power.log \
 		> '$(BUILD_DIR)'/logs/linux-power.console 2>&1
@@ -2330,7 +2335,7 @@ gpsp-real-test-sd: Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 
 $(QPSX_AUDIT_STAMP): $(SDCARD_CORE_STAMP)
 	$(FRONTEND_MAKE) qpsx-mips32r1-audit \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))'
+		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))'
 	touch '$@'
 
 qpsx-mips32r1-audit: $(QPSX_AUDIT_STAMP)
@@ -2473,7 +2478,7 @@ qpsx-real-test-sd: $(QPSX_REAL_TEST_CORE_STAMP)
 # all-core SDCARD_CORE_STAMP and is the intended edit/build/QEMU loop.
 qpsx-dev-real-test-sd: FORCE
 	$(FRONTEND_MAKE) qpsx-dev-mips32r1-audit \
-		CROSS_COMPILE='$(patsubst %gcc,%,$(BUILDROOT_CC))' \
+		CROSS_COMPILE='$(patsubst %gcc,%,$(TARGET_CC))' \
 		QPSX_OPTIMIZE='$(QPSX_OPTIMIZE)'
 	$(MAKE) qpsx-real-test-sd QPSX_REAL_CORE_DEP= \
 		QPSX_TEST_CORE='$(FRONTEND_PROJECT)/build/sf2000-qpsx-dev'
@@ -2484,7 +2489,7 @@ qpsx-dev-no-menu-test-sd: FORCE
 # These are deliberately separate from the normal physical image.  The
 # no-menu SD target reuses the real-image builder with menu_at_start=0 for
 # QEMU.  The physical target stages only the startup option after producing a
-# normal Buildroot ASD; the option is removed by the next physical-linux-asd
+# normal full-rootfs ASD; the option is removed by the next physical-linux-asd
 # invocation, so it cannot silently become the default user image.
 qpsx-no-menu-test-sd: FORCE
 	$(MAKE) QPSX_REAL_MENU_AT_START=0 qpsx-real-test-sd
@@ -2535,7 +2540,7 @@ $(JS2300_TEST_SD): Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
-run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
+run-linux-frontend: qemu linux-full-asd $(BROWSER_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey ret-right 500\n'; sleep 1; \
 	printf 'sendkey x 100\n'; sleep 1; \
@@ -2545,7 +2550,7 @@ run-linux-frontend: qemu linux-buildroot-asd $(BROWSER_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(BROWSER_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-frontend.log \
@@ -2560,7 +2565,7 @@ smoke-linux-frontend: run-linux-frontend
 	grep -q 'sf2000-browser: framebuffer write complete bytes=153600 stride=640 presenter=GE' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Eq 'sf2000-browser: directory path=/mnt/sd entries=[1-9][0-9]*' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -q 'sf2000-browser: ready: home menu A select B back' '$(BUILD_DIR)'/logs/linux-frontend.log
-	strings -a '$(BUILD_DIR)'/buildroot-generated-overlay/usr/bin/sf2000-frontend | \
+	strings -a '$(BUILD_DIR)'/userspace-generated-overlay/usr/bin/sf2000-frontend | \
 		grep -Fq 'UI diagnostic path=%s source='
 	! grep -q 'sf2000-browser: cannot open directory' '$(BUILD_DIR)'/logs/linux-frontend.log
 	grep -Fq 'sf2000-browser: launch Gambatte /mnt/sd/GB/TEST GAME.GB' '$(BUILD_DIR)'/logs/linux-frontend.log
@@ -2591,7 +2596,7 @@ smoke-linux-frontend: run-linux-frontend
 	! grep -Eq 'screen (stop|resume) failed|reloc outside program|Kernel panic|Data bus error|Oops\[#' \
 		'$(BUILD_DIR)'/logs/linux-frontend.log
 
-run-linux-js2300: qemu linux-buildroot-asd $(JS2300_TEST_SD)
+run-linux-js2300: qemu linux-full-asd $(JS2300_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
@@ -2599,7 +2604,7 @@ run-linux-js2300: qemu linux-buildroot-asd $(JS2300_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(JS2300_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-js2300-core.log \
@@ -2608,7 +2613,7 @@ run-linux-js2300: qemu linux-buildroot-asd $(JS2300_TEST_SD)
 		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 1; printf 'sendkey x 100\n'; sleep 8; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(JS2300_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-js2300-ui.log \
@@ -2636,7 +2641,7 @@ smoke-linux-js2300: run-linux-js2300
 		'$(BUILD_DIR)'/logs/linux-js2300-ui.log
 	@printf 'PASS smoke-linux-js2300\n'
 
-run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
+run-linux-gpsp: qemu linux-full-asd $(GPSP_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
@@ -2651,7 +2656,7 @@ run-linux-gpsp: qemu linux-buildroot-asd $(GPSP_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(GPSP_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-gpsp.log \
@@ -2689,7 +2694,7 @@ smoke-linux-gpsp: run-linux-gpsp
 	grep -q 'sf2000-frontend: returned cleanly' '$(BUILD_DIR)'/logs/linux-gpsp.log
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault' '$(BUILD_DIR)'/logs/linux-gpsp.log
 
-run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
+run-linux-gpsp-real: qemu linux-full-asd gpsp-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 15; \
@@ -2697,7 +2702,7 @@ run-linux-gpsp-real: qemu linux-buildroot-asd gpsp-real-test-sd
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(GPSP_REAL_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-gpsp-real.log \
@@ -2724,14 +2729,14 @@ smoke-linux-gpsp-real: run-linux-gpsp-real
 	! grep -Eq 'reloc outside program|Kernel panic|frontend: fault|core (load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
-run-linux-qpsx-real: qemu linux-buildroot-asd qpsx-real-test-sd
+run-linux-qpsx-real: qemu linux-full-asd qpsx-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 2; printf 'sendkey ret 100\n'; sleep 25; printf 'q\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-real.log \
@@ -2775,14 +2780,14 @@ smoke-linux-qpsx-real: run-linux-qpsx-real
 	! grep -Eq 'Instruction bus error|Data bus error|fatal signal|signal 11|Kernel panic|frontend: fault|core (init|load|run) timeout' \
 		'$(BUILD_DIR)'/logs/linux-qpsx-real.log
 
-run-linux-qpsx-no-menu: qemu linux-buildroot-asd qpsx-no-menu-test-sd
+run-linux-qpsx-no-menu: qemu linux-full-asd qpsx-no-menu-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 20; printf 'q\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-no-menu.log \
@@ -2830,7 +2835,7 @@ smoke-linux-qpsx-no-menu: run-linux-qpsx-no-menu
 # retro_serialize_size() is no longer 0, and the written/loaded markers prove
 # retro_serialize()/retro_unserialize() round-trip through the core's native
 # freeze machinery.
-run-linux-qpsx-savestate: qemu linux-buildroot-asd qpsx-real-test-sd
+run-linux-qpsx-savestate: qemu linux-full-asd qpsx-real-test-sd
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; \
@@ -2845,7 +2850,7 @@ run-linux-qpsx-savestate: qemu linux-buildroot-asd qpsx-real-test-sd
 		printf 'sendkey x 200\n'; sleep 12; \
 		printf 'sendkey z 200\n'; sleep 6; printf 'quit\n') | \
 		SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-qpsx-savestate.log \
@@ -2880,7 +2885,7 @@ run-linux-qpsx-attract-benchmark: qemu $(QPSX_BENCHMARK_ASD_TARGET) $(QPSX_BENCH
 		printf 'sendkey z 200\n'; sleep '$(QPSX_BENCHMARK_SECONDS)'; \
 		printf 'quit\n') | \
 		SF2000_SCANOUT_ORACLE=0 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(QPSX_REAL_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp \
@@ -2903,7 +2908,7 @@ benchmark-linux-qpsx-attract: run-linux-qpsx-attract-benchmark
 benchmark-linux-qpsx-attract-dev:
 	$(MAKE) benchmark-linux-qpsx-attract \
 		QPSX_BENCHMARK_SD_TARGET=qpsx-dev-no-menu-test-sd \
-		QPSX_BENCHMARK_ASD_TARGET=linux-buildroot-test-asd
+		QPSX_BENCHMARK_ASD_TARGET=linux-full-test-asd
 
 run-linux-gpsp-smc: gpsp-smc-test-roms
 	@case ' $(GPSP_SMC_TEST_MODES) ' in \
@@ -2921,7 +2926,7 @@ smoke-linux-gpsp-smc: run-linux-gpsp-smc
 	! grep -Eq 'bad jump|Instruction bus error|Data bus error|signal 11|Kernel panic|reloc outside program|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-gpsp-real.log
 
-run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
+run-linux-frontend-lifecycle: qemu linux-full-asd \
 		$(FRONTEND_LIFECYCLE_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 10; printf 'sendkey x 100\n'; sleep 1; \
@@ -2936,7 +2941,7 @@ run-linux-frontend-lifecycle: qemu linux-buildroot-asd \
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			'$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(FRONTEND_LIFECYCLE_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp \
@@ -2975,7 +2980,7 @@ run-linux-reboot: qemu linux-rom-sd
 
 smoke-linux-reboot: run-linux-reboot
 	grep -q 'sf2000_linux: init alive' '$(BUILD_DIR)'/logs/linux-reboot.log
-	grep -Eq 'sf2000-browser: system action reset|sf2000_buildroot: clean restart requested|sf2000_buildroot: storage synchronized, restarting|sf2000: watchdog restart' \
+	grep -Eq 'sf2000-browser: system action reset|sf2000_userspace: clean restart requested|sf2000_userspace: storage synchronized, restarting|sf2000: watchdog restart' \
 		'$(BUILD_DIR)'/logs/linux-reboot.log
 	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log)" -ge 1
 
@@ -2994,16 +2999,18 @@ smoke-linux-rom: run-linux-rom
 	grep -q 'sf2000: uart: .*linux-loader: jump entry=' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q '$(SMOKE_INIT_PATTERN)' '$(BUILD_DIR)'/logs/linux-rom.log
 
-run-linux-buildroot-asd:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-asd:
+	$(MAKE) ROOTFS=full \
+		SDCARD_ASD_SYNC=0 \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' run-linux-asd
 
-smoke-linux-buildroot-asd:
-	$(MAKE) ROOTFS=buildroot \
+smoke-linux-full-asd:
+	$(MAKE) ROOTFS=full \
+		SDCARD_ASD_SYNC=0 \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
-	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-ge .*HC15xx GE queue at' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'new USB bus registered' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q '18818600.serial: ttyS0 .*irq = 17' '$(BUILD_DIR)'/logs/linux-asd.log
@@ -3014,11 +3021,11 @@ smoke-linux-buildroot-asd:
 # can deliver 0 GE IRQs through the sysint cascade).  The engine still completes
 # queues and latches STATUS.DONE, so the kernel must reach screen-ready through
 # the HCGE poll path; a regression to IRQ-only completion waits would stall here.
-smoke-linux-buildroot-ge-no-irq:
-	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-no-irq=on' \
+smoke-linux-full-ge-no-irq:
+	$(MAKE) ROOTFS=full QEMU_MACHINE_ARGS=',ge-no-irq=on' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
-	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-sync-ok' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -qE 'sync timeout|ETIMEDOUT|completion.*timeout|timed out' '$(BUILD_DIR)'/logs/linux-asd.log
@@ -3027,11 +3034,11 @@ smoke-linux-buildroot-ge-no-irq:
 # reproduces the physical symptom: HC15xx reports sync completion, but the
 # scanout sample is wrong.  A completed verification failure must repair the
 # scanout on the CPU without resetting the already-running VOU/GMA owner.
-smoke-linux-buildroot-ge-verify-cpu-fallback:
-	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',ge-fault-dest=on' \
+smoke-linux-full-ge-verify-cpu-fallback:
+	$(MAKE) ROOTFS=full QEMU_MACHINE_ARGS=',ge-fault-dest=on' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
 	grep -q 'sf2000: ge fault-dest: skipped RGB565 blit 4 destination write' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-verify-fail' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-present-fail' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ge-band-mask' '$(BUILD_DIR)'/logs/linux-asd.log
@@ -3052,7 +3059,7 @@ smoke-linux-buildroot-ge-verify-cpu-fallback:
 
 # Keep the old name as a compatibility alias; completed verification failures
 # intentionally use CPU repair and do not reset the running VOU/GMA owner.
-smoke-linux-buildroot-ge-verify-reset: smoke-linux-buildroot-ge-verify-cpu-fallback
+smoke-linux-full-ge-verify-reset: smoke-linux-full-ge-verify-cpu-fallback
 
 # The screen service must not write /dev/kmsg while the GMA/VOU display
 # handoff is in flight: the ttyS0 console drains every record synchronously
@@ -3065,12 +3072,12 @@ smoke-linux-buildroot-ge-verify-reset: smoke-linux-buildroot-ge-verify-cpu-fallb
 # scanout is stable.
 # A non-default LINUX_CMDLINE makes SDCARD_ASD_SYNC_DEFAULT=0, so the
 # diagnostic build is never copied to the physical SD image; rebuild the
-# default ASD afterwards (smoke-linux-buildroot-asd) before flashing.
-smoke-linux-buildroot-handoff-quiet:
-	$(MAKE) ROOTFS=buildroot \
+# default ASD afterwards (smoke-linux-full-asd) before flashing.
+smoke-linux-full-handoff-quiet:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='$(LINUX_DEFAULT_CMDLINE) SF2000_DISPLAY_DIAG=1' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
-	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-screen: handoff diagnostics flushed' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sf2000-screen: disp-state handoff-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-handoff-kmsg-calls' '$(BUILD_DIR)'/logs/linux-asd.log
@@ -3093,62 +3100,62 @@ smoke-linux-buildroot-handoff-quiet:
 # gap in its copy+flush leaves that word executable and the kernel faults;
 # the uncached-KSEG1 loader must overwrite the whole window and reach
 # screen-ready with no Reserved Instruction.
-smoke-linux-buildroot-stale-ram:
-	$(MAKE) ROOTFS=buildroot QEMU_MACHINE_ARGS=',stale-ram=on' \
+smoke-linux-full-stale-ram:
+	$(MAKE) ROOTFS=full QEMU_MACHINE_ARGS=',stale-ram=on' \
 		SMOKE_INIT_PATTERN='sf2000_linux: init alive' smoke-linux-asd
 	grep -q 'sf2000: stale-ram=on: prefilled' '$(BUILD_DIR)'/logs/linux-asd.console
-	grep -q 'sf2000_buildroot: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
-	grep -q 'sf2000_buildroot: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: userspace alive' '$(BUILD_DIR)'/logs/linux-asd.log
+	grep -q 'sf2000_userspace: graphics engine ready /dev/ge' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -qE 'ri-insn-data|ri-epc' '$(BUILD_DIR)'/logs/linux-asd.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-asd.log
 
-run-linux-buildroot-storage:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-storage:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
-		run-linux-buildroot-storage-fast
+		run-linux-full-storage-fast
 
-smoke-linux-buildroot-storage:
-	$(MAKE) ROOTFS=buildroot smoke-linux-buildroot-storage-writeback
+smoke-linux-full-storage:
+	$(MAKE) ROOTFS=full smoke-linux-full-storage-writeback
 
-run-linux-buildroot-storage-fast:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-storage-fast:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-asd
 
-smoke-linux-buildroot-storage-fast:
-	$(MAKE) ROOTFS=buildroot \
+smoke-linux-full-storage-fast:
+	$(MAKE) ROOTFS=full \
 		SF2000_TRACE_SDIO='1' \
 		QEMU_DEBUG='guest_errors,unimp' \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
-		run-linux-buildroot-storage-fast
+		run-linux-full-storage-fast
 	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'hc15-probe' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'HC15 SD/MMC host registered' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c004' '$(BUILD_DIR)'/logs/linux-asd.log
 	grep -q 'sdio-access write addr=0x1884c002' '$(BUILD_DIR)'/logs/linux-asd.log
 
-run-linux-buildroot-storage-writeback:
+run-linux-full-storage-writeback:
 	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback $(QEMU_ORACLE_ARGS)
 
-smoke-linux-buildroot-storage-writeback:
+smoke-linux-full-storage-writeback:
 	$(MAKE) -C '$(QEMU_ORACLE_DIR)' smoke-stock-fatfs-writeback $(QEMU_ORACLE_ARGS)
 
-run-linux-buildroot-storage-probe-writeback:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-storage-probe-writeback:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-asd
 
-smoke-linux-buildroot-storage-probe-writeback:
+smoke-linux-full-storage-probe-writeback:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-probe-writeback.XXXXXX.img); \
 	trap 'rm -f $$tmp_sd' EXIT; \
 	truncate -s 16M "$$tmp_sd"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
-	$(MAKE) ROOTFS=buildroot \
+	$(MAKE) ROOTFS=full \
 		SF2000_TRACE_SDIO='1' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
-		run-linux-buildroot-storage-probe-writeback; \
+		run-linux-full-storage-probe-writeback; \
 	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-access write addr=0x1884c024' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3157,34 +3164,34 @@ smoke-linux-buildroot-storage-probe-writeback:
 	grep -q 'value=0x00000000 name=exit-code' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -a -q 'sf2000 linux sd write test 0239' "$$tmp_sd"
 
-run-linux-buildroot-storage-enumeration:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-storage-enumeration:
+	$(MAKE) ROOTFS=full \
 		SF2000_TRACE_SDIO='1' \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
 		run-linux-asd
 
-smoke-linux-buildroot-storage-enumeration:
+smoke-linux-full-storage-enumeration:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-storage-enumeration.XXXXXX.img); \
 	trap 'rm -f $$tmp_sd' EXIT; \
 	truncate -s 16M "$$tmp_sd"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
-	$(MAKE) ROOTFS=buildroot \
+	$(MAKE) ROOTFS=full \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
-		run-linux-buildroot-storage-enumeration; \
+		run-linux-full-storage-enumeration; \
 	grep -q 'sdio-dma-scr .*len=8 result=0' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'mmc0: new SDXC card' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'mmcblk0: mmc0:' '$(BUILD_DIR)'/logs/linux-asd.log; \
 	grep -q 'sdio-dma-read .*len=4096 copied=4096' '$(BUILD_DIR)'/logs/linux-asd.log
 
-smoke-linux-buildroot-persistent-storage:
+smoke-linux-full-persistent-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-persistent-storage.XXXXXX.img); \
 	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-loglinux.XXXXXX.txt); \
 	trap 'rm -f $$tmp_sd $$tmp_log' EXIT; \
 	truncate -s 64M "$$tmp_sd"; \
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	mcopy -i "$$tmp_sd" ::loglinux.txt "$$tmp_log"; \
@@ -3202,7 +3209,7 @@ smoke-linux-buildroot-persistent-storage:
 # Most consumer SD cards are MBR/GPT + a VFAT partition (/dev/sda1 on a host,
 # /dev/mmcblk0p1 on the device).  Superfloppy images used by other smokes do not
 # cover that layout.
-smoke-linux-buildroot-partitioned-storage:
+smoke-linux-full-partitioned-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-partitioned-storage.XXXXXX.img); \
 	tmp_p1=$$(mktemp '$(BUILD_DIR)'/sf2000-partitioned-p1.XXXXXX.img); \
@@ -3229,7 +3236,7 @@ mbr[0x1ce:0x1ce+16]=struct.pack('<BBBBBBBBII',0x00,1,1,0,0x0c,0xfe,0xff,0xff,p2_
 mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	dd if="$$tmp_p1" of="$$tmp_sd" bs=512 seek="$$p1_lba" conv=notrunc status=none; \
 	dd if="$$tmp_p2" of="$$tmp_sd" bs=512 seek="$$p2_lba" conv=notrunc status=none; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -Eq 'mmcblk0: *p1 p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3245,7 +3252,7 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	! grep -q 'sf2000-mount: mount failed' '$(BUILD_DIR)'/logs/linux-asd.log
 
 # Bootloader-proven FAT16 primary (QEMU stock full-chain + ROM FAT strings).
-smoke-linux-buildroot-fat16-storage:
+smoke-linux-full-fat16-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-fat16-storage.XXXXXX.img); \
 	tmp_part=$$(mktemp '$(BUILD_DIR)'/sf2000-fat16-part.XXXXXX.img); \
@@ -3259,7 +3266,7 @@ smoke-linux-buildroot-fat16-storage:
 	mmd -i "$$tmp_part" ::bios ::firmware ::saves; \
 	python3 -c "import struct; lba=$$part_lba; sec=$$part_sectors; mbr=bytearray(512); mbr[0x1be:0x1be+16]=struct.pack('<BBBBBBBBII',0x80,1,1,0,0x06,0xfe,0xff,0xff,lba,sec); mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	dd if="$$tmp_part" of="$$tmp_sd" bs=512 seek="$$part_lba" conv=notrunc status=none; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -q 'sf2000-mount: mount ok primary=/dev/mmcblk0p1' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3269,7 +3276,7 @@ smoke-linux-buildroot-fat16-storage:
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 # Bootloader ROM contains EXFAT OEM/type strings; Linux mounts exFAT volumes.
-smoke-linux-buildroot-exfat-storage:
+smoke-linux-full-exfat-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-exfat-storage.XXXXXX.img); \
 	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-exfat-loglinux.XXXXXX.txt); \
@@ -3282,7 +3289,7 @@ smoke-linux-buildroot-exfat-storage:
 	loop=$$(losetup -f --show -o $$((part_lba * 512)) "$$tmp_sd"); \
 	mkfs.exfat -n SF2000 "$$loop" >/dev/null; \
 	losetup -d "$$loop"; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -q 'sf2000-mount: volume /dev/mmcblk0p1 type=exfat' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3290,7 +3297,7 @@ smoke-linux-buildroot-exfat-storage:
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
 # Primary FAT32 system partition + secondary exFAT ROM partition.
-smoke-linux-buildroot-mixed-fs-storage:
+smoke-linux-full-mixed-fs-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-mixed-fs.XXXXXX.img); \
 	tmp_p1=$$(mktemp '$(BUILD_DIR)'/sf2000-mixed-p1.XXXXXX.img); \
@@ -3314,7 +3321,7 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 	loop=$$(losetup -f --show -o $$((p2_lba * 512)) "$$tmp_sd"); \
 	mkfs.exfat -n ROMS "$$loop" >/dev/null; \
 	losetup -d "$$loop"; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -Eq 'mmcblk0: *p1 p2' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3328,7 +3335,7 @@ mbr[510:512]=b'\\x55\\xaa'; open('$$tmp_sd','r+b').write(mbr)"; \
 # Bootloader-proven stock superfloppy layout: FAT32 at sector 0 with no usable
 # MBR.  The mount service must try /dev/mmcblk0 first instead of probing the
 # ghost partition nodes (~300 ms each on the physical device).
-smoke-linux-buildroot-superfloppy-storage:
+smoke-linux-full-superfloppy-storage:
 	set -e; \
 	tmp_sd=$$(mktemp '$(BUILD_DIR)'/sf2000-superfloppy.XXXXXX.img); \
 	tmp_log=$$(mktemp '$(BUILD_DIR)'/sf2000-superfloppy-loglinux.XXXXXX.txt); \
@@ -3337,7 +3344,7 @@ smoke-linux-buildroot-superfloppy-storage:
 	mkfs.vfat -F 32 -n SF2000 "$$tmp_sd" >/dev/null 2>&1; \
 	mmd -i "$$tmp_sd" ::sf2000; \
 	mcopy -i "$$tmp_sd" Makefile ::sf2000/ui.ttf; \
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		QEMU_SD_ARGS="-drive if=none,id=sd0,file=$$tmp_sd,format=raw" \
 		run-linux-asd; \
 	grep -q 'sf2000-mount: superfloppy: whole disk first' '$(BUILD_DIR)'/logs/linux-asd.log; \
@@ -3347,12 +3354,12 @@ smoke-linux-buildroot-superfloppy-storage:
 	grep -q 'source=heartbeat alive' "$$tmp_log"; \
 	! grep -q 'Kernel bug detected' '$(BUILD_DIR)'/logs/linux-asd.log
 
-run-linux-buildroot-storage-launch:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-storage-launch:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-storage-fastprobe' \
-		run-linux-buildroot-storage-fast
+		run-linux-full-storage-fast
 
-smoke-linux-buildroot-storage-launch: run-linux-buildroot-storage-launch
+smoke-linux-full-storage-launch: run-linux-full-storage-launch
 	grep -q 'Run /usr/sbin/sf2000-storage-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-asd.log
 
 run-qemu-stock-fatfs-writeback:
@@ -3371,107 +3378,107 @@ run-qemu-display:
 
 smoke-qemu-display: run-qemu-display
 
-run-linux-buildroot-rom:
-	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' run-linux-rom
+run-linux-full-rom:
+	$(MAKE) ROOTFS=full \
+		SMOKE_INIT_PATTERN='sf2000_userspace: userspace alive' run-linux-rom
 
-smoke-linux-buildroot-rom:
-	$(MAKE) ROOTFS=buildroot \
-		SMOKE_INIT_PATTERN='sf2000_buildroot: userspace alive' smoke-linux-rom
+smoke-linux-full-rom:
+	$(MAKE) ROOTFS=full \
+		SMOKE_INIT_PATTERN='sf2000_userspace: userspace alive' smoke-linux-rom
 	grep -q 'sf2000: uart: .*sf2000: early watchdog armed' '$(BUILD_DIR)'/logs/linux-rom.log
-	grep -q 'sf2000_buildroot: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
+	grep -q 'sf2000_userspace: early watchdog disabled' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-rom.log
 	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-rom.log
 	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-rom.log
 
-run-linux-buildroot-display: qemu
-	$(MAKE) ROOTFS=buildroot linux-asd
-	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots/linux-buildroot-gma
-	rm -f '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-*.ppm \
-		'$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+run-linux-full-display: qemu
+	$(MAKE) ROOTFS=full linux-asd
+	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots/linux-full-gma
+	rm -f '$(BUILD_DIR)'/screenshots/linux-full-gma/sf2000-gma-*.ppm \
+		'$(BUILD_DIR)'/screenshots/linux-full-gma/sf2000-gma-latest.ppm
 	SF2000_TRACE_GMA=1 \
-	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-buildroot-gma \
+	SF2000_GMA_DUMP_DIR='$(BUILD_DIR)'/screenshots/linux-full-gma \
 	SF2000_GMA_DUMP_LIMIT=8 \
-	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) $(QEMU_DISPLAY_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) $(QEMU_DISPLAY_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-display none -serial none -monitor none \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-display.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-display.console 2>&1 || test $$? -eq 124
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-display.log \
+		> '$(BUILD_DIR)'/logs/linux-full-display.console 2>&1 || test $$? -eq 124
 
-smoke-linux-buildroot-display: run-linux-buildroot-display
-	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-display.console
-	grep -q 'sf2000: VOU RGB compositor latch complete' '$(BUILD_DIR)'/logs/linux-buildroot-display.console
-	grep -q 'simple-framebuffer .*fb0: simplefb registered' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000_buildroot: framebuffer ready /dev/fb0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-cached-render-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ge-scanout-init-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ge-scanout-clear-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-ge-scanout-init-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-ge-scanout-init-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-gma-probe-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00040001 name=screen-raster-ctl-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00f00280 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00f00000 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test "$$(grep -c 'name=screen-raster-wait-ok' '$(BUILD_DIR)'/logs/linux-buildroot-display.log)" -ge 2
-	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000004 name=screen-native-hold-begin' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000004 name=screen-native-hold-count' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000004 name=screen-native-hold-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-native-hold-ms' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-native-present-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-buildroot-display.log | tail -n 1)"; \
+smoke-linux-full-display: run-linux-full-display
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-full-display.console
+	grep -q 'sf2000: VOU RGB compositor latch complete' '$(BUILD_DIR)'/logs/linux-full-display.console
+	grep -q 'simple-framebuffer .*fb0: simplefb registered' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'sf2000_userspace: framebuffer ready /dev/fb0' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'sf2000-screen: /dev/fb0 RGB565 write ready' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-ge-console-fill-ok' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'sf2000: reserved diag memory gma=0xf00000+0x100000' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-after-backlight' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-after-gma-desc' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-ready-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-loop-present-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-cached-render-ready' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00f00000 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00f00280 name=screen-gma-present-desc' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-ge-scanout-init-begin' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-ge-scanout-clear-ok' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-ge-scanout-init-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-ge-scanout-init-fail' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-vou-latch-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-rgb-prime-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-rgb-prime2-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-rgb-engine-ready' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-ge-mcu-visible' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-gma-probe-begin' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00137002 name=screen-rgb-vou-connect-ctrl' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000015 name=screen-rgb-vou-connect-mode' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00040001 name=screen-raster-ctl-hw' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00f00280 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00f00000 name=screen-raster-expected' '$(BUILD_DIR)'/logs/linux-full-display.log
+	test "$$(grep -c 'name=screen-raster-wait-ok' '$(BUILD_DIR)'/logs/linux-full-display.log)" -ge 2
+	! grep -q 'name=screen-raster-wait-fail' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-rgb-handoff-abort' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-post-gma-dmba-hw' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-begin' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-count' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000004 name=screen-native-hold-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-native-present' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-native-hold-ms' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x01300378 name=screen-native-hold-vou' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00040001 name=screen-native-hold-gma' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-native-present-fail' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-te-conditioning-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-te-stream-start' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-te-rearm-edge' '$(BUILD_DIR)'/logs/linux-full-display.log
+	gate1="$$(sed -n 's/.*value=\(0x[0-9a-fA-F]*\) name=screen-post-gate1.*/\1/p' '$(BUILD_DIR)'/logs/linux-full-display.log | tail -n 1)"; \
 		test $$((gate1 & 0x600)) -eq 1536
-	grep -q 'name=screen-panel-id' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=screen-panel-aux' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'name=screen-native-hold-fail' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000001 name=screen-vou-geometry-contract' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0xb6060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-cmd cmd=0x2c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'panel-data cmd=0x36 index=0 value=0x0070' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
+	grep -q 'name=screen-panel-id' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=screen-panel-aux' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-probe-restore-present' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'name=screen-native-hold-fail' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000000 name=screen-rgb-source' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x01300378 name=screen-vou-total' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x028e000a name=screen-vou-hactive' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x011e002e name=screen-vou-vactive' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000001 name=screen-vou-geometry-contract' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00060600 name=screen-rgb-vsync' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0xb6060606 name=screen-rgb-pad-clock' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000029 name=screen-panel-command-final' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'panel-cmd cmd=0x2c' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'panel-data cmd=0x36 index=0 value=0x0070' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'GMA doorbell before VOU RGB latch' '$(BUILD_DIR)'/logs/linux-full-display.log
 	# QEMU always boots linux directly (no bootloader UI), so the display
 	# cold re-init for an inherited bootloader state must be a no-op here.
-	! grep -q 'name=screen-cold-takeover-done' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA scanout with panel pixel clock disconnected' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'panel entered RGB mode before VOU/GMA raster was active' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+	! grep -q 'name=screen-cold-takeover-done' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'GMA scanout with panel VSYNC disconnected' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'GMA scanout with panel pixel clock disconnected' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'GMA scanout while panel remains in MCU RAMWR state' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'panel entered RGB mode before VOU/GMA raster was active' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'Data bus error' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'assert(common.c' '$(BUILD_DIR)'/logs/linux-full-display.log
+	! grep -q 'Invalid argument\|No such device' '$(BUILD_DIR)'/logs/linux-full-display.log
+	test -s '$(BUILD_DIR)'/screenshots/linux-full-gma/sf2000-gma-latest.ppm
 
 metrics-linux:
 	@awk '\
@@ -3481,11 +3488,11 @@ metrics-linux:
 		n = split(substr($$0, p + 12), a, ","); \
 		return n >= 3 ? a[3] + 0 : -1; \
 	} \
-	/source=kmsg .*sf2000_buildroot: starting screen/ { screen_start = ktime() } \
+	/source=kmsg .*sf2000_userspace: starting screen/ { screen_start = ktime() } \
 	/source=kmsg .*sf2000-screen: main entry/ && !screen_main { screen_main = ktime() } \
 	/source=kmsg .*guarded panel init begin/ { panel_begin = ktime() } \
 	/source=kmsg .*guarded panel init done/ { panel_done = ktime() } \
-	/source=kmsg .*sf2000_buildroot: screen ready/ { screen_ready = ktime() } \
+	/source=kmsg .*sf2000_userspace: screen ready/ { screen_ready = ktime() } \
 	/source=logd --- SF2000 Linux storage mounted ---/ { mount_us = $$2; sub("mono_us=", "", mount_us) } \
 	/source=storage storage-test=pass/ { storage_us = $$2; sub("mono_us=", "", storage_us) } \
 	/source=proc-stat cpu  / { \
@@ -3566,12 +3573,12 @@ metrics-frontend:
 	END { emit() } \
 	' '$(METRICS_LOG)'
 
-benchmark-qemu-linux: qemu linux-buildroot-asd
+benchmark-qemu-linux: qemu linux-full-asd
 	mkdir -p '$(BUILD_DIR)'/metrics
 	/usr/bin/time -f 'qemu.wall_s=%e\nqemu.user_s=%U\nqemu.sys_s=%S\nqemu.host_cpu_pct=%P\nqemu.max_rss_kb=%M' \
 		-o '$(BUILD_DIR)'/metrics/qemu-linux.txt \
 		timeout '$(QEMU_BENCH_SECONDS)s' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-display none -serial none -monitor none \
 		-D '$(BUILD_DIR)'/metrics/qemu-linux.log \
 		>/dev/null 2>&1 || test $$? -eq 124
@@ -3610,11 +3617,11 @@ metrics-qemu-fidelity:
 		printf "fidelity.contract_pct=%.2f\n", 100 * matched / compared; \
 	}' '$(PHYSICAL_CONTRACT_LOG)' '$(QEMU_CONTRACT_LOG)'
 
-run-linux-buildroot-fidelity:
+run-linux-full-fidelity:
 	$(MAKE) QEMU_DISPLAY_ARGS='$(QEMU_FIDELITY_ARGS)' \
-		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' run-linux-buildroot-display
+		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' run-linux-full-display
 
-smoke-linux-physical-contract: linux-buildroot-asd
+smoke-linux-physical-contract: linux-full-asd
 	grep -A1 'if (!IS_ENABLED(CONFIG_MIPS_SF2000))' \
 		'$(LINUX_SRC)/arch/mips/kernel/traps.c' | \
 		grep -q 'check_wait()'
@@ -3633,11 +3640,11 @@ metrics-qemu-timing:
 	/Calibrating delay loop/ { \
 		if (match($$0, /[0-9]+\.[0-9]+ BogoMIPS/)) { v = substr($$0, RSTART, RLENGTH); sub(/ BogoMIPS/, "", v); bogo[source] = v + 0 } \
 	} \
-	/sf2000_buildroot: starting screen/ { start[source] = source == 1 ? physical_time() : qemu_time() } \
+	/sf2000_userspace: starting screen/ { start[source] = source == 1 ? physical_time() : qemu_time() } \
 	/sf2000-screen: main entry/ && !main[source] { main[source] = source == 1 ? physical_time() : qemu_time() } \
 	/guarded panel init begin/ { panel0[source] = source == 1 ? physical_time() : qemu_time() } \
 	/guarded panel init done/ { panel1[source] = source == 1 ? physical_time() : qemu_time() } \
-	/sf2000_buildroot: screen ready/ { ready[source] = source == 1 ? physical_time() : qemu_time() } \
+	/sf2000_userspace: screen ready/ { ready[source] = source == 1 ? physical_time() : qemu_time() } \
 	END { \
 		printf "timing.physical_bogomips=%.2f\n", bogo[1]; printf "timing.qemu_bogomips=%.2f\n", bogo[2]; \
 		printf "timing.bogomips_ratio=%.3f\n", bogo[2]/bogo[1]; \
@@ -3651,28 +3658,28 @@ metrics-qemu-timing:
 		if ((panel1[2]-panel0[2])/(panel1[1]-panel0[1]) < .75 || (panel1[2]-panel0[2])/(panel1[1]-panel0[1]) > 1.25) exit 1; \
 	}' '$(METRICS_LOG)' '$(QEMU_CONTRACT_LOG)'
 
-smoke-linux-buildroot-fidelity:
+smoke-linux-full-fidelity:
 	$(MAKE) QEMU_DISPLAY_ARGS='$(QEMU_FIDELITY_ARGS)' \
-		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' smoke-linux-buildroot-display
+		QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' smoke-linux-full-display
 	$(MAKE) smoke-linux-physical-contract
 	$(MAKE) metrics-qemu-fidelity
 	$(MAKE) metrics-qemu-timing
 
-smoke-linux-buildroot-fb-test:
-	$(MAKE) ROOTFS=buildroot QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
+smoke-linux-full-fb-test:
+	$(MAKE) ROOTFS=full QEMU_BOOT_TIMEOUT='$(QEMU_BOOT_TIMEOUT)' \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_FB_TEST=1' \
-		run-linux-buildroot-display
-	grep -q 'sf2000_buildroot: stopping screen for framebuffer test' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'name=init-screen-stop-wait' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000_buildroot: exec /usr/bin/fb-test -p 0' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'fb-test 1.1.1' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'fb res 320x240 virtual 320x240, line_len 640, bpp 16' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'sf2000_buildroot: framebuffer test complete' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'value=0x00000000 name=init-fb-test-exit' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-buildroot-display.log
-	test -s '$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm
+		run-linux-full-display
+	grep -q 'sf2000_userspace: stopping screen for framebuffer test' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'name=init-screen-stop-wait' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'sf2000_userspace: exec /usr/bin/fb-test -p 0' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'fb-test 1.1.1' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'fb res 320x240 virtual 320x240, line_len 640, bpp 16' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'sf2000_userspace: framebuffer test complete' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'value=0x00000000 name=init-fb-test-exit' '$(BUILD_DIR)'/logs/linux-full-display.log
+	grep -q 'gma-present .*mode=6' '$(BUILD_DIR)'/logs/linux-full-display.log
+	test -s '$(BUILD_DIR)'/screenshots/linux-full-gma/sf2000-gma-latest.ppm
 	pixel() { \
-		dd if='$(BUILD_DIR)'/screenshots/linux-buildroot-gma/sf2000-gma-latest.ppm \
+		dd if='$(BUILD_DIR)'/screenshots/linux-full-gma/sf2000-gma-latest.ppm \
 			bs=1 skip=$$((15 + 3 * ($$2 * 320 + $$1))) count=3 2>/dev/null | \
 			od -An -tx1 | tr -d ' \n'; \
 	}; \
@@ -3681,87 +3688,87 @@ smoke-linux-buildroot-fb-test:
 	test "$$(pixel 0 100)" = 0000ff; \
 	test "$$(pixel 319 100)" = ff0000; \
 	test "$$(pixel 100 239)" = ffff00
-run-linux-buildroot-audio: qemu
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-audio: qemu
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	rm -f '$(BUILD_DIR)'/sf2000-audio.wav
 	(sleep 6; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' \
 		-audiodev wav,id=sf2000wav,path='$(BUILD_DIR)'/sf2000-audio.wav \
 		-display none -serial none -monitor stdio \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-audio.console 2>&1
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-audio.log \
+		> '$(BUILD_DIR)'/logs/linux-full-audio.console 2>&1
 
-smoke-linux-buildroot-audio: run-linux-buildroot-audio
-	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
-	grep -q 'sf2000-pcm .*PCM playback ready (IRQ)' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
-	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
-	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-buildroot-audio.console
-	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-buildroot-audio.log
+smoke-linux-full-audio: run-linux-full-audio
+	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-full-audio.log
+	grep -q 'sf2000-pcm .*PCM playback ready (IRQ)' '$(BUILD_DIR)'/logs/linux-full-audio.log
+	grep -q 'sf2000-audio: ALSA PCM DMA tone active' '$(BUILD_DIR)'/logs/linux-full-audio.log
+	grep -q 'sf2000: audio guest DMA active' '$(BUILD_DIR)'/logs/linux-full-audio.console
+	! grep -q 'sf2000-audio: ALSA PCM write failed' '$(BUILD_DIR)'/logs/linux-full-audio.log
 	test -s '$(BUILD_DIR)'/sf2000-audio.wav
 	dd if='$(BUILD_DIR)'/sf2000-audio.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
 			END { exit !found }'
 
-run-linux-buildroot-audio-44100: qemu
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-audio-44100: qemu
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	rm -f '$(BUILD_DIR)'/sf2000-audio-44100.wav
 	(sleep 6; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000,audiodev=sf2000wav44100 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1 SF2000_AUDIO_RATE=44100' \
 		-audiodev wav,id=sf2000wav44100,path='$(BUILD_DIR)'/sf2000-audio-44100.wav \
 		-display none -serial none -monitor stdio \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console 2>&1
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-audio-44100.log \
+		> '$(BUILD_DIR)'/logs/linux-full-audio-44100.console 2>&1
 
-smoke-linux-buildroot-audio-44100: run-linux-buildroot-audio-44100
-	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+smoke-linux-full-audio-44100: run-linux-full-audio-44100
+	grep -q 'sf2000-pcm .*PCM playback ready' '$(BUILD_DIR)'/logs/linux-full-audio-44100.log
 	grep -Eq 'sf2000-pcm .*DMA .*rate=44100 config=[0-9a-f]+ pll=080000c0 mn=0119000e ctl470=[0-9a-f]+ ctl474=[0-9a-f]+ vol=1e' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-44100.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active rate=44100' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-44100.log
 	grep -q 'sf2000: audio guest DMA active' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.console
+		'$(BUILD_DIR)'/logs/linux-full-audio-44100.console
 	! grep -q 'sf2000-audio: ALSA PCM write failed' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-44100.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-44100.log
 	test -s '$(BUILD_DIR)'/sf2000-audio-44100.wav
 	dd if='$(BUILD_DIR)'/sf2000-audio-44100.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
 		awk '{ for (i = 1; i <= NF; i++) if ($$i != 0) found = 1 } \
 			END { exit !found }'
 
-run-linux-buildroot-audio-gb300: qemu
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-audio-gb300: qemu
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs
 	rm -f '$(BUILD_DIR)'/gb300-audio.wav
 	(sleep 6; printf 'quit\n') | \
 		'$(QEMU_BIN)' -M sf2000,board-profile=gb300,audiodev=gb300wav \
-		$(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		$(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append 'console=ttyS0,115200 earlycon init=/init SF2000_AUDIO_TEST=1' \
 		-audiodev wav,id=gb300wav,path='$(BUILD_DIR)'/gb300-audio.wav \
 		-display none -serial none -monitor stdio \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.console 2>&1
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-audio-gb300.log \
+		> '$(BUILD_DIR)'/logs/linux-full-audio-gb300.console 2>&1
 
-smoke-linux-buildroot-audio-gb300: run-linux-buildroot-audio-gb300
+smoke-linux-full-audio-gb300: run-linux-full-audio-gb300
 	grep -Eq 'sf2000-pcm .*channels=2 .*route=gb300_l15' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-gb300.log
 	grep -Eq 'sf2000-pcm .*DMA .*channels=2 rate=[0-9]+ config=0b11[0-9a-f]{4} pll=[0-9a-f]+ mn=01580007 ctl470=[0-9a-f]+ ctl474=00106000 vol=8f' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-gb300.log
 	grep -q 'sf2000-audio: ALSA PCM DMA tone active' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-gb300.log
 	grep -q 'sf2000: audio guest DMA active' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.console
+		'$(BUILD_DIR)'/logs/linux-full-audio-gb300.console
 	! grep -q 'sf2000-audio: ALSA PCM write failed' \
-		'$(BUILD_DIR)'/logs/linux-buildroot-audio-gb300.log
+		'$(BUILD_DIR)'/logs/linux-full-audio-gb300.log
 	test -s '$(BUILD_DIR)'/gb300-audio.wav
 	dd if='$(BUILD_DIR)'/gb300-audio.wav bs=1 skip=44 2>/dev/null | \
 		od -An -v -td2 | \
@@ -3865,89 +3872,89 @@ smoke-qemu-mufrog-display: run-qemu-mufrog-display
 	! cmp -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm \
 		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
 
-run-linux-buildroot-panel: qemu
-	$(MAKE) ROOTFS=buildroot buildroot-panel-probe-link \
+run-linux-full-panel: qemu
+	$(MAKE) ROOTFS=full full-panel-probe-link \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs; \
-	SF2000_TRACE_PC='1' timeout '$(QEMU_PANEL_PROBE_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	SF2000_TRACE_PC='1' timeout '$(QEMU_PANEL_PROBE_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append 'console=ttyS0,115200 earlycon SF2000_PANEL_PROBE=1' \
 		-display none -serial none -monitor none \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-panel.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-panel.console 2>&1 || test $$? -eq 124
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-panel.log \
+		> '$(BUILD_DIR)'/logs/linux-full-panel.console 2>&1 || test $$? -eq 124
 
-smoke-linux-buildroot-panel: run-linux-buildroot-panel
-	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel.console
-	grep -q 'Run /init as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000-screen: main entry' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000-screen: panel probe begin' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	grep -q 'sf2000: panel-read cmd=0x04 bytes=4 data=e4:85:85:52:00' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
-	! grep -Eq 'service exec failed|Kernel panic|Attempted to kill init' '$(BUILD_DIR)'/logs/linux-buildroot-panel.log
+smoke-linux-full-panel: run-linux-full-panel
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-full-panel.console
+	grep -q 'Run /init as init process' '$(BUILD_DIR)'/logs/linux-full-panel.log
+	grep -q 'sf2000-screen: main entry' '$(BUILD_DIR)'/logs/linux-full-panel.log
+	grep -q 'sf2000-screen: panel probe begin' '$(BUILD_DIR)'/logs/linux-full-panel.log
+	grep -q 'sf2000: panel-read cmd=0x04 bytes=4 data=e4:85:85:52:00' '$(BUILD_DIR)'/logs/linux-full-panel.log
+	! grep -Eq 'service exec failed|Kernel panic|Attempted to kill init' '$(BUILD_DIR)'/logs/linux-full-panel.log
 
-run-linux-buildroot-panel-fast: qemu
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-panel-fast: qemu
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-panel-fastprobe' \
 		SF2000_TRACE_PC='1' run-linux-asd
-	mv '$(BUILD_DIR)'/logs/linux-asd.log '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
-	mv '$(BUILD_DIR)'/logs/linux-asd.console '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.console
+	mv '$(BUILD_DIR)'/logs/linux-asd.log '$(BUILD_DIR)'/logs/linux-full-panel-fast.log
+	mv '$(BUILD_DIR)'/logs/linux-asd.console '$(BUILD_DIR)'/logs/linux-full-panel-fast.console
 
-smoke-linux-buildroot-panel-fast: run-linux-buildroot-panel-fast
-	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.console
-	grep -q 'Run /usr/sbin/sf2000-panel-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
-	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-buildroot-panel-fast.log
+smoke-linux-full-panel-fast: run-linux-full-panel-fast
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-full-panel-fast.console
+	grep -q 'Run /usr/sbin/sf2000-panel-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-full-panel-fast.log
+	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-full-panel-fast.log
 
-run-linux-buildroot-input:
-	$(MAKE) ROOTFS=buildroot run-linux-input
+run-linux-full-input:
+	$(MAKE) ROOTFS=full run-linux-input
 
-smoke-linux-buildroot-input:
-	$(MAKE) ROOTFS=buildroot smoke-linux-input
+smoke-linux-full-input:
+	$(MAKE) ROOTFS=full smoke-linux-input
 
-run-linux-buildroot-reboot:
-	$(MAKE) ROOTFS=buildroot run-linux-reboot
+run-linux-full-reboot:
+	$(MAKE) ROOTFS=full run-linux-reboot
 
-smoke-linux-buildroot-reboot:
-	$(MAKE) ROOTFS=buildroot smoke-linux-reboot
+smoke-linux-full-reboot:
+	$(MAKE) ROOTFS=full smoke-linux-reboot
 	grep -q 'sf2000-pad: SELECT pressed, rebooting' '$(BUILD_DIR)'/logs/linux-reboot.log
-	grep -q 'sf2000_buildroot: restarting' '$(BUILD_DIR)'/logs/linux-reboot.log
+	grep -q 'sf2000_userspace: restarting' '$(BUILD_DIR)'/logs/linux-reboot.log
 	grep -q 'Hichip bootloader' '$(BUILD_DIR)'/logs/linux-reboot.log
 
-run-linux-buildroot-reset-snapshot:
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-reset-snapshot:
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
 		linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs; \
-	SF2000_TRACE_PC='1' timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+	SF2000_TRACE_PC='1' timeout '$(QEMU_BOOT_TIMEOUT)' '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) -kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
 		-display none -serial none -monitor none \
-		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.log \
-		> '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.console 2>&1 || test $$? -eq 124
+		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-full-reset-snapshot.log \
+		> '$(BUILD_DIR)'/logs/linux-full-reset-snapshot.console 2>&1 || test $$? -eq 124
 
-smoke-linux-buildroot-reset-snapshot: run-linux-buildroot-reset-snapshot
-	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.console
-	grep -q 'Run /usr/sbin/sf2000-reset-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.log
-	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-buildroot-reset-snapshot.log
+smoke-linux-full-reset-snapshot: run-linux-full-reset-snapshot
+	grep -q 'sf2000: loaded ASD' '$(BUILD_DIR)'/logs/linux-full-reset-snapshot.console
+	grep -q 'Run /usr/sbin/sf2000-reset-fastprobe as init process' '$(BUILD_DIR)'/logs/linux-full-reset-snapshot.log
+	grep -q 'ret-syscall-exit' '$(BUILD_DIR)'/logs/linux-full-reset-snapshot.log
 
-run-linux-buildroot-reset-restore: qemu
-	$(MAKE) ROOTFS=buildroot \
+run-linux-full-reset-restore: qemu
+	$(MAKE) ROOTFS=full \
 		LINUX_CMDLINE='console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
 		linux-asd
 	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/qmp '$(BUILD_DIR)'/state
-	python3 '$(BUILDROOT_RESET_RESTORE_SCRIPT)' \
+	python3 '$(USERSPACE_RESET_RESTORE_SCRIPT)' \
 		--qemu '$(QEMU_BIN)' \
 		--cpu '$(QEMU_CPU)' \
-		--kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		--kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		--append 'console=ttyS0,115200 earlycon rdinit=/usr/sbin/sf2000-reset-fastprobe' \
-		--state '$(BUILDROOT_RESET_RESTORE_STATE)' \
-		--source-console '$(BUILDROOT_RESET_RESTORE_PREFIX).source.console' \
-		--source-log '$(BUILDROOT_RESET_RESTORE_PREFIX).source.log' \
-		--restore-console '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.console' \
-		--restore-log '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.log' \
-		--socket '$(BUILDROOT_RESET_RESTORE_SOCKET)' \
-		--restore-socket '$(BUILDROOT_RESET_RESTORE_SOCKET_DEST)' \
+		--state '$(USERSPACE_RESET_RESTORE_STATE)' \
+		--source-console '$(USERSPACE_RESET_RESTORE_PREFIX).source.console' \
+		--source-log '$(USERSPACE_RESET_RESTORE_PREFIX).source.log' \
+		--restore-console '$(USERSPACE_RESET_RESTORE_PREFIX).restore.console' \
+		--restore-log '$(USERSPACE_RESET_RESTORE_PREFIX).restore.log' \
+		--socket '$(USERSPACE_RESET_RESTORE_SOCKET)' \
+		--restore-socket '$(USERSPACE_RESET_RESTORE_SOCKET_DEST)' \
 		--timeout '$(QEMU_BOOT_TIMEOUT)'
 
-smoke-linux-buildroot-reset-restore: run-linux-buildroot-reset-restore
-	grep -q 'sf2000: loaded ASD' '$(BUILDROOT_RESET_RESTORE_PREFIX).source.console'
-	grep -q 'sf2000: entry-bytes storage_probe_entry pc=0x047c0050' '$(BUILDROOT_RESET_RESTORE_PREFIX).restore.log'
+smoke-linux-full-reset-restore: run-linux-full-reset-restore
+	grep -q 'sf2000: loaded ASD' '$(USERSPACE_RESET_RESTORE_PREFIX).source.console'
+	grep -q 'sf2000: entry-bytes storage_probe_entry pc=0x047c0050' '$(USERSPACE_RESET_RESTORE_PREFIX).restore.log'
 
 clean:
 	rm -rf '$(BUILD_DIR)' '$(LINUX_SRC)'
@@ -3968,7 +3975,7 @@ $(FCEUMM_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP) \
 	mcopy -i '$@' '$(SDCARD_USER_CONFIG)' ::/sf2000.conf
 	mcopy -i '$@' '$(SDCARD_UI_FONT)' ::/sf2000/ui.ttf
 
-run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
+run-linux-fceumm: qemu linux-full-asd $(FCEUMM_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
@@ -3977,7 +3984,7 @@ run-linux-fceumm: qemu linux-buildroot-asd $(FCEUMM_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(FCEUMM_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-fceumm.log \
@@ -4016,7 +4023,7 @@ $(SNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP) $(SDCARD_USER_CONFIG) \
 	mcopy -i '$@' '$(SDCARD_SNES9X2005)' '::/sf2000/cores/sf2000-snes9x2005'
 	mcopy -i '$@' '$(SDCARD_SNES9X2002)' '::/sf2000/cores/sf2000-snes9x2002'
 
-run-linux-snes9x2005: qemu linux-buildroot-asd $(SNES_TEST_SD)
+run-linux-snes9x2005: qemu linux-full-asd $(SNES_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
@@ -4026,7 +4033,7 @@ run-linux-snes9x2005: qemu linux-buildroot-asd $(SNES_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(SNES_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-snes9x2005.log \
@@ -4054,7 +4061,7 @@ smoke-linux-snes9x2005: run-linux-snes9x2005
 	! grep -Eq 'malloc-failed|Data bus error|reloc outside program|Kernel panic|frontend: fault' \
 		'$(BUILD_DIR)'/logs/linux-snes9x2005.log
 
-run-linux-snes9x2002: qemu linux-buildroot-asd $(SNES_TEST_SD)
+run-linux-snes9x2002: qemu linux-full-asd $(SNES_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey down 100\n'; sleep 1; printf 'sendkey x 100\n'; \
@@ -4064,7 +4071,7 @@ run-linux-snes9x2002: qemu linux-buildroot-asd $(SNES_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(SNES_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-snes9x2002.log \
@@ -4091,7 +4098,7 @@ $(QUICKNES_TEST_SD): FORCE Makefile $(SDCARD_CORE_STAMP)
 	mcopy -i '$@' '$(FCEUMM_TEST_ROM)' '::/QUICKNES/SUPER MARIO BROS 3.NES'
 	mcopy -i '$@' '$(SDCARD_QUICKNES)' ::/sf2000/cores/sf2000-quicknes
 
-run-linux-quicknes: qemu linux-buildroot-asd $(QUICKNES_TEST_SD)
+run-linux-quicknes: qemu linux-full-asd $(QUICKNES_TEST_SD)
 	mkdir -p '$(BUILD_DIR)'/logs
 	(sleep 5; printf 'sendkey x 100\n'; sleep 1; \
 		printf 'sendkey x 100\n'; sleep 1; printf 'sendkey x 100\n'; sleep 1; \
@@ -4100,7 +4107,7 @@ run-linux-quicknes: qemu linux-buildroot-asd $(QUICKNES_TEST_SD)
 		printf 'sendkey up 100\n'; sleep 1; printf 'sendkey x 100\n'; \
 		sleep 3; printf 'quit\n') | \
 			SF2000_SCANOUT_ORACLE=1 '$(QEMU_BIN)' -M sf2000 $(QEMU_CPU_ARGS) \
-		-kernel '$(BUILD_DIR)'/sf2000-linux-buildroot.asd \
+		-kernel '$(BUILD_DIR)'/sf2000-linux-full.asd \
 		-drive if=none,id=sd0,file='$(QUICKNES_TEST_SD)',format=raw \
 		-display none -serial none -monitor stdio \
 		-d guest_errors,unimp -D '$(BUILD_DIR)'/logs/linux-quicknes.log \

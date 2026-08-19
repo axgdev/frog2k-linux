@@ -1,0 +1,4 @@
+# interface file for the SF2000 direct userspace
+
+auto lo
+iface lo inet loopback

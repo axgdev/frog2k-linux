@@ -55,10 +55,10 @@ longer programmed on the SF2000).
 
 ## Verification (all passed)
 
-- `smoke-linux-buildroot-audio` (32 kHz): `mn=011c000d` unchanged.
-- `smoke-linux-buildroot-audio-44100`: `rate=44100 pll=080000c0
+- `smoke-linux-full-audio` (32 kHz): `mn=011c000d` unchanged.
+- `smoke-linux-full-audio-44100`: `rate=44100 pll=080000c0
   mn=0119000e ctl470=0021001a ctl474=00000000 vol=ff`, non-silent WAV.
-- `smoke-linux-buildroot-audio-gb300` (32 kHz GB300 route): `mn=01580007
+- `smoke-linux-full-audio-gb300` (32 kHz GB300 route): `mn=01580007
   ctl474=00106000`.
 - `smoke-linux-asd`, `smoke-linux-frontend`, `smoke-linux-gpsp`,
   `make check` — all pass.

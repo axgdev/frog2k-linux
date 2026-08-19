@@ -56,9 +56,9 @@ accepts only symbol-free MIPS `R_MIPS_REL32` relocations and rejects
 
 ## Boot artifacts and loader handoff
 
-`make ROOTFS=buildroot sdcard-linux` stages:
+`make ROOTFS=full sdcard-linux` stages:
 
-- `build/sf2000-linux-buildroot.asd`, the direct build artifact;
+- `build/sf2000-linux-full.asd`, the direct build artifact;
 - `build/sdcard/bios/bisrv.asd`, the direct ROM boot copy;
 - `build/sdcard/firmware/linux.asd`, the Unifrog menu copy;
 - `build/sdcard/firmware/unifrog.bin`, the raw fastboot loader.

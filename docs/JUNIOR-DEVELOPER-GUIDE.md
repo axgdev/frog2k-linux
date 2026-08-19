@@ -16,7 +16,7 @@ SF2000 contract.
 | Property | Engineering consequence |
 |---|---|
 | MIPS32r1 | Use `-march=mips32`; never emit MIPS32r2 `synci`, DSP, or FPU instructions. |
-| Little endian | Tool tuple is `mipsel-buildroot-linux-uclibc`; peripheral bit fields still follow the device specification. |
+| Little endian | Tool tuple is `mipsel-unknown-linux-uclibc`; peripheral bit fields still follow the device specification. |
 | No FPU | Compile every target object with `-msoft-float`; hard/soft-float ABI mixing corrupts calls. |
 | No MMU | No `fork`, copy-on-write, demand paging, ASLR, or overcommit. Use `vfork()+execve()` carefully. Anonymous mappings consume physically contiguous pages. |
 | Static PIE | Normal programs are static `ET_DYN`, relocated by the NOMMU loader, with no ELF interpreter. MIPS `$gp`/`$t9` rules apply to PIC C and dynarecs. |
@@ -50,7 +50,7 @@ different requirements. Every wait needs a timeout and recovery path.
 | `Makefile` | Build graph, fetches, audits, host tests, QEMU runs, packaging. Prefer a target over a new script. |
 | `linux/` | DTS and board configuration. |
 | `patches/linux-7.1.4/` | Ordered Linux board, GE, MMC, audio, ELF, and cache patches. |
-| `buildroot/` | Defconfig, BusyBox, rootfs, PID 1/services, Buildroot/uClibc patches. |
+| `userspace/` | BusyBox config/patches, curated rootfs, PID 1/services, and direct uClibc userspace sources. |
 | `boot/`, `init/` | Firmware handoff, loader, and earliest init. |
 | `ge/` | OS-neutral GE implementation, Linux adapter, vendor differential tests. |
 | `audio/` | OS-neutral SND0, A/V sync, fixed-point resampling. Kernel ALSA is in the Linux patches. |
@@ -84,11 +84,11 @@ Normal ladder:
 ```sh
 make check
 make check-vendor
-make ROOTFS=buildroot elf-audit
+make ROOTFS=full elf-audit
 make smoke-linux-frontend-lifecycle
-make smoke-linux-buildroot-asd
-make linux-buildroot-asd
-sha256sum build/sf2000-linux-buildroot.asd build/sdcard/bios/bisrv.asd
+make smoke-linux-full-asd
+make linux-full-asd
+sha256sum build/sf2000-linux-full.asd build/sdcard/bios/bisrv.asd
 ```
 
 Run the smallest relevant test first:
@@ -101,8 +101,8 @@ make audio-test
 make vdec-test
 make vdec-codec-test
 make dsc-test
-make smoke-linux-buildroot-display
-make smoke-linux-buildroot-audio
+make smoke-linux-full-display
+make smoke-linux-full-audio
 make smoke-linux-gpsp
 make smoke-linux-gpsp-smc
 make smoke-linux-frontend-lifecycle
@@ -135,7 +135,7 @@ font/framebuffer corruption from a presentation mismatch.
 Outputs outside the repository are deliberate:
 
 - kernel: `/tmp/sf2000-linux-next-kernel-7.1.4`;
-- Buildroot: `/tmp/sf2000-linux-next-buildroot`;
+- extracted userspace sources: `/tmp/sf2000-linux-*`;
 - QEMU: `/tmp/sf2000-qemu/qemu-10.2.2/build/qemu-system-mipsel`.
 
 If cleaning is required to make a source edit visible, fix the Make dependency.
@@ -438,7 +438,7 @@ git diff --check
 git diff --stat
 git diff
 make check
-make ROOTFS=buildroot elf-audit       # userspace/loader changes
+make ROOTFS=full elf-audit       # userspace/loader changes
 make RELEVANT-QEMU-SMOKE
 git status --short
 ```

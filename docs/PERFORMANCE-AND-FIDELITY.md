@@ -11,7 +11,7 @@ boot with a damaged raster or filesystem is a regression.
 screen startup, panel initialization, the 256 KiB write/verify test, sampled
 guest CPU use, and the new retained display milestones when present.
 
-`make benchmark-qemu-linux` runs the same Buildroot ASD for 15 seconds and
+`make benchmark-qemu-linux` runs the same full-rootfs ASD for 15 seconds and
 records wall time, host user/system CPU, CPU percentage, and maximum RSS in
 `build/metrics/qemu-linux.txt`.  Set `QEMU_BENCH_SECONDS` to change the window.
 
@@ -19,7 +19,7 @@ records wall time, host user/system CPU, CPU percentage, and maximum RSS in
 physical retained log against the latest QEMU display run.  Override
 `PHYSICAL_CONTRACT_LOG` and `QEMU_CONTRACT_LOG` to compare other runs.
 
-`make smoke-linux-buildroot-fidelity` runs the complete display smoke suite in
+`make smoke-linux-full-fidelity` runs the complete display smoke suite in
 a cycle-throttled mode, verifies that the physical HC15xx WAIT prohibition is
 still present, compares all 15 register contracts, and checks CPU/panel timing
 against the physical reference.  Normal smoke targets remain the fast mode.

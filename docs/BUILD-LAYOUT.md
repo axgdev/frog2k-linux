@@ -1,132 +1,119 @@
-# Build layout and toolchains
+# Build layout and direct userspace
 
-This repository contains only maintained source, configuration, final patches,
-and tests. Generated files never belong in the source tree:
+This repository contains maintained source, configuration, final patches, and
+tests. Generated files stay outside the source tree when a disposable layout
+is requested:
 
-- `build/` contains final images, test output, and short-lived packaging files.
-- `.cache/` contains downloaded release archives.
-- `.work/` is available for local scratch trees.
-- Buildroot and Linux work trees default to `/tmp/sf2000_linux-*`.
-- QEMU is a separate sibling checkout, selected with `QEMU_DIR`.
-- The browser/libretro application is the sibling `sf2000_linux_frontend`;
-  this repository packages its binaries but does not duplicate its sources.
+- `BUILD_DIR` contains kernel objects, direct userspace objects, images, and
+  test output.
+- `.cache` contains verified download archives and the shared ccache by
+  default.
+- `LINUX_SRC`, `BUSYBOX_WORK`, and `FB_TEST_APP_WORK` contain extracted source
+  trees and are disposable.
+- `FROG_TOOLCHAIN_WORK` contains the extracted prebuilt target toolchain.
+- `QEMU_DIR` and `FRONTEND_PROJECT` point to sibling checkouts.
 
-All four locations are disposable. Removing them cannot remove maintained
-source. The physical-device image is rebuilt with:
+The normal full image is assembled directly from upstream BusyBox, the
+upstream `fb-test-app` utilities, the curated rootfs base, the repository
+overlay, and the small in-tree SF2000 services. No package generator or target
+compiler build is downloaded, built, or used.
 
-```sh
-make linux-buildroot-asd
-```
+## Clean setup
 
-The QEMU checkout defaults to `../sf2000_qemu`. Override it when necessary:
-
-```sh
-make QEMU_DIR=/path/to/sf2000_qemu smoke-linux-buildroot-display
-```
-
-## Toolchains
-
-The SF2000 has no MMU, so normal dynamically interpreted Linux ELF executables
-cannot be used. Its default userspace is entirely static-PIE ELF. Optional
-fixed ELF compatibility is disabled unless requested. Producing those requires
-all of the following as one compatible ABI set:
-
-- a `mipsel-*-linux-uclibc` compiler which emits MIPS32r1 soft-float PIC;
-- the patched no-MMU uClibc static-PIE startup and syscall ABI;
-- the SF2000 kernel's fixed/static-PIE ELF loader;
-- linker and rootfs audits which reject interpreters and unsupported
-  relocations.
-
-The default compiler is the prebuilt `frog-toolchain` v1.3.2
-`mipsel-unknown-linux-uclibc` release. It contains GCC 16.2.0, binutils 2.47,
-uClibc-ng 1.0.59, the Linux/uClibc sysroot, and the static-PIE startup files
-needed by this no-MMU port. The Makefile also uses it for the freestanding
-loader and kernel, so one verified compiler prefix covers the complete build.
-
-### Prebuilt external toolchain
-
-Building the Buildroot toolchain is the dominant cost of a first build (many
-GB of `host/` output). The prebuilt frog-toolchain is therefore the default.
-`make toolchain` selects the host-appropriate v1.3.2 arm64 or x86_64 asset,
-checks its pinned SHA-256 digest, and extracts it under
-`FROG_TOOLCHAIN_WORK`:
+The host needs a C compiler, GNU make, normal Unix utilities, `curl`, `tar`,
+the decompressor for the pinned archives, `dtc`, and optionally `ccache`.
+The target compiler is downloaded as the prebuilt frog-toolchain artifact:
 
 ```sh
 make toolchain
-make ROOTFS=buildroot linux-buildroot-test-asd
 ```
 
-For a clean-room build with all large paths separated from the checkout:
+To keep every generated location separate from this checkout:
 
 ```sh
 make \
 	BUILD_DIR=/tmp/sf2000-build \
 	LINUX_SRC=/tmp/sf2000-linux-7.1.4 \
-	BUILDROOT_WORK=/tmp/sf2000-buildroot \
+	LINUX_ARCHIVE=/tmp/sf2000-cache/linux-7.1.4.tar.xz \
+	BUSYBOX_WORK=/tmp/sf2000-busybox-1.38.0 \
+	BUSYBOX_ARCHIVE=/tmp/sf2000-cache/busybox-1.38.0.tar.bz2 \
+	FB_TEST_APP_WORK=/tmp/sf2000-fb-test-app-1.1.1 \
+	FB_TEST_APP_ARCHIVE=/tmp/sf2000-cache/fb-test-app-1.1.1.tar.gz \
 	FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
 	FROG_TOOLCHAIN_ARCHIVE=/tmp/sf2000-cache/frog-toolchain.tar.xz \
-	ROOTFS=buildroot linux-buildroot-test-asd
+	QEMU_DIR=/tmp/sf2000-qemu-source \
+	QEMU_WORK=/tmp/sf2000-qemu-build \
+	FRONTEND_PROJECT=/tmp/sf2000-linux-frontend \
+	CCACHE_DIR=/tmp/sf2000-cache/ccache \
+	toolchain
+
+make -j"$(nproc)" \
+	BUILD_DIR=/tmp/sf2000-build \
+	LINUX_SRC=/tmp/sf2000-linux-7.1.4 \
+	LINUX_ARCHIVE=/tmp/sf2000-cache/linux-7.1.4.tar.xz \
+	BUSYBOX_WORK=/tmp/sf2000-busybox-1.38.0 \
+	BUSYBOX_ARCHIVE=/tmp/sf2000-cache/busybox-1.38.0.tar.bz2 \
+	FB_TEST_APP_WORK=/tmp/sf2000-fb-test-app-1.1.1 \
+	FB_TEST_APP_ARCHIVE=/tmp/sf2000-cache/fb-test-app-1.1.1.tar.gz \
+	FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
+	FROG_TOOLCHAIN_ARCHIVE=/tmp/sf2000-cache/frog-toolchain.tar.xz \
+	QEMU_DIR=/tmp/sf2000-qemu-source \
+	QEMU_WORK=/tmp/sf2000-qemu-build \
+	FRONTEND_PROJECT=/tmp/sf2000-linux-frontend \
+	CCACHE_DIR=/tmp/sf2000-cache/ccache \
+	ROOTFS=full linux-full-test-asd
 ```
 
-An already extracted prefix can be supplied with `TOOLCHAIN_DIR`:
+`make toolchain` selects the host-appropriate frog-toolchain v1.3.2 release,
+verifies its pinned SHA-256 digest, and extracts it under
+`FROG_TOOLCHAIN_WORK`. An already extracted prefix can be supplied with
+`TOOLCHAIN_DIR=/path/to/mipsel-unknown-linux-uclibc`; it is verified and never
+overwritten.
 
-```sh
-make EXTERNAL_TOOLCHAIN=1 \
-	TOOLCHAIN_DIR=/path/to/mipsel-unknown-linux-uclibc \
-	BUILDROOT_TARGET_TUPLE=mipsel-unknown-linux-uclibc \
-	ROOTFS=buildroot linux-buildroot-test-asd
-```
+The full rootfs can be built independently with `make ROOTFS=full
+direct-rootfs` or `make full`. `make rootfs` remains the small early-init
+ramfs target. `make elf-audit` checks every executable in the full image for
+static-PIE `ET_DYN`, no interpreter, and the supported MIPS NOMMU relocation
+set.
 
-The toolchain must be a `mipsel` uClibc toolchain that provides the static-PIE
-startup (`rcrt1.o`, `crti.o`, `crtn.o` in the sysroot) and the PIC crt objects
-(`crtbeginS.o`/`crtendS.o`), exactly as the Buildroot toolchain does. In this
-mode the toolchain stamp only verifies those pieces instead of building them,
-so the kernel, the boot loader, and every Makefile-built static-PIE binary
-compile against the prebuilt toolchain and no Buildroot toolchain build
-happens. `BUILD_DIR`, `LINUX_SRC`, `BUILDROOT_WORK`, `BUILDROOT_OUT`,
-`FROG_TOOLCHAIN_WORK`, `FROG_TOOLCHAIN_ARCHIVE`, and `FRONTEND_PROJECT` are all
-overridable, which keeps generated state independent of the source checkout.
-If an existing `BUILDROOT_OUT` contains a wrapper made for another external
-prefix, the Makefile rejects it before compiling; use a fresh output or
-`make buildroot-reconfigure` to clean and regenerate that disposable tree.
+## Toolchain and link contract
 
-A crosstool-ng gcc startfile spec lists `-static` before `-static-pie`, so
-`-static -static-pie` (what Buildroot packages such as BusyBox emit when
-`CONFIG_STATIC=y`) selects the non-PIC `crt1.o` and the MIPS static-PIE link
-fails with `R_MIPS_HI16` against `_gp`. In external-toolchain mode the build
-generates a gcc specs override from the toolchain's own `-dumpspecs` (with the
-`static-pie:rcrt1.o` clause moved ahead of `static:crt1.o`) into
-`build/external-toolchain/static-pie.specs` and injects it into every package
-link through `BR2_TARGET_LDFLAGS`, so the rootfs packages link as static-PIE
-`ET_DYN` exactly like the Makefile-built binaries.
+The SF2000 uses MIPS32 little-endian soft-float without an MMU. The pinned
+`mipsel-unknown-linux-uclibc` frog-toolchain contains GCC 16.2.0, binutils
+2.47, uClibc-ng 1.0.59, and the static-PIE startup objects. The Makefile
+verifies the tuple, `rcrt1.o`, `crti.o`, `crtn.o`, libc, and the PIC GCC crt
+objects before compiling.
 
-Buildroot is otherwise retained for the root filesystem and applications. The
-external-toolchain configuration disables Buildroot's unused CPIO image and
-its internal ccache package; the top-level Makefile repacks `target/` into the
-kernel initramfs and wraps Buildroot's generated target compiler with the host
-ccache. This avoids compiling a second ccache and its host dependency chain
-while preserving Buildroot's target compiler flags. Set
-`BUILDROOT_INTERNAL_CCACHE=1` only when that separate Buildroot package is
-specifically required.
+The toolchain's startfile specification lists the non-PIC static startup before
+the static-PIE startup. The Makefile derives a small specs override from
+`-dumpspecs` so direct links consistently select `rcrt1.o`. The BusyBox patch
+keeps the final `-static-pie` option out of internal `ld -r` aggregation links;
+the final executable still receives it and is audited as `ET_DYN`.
 
-The default ccache directory is `.cache/ccache`, outside disposable
-`BUILD_DIR` trees. Set `CCACHE_DIR` to share it between worktrees or
-`USE_CCACHE=0` to disable the wrapper. `JOBS` and `KERNEL_JOBS` default to the
-host CPU count; `KERNEL_JOBS=1` remains available for constrained machines.
+## Build-time behavior
 
-The old Buildroot-toolchain path is intentionally still available for
-comparison or recovery, but it must be requested explicitly:
+`JOBS` controls direct userspace and nested frontend builds. `KERNEL_JOBS`
+controls the isolated kernel make and defaults to `JOBS`. ccache is enabled by
+default when installed and lives in `CCACHE_DIR`, outside `BUILD_DIR`, so
+separate output directories can share compiled objects. Set `USE_CCACHE=0`
+when comparing uncached timings.
 
-```sh
-make EXTERNAL_TOOLCHAIN=0 toolchain
-```
+The direct rootfs uses persistent extraction and patch stamps. A warm build
+does not unpack BusyBox or fb-test-app again, and an unchanged full image is
+up to date without relinking. Source changes rebuild only their dependent
+service; ccache covers repeated compiler invocations across output trees. The
+initramfs generator uses a fixed epoch by default, so checkout mtimes do not
+silently change the packaged rootfs; override `INITRAMFS_DATE` and
+`INITRAMFS_EPOCH` together when a different image timestamp is required.
 
-Its multi-GB host build is not part of the normal workflow.
+The full artifact targets are named `linux-full-*` and `smoke-linux-full-*`.
+They replace the old package-generator-specific target names while keeping the
+rootfs choice explicit through `ROOTFS=full`.
 
 ## Patch policy
 
-The old repository retained every experimental Linux patch and a second copy
-of selected patched source files. This repository instead carries one final
-Linux patch against the declared upstream version. New work should update that
-patch or add a small, durable follow-up patch. Temporary probes and abandoned
-assumptions should not become permanent layers.
+The repository carries one final Linux patch series against the declared
+upstream version and the small BusyBox compatibility patch series required by
+the pinned release. Temporary probes and extracted source trees stay outside
+the repository. Changes to the kernel loader, binary format, or hardware
+contract must follow `docs/CONTRIBUTING-HARDWARE-PORTS.md`.

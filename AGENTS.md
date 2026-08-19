@@ -19,7 +19,7 @@ Don't hack things to work, do it properly.
 - Commit each coherent checkpoint with a descriptive title and a detailed
   body that explains the evidence, risk, verification, and rollback point.
 - Run `make check` before committing source-only changes.
-- Run `make ROOTFS=buildroot elf-audit` for userspace changes.
+- Run `make ROOTFS=full elf-audit` for userspace changes.
 - Run the relevant QEMU smoke target before producing an ASD.
 - Treat physical-device tests as confirmation, not the first test environment.
 - Read `docs/CONTRIBUTING-HARDWARE-PORTS.md` before changing a binary format,

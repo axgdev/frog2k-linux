@@ -1,0 +1,3 @@
+# Upstream BusyBox patches retain the whitespace present in their original
+# patch mail; do not rewrite those context lines when checking this tree.
+userspace/patches/busybox/*.patch whitespace=-trailing-space,-space-before-tab

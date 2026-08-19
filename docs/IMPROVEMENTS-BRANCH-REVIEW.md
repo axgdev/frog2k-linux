@@ -40,7 +40,7 @@ Review baseline: `master` at `90b9405`. Reviewed branch started at `0d1ebb5`.
 - Keep ELF-only output and add a rootfs format audit.
 - Make the MIPS kernel loader own static-PIE relocation before entry.
 - Build uClibc, BusyBox, services, and the frontend as PIC/static PIE from one
-  Buildroot toolchain; retain fixed ELF only for constrained early programs.
+  prebuilt frog-toolchain; retain fixed ELF only for constrained early programs.
 - Keep portable vendor-library modules, but describe them as provisional until
   symbol coverage and vendor differential traces exist.
 - Keep destructive physical probes out of routine smoke tests.
@@ -51,7 +51,7 @@ The detailed process and acceptance gates are in
 ## Resolution
 
 The integration now has no bFLT build path. The old uClinux target patches,
-`elf2flt`, `bfltpack`, and flat startup code were removed. A clean Buildroot
+`elf2flt`, `bfltpack`, and flat startup code were removed. A clean direct
 toolchain supports two deliberately separate static ELF forms:
 
 - position-independent `ET_DYN` for init, BusyBox, services, and frontends,
