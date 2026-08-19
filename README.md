@@ -32,22 +32,49 @@ Linux board port. We use it as driver and platform reference while keeping the
 initial SF2000 target small:
 
 - MIPS32r1 little-endian, soft-float and no-MMU.
-- A project-built GCC 16.1.0/binutils 2.46.1/uClibc-ng 1.0.58 toolchain;
-  host-global cross compilers are deliberately not used.
+- The pinned prebuilt `frog-toolchain` v1.3.2 (GCC 16.2.0, binutils 2.47,
+  uClibc-ng 1.0.59); host-global cross compilers are deliberately not used.
 - UART console first.
 - Initramfs first; SD rootfs later.
 - No desktop stack, no package manager, no X11/Wayland during bring-up.
 
 Buildroot is the preferred userspace generator for phase 1 because it can make
-tiny reproducible soft-float root filesystems. Alpine/postmarketOS can be
-revisited after the kernel ABI and core devices are proven.
+tiny reproducible soft-float root filesystems. It uses the prebuilt
+`frog-toolchain`; it is not asked to build a second cross toolchain. The
+Buildroot toolchain path remains available only as an explicit legacy fallback.
+Alpine/postmarketOS can be revisited after the kernel ABI and core devices are
+proven.
 
-The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, GCC 16.1.0,
-binutils 2.46.1, uClibc-ng 1.0.58, and BusyBox 1.38.0. Userspace is ELF-only
+The versioned baseline is Linux 7.1.4, Buildroot 2026.05.1, frog-toolchain
+GCC 16.2.0/binutils 2.47/uClibc-ng 1.0.59, and BusyBox 1.38.0. Userspace is ELF-only
 and defaults entirely to static-PIE `ET_DYN`. Fixed-address static `ET_EXEC`
 is optional compatibility support enabled explicitly with `FIXED_ET_EXEC=1`.
-`make ROOTFS=buildroot toolchain` downloads and compiles the complete cross
-toolchain into the disposable Buildroot output tree.
+`make toolchain` downloads the host-appropriate arm64 or x86_64
+`frog-toolchain` release, verifies its pinned SHA-256 digest, and extracts it
+to a disposable prefix. Use `EXTERNAL_TOOLCHAIN=0` only when the legacy
+Buildroot toolchain must be rebuilt deliberately.
+
+For a fully separated setup, every generated location can be supplied without
+changing the source checkout:
+
+```sh
+make \
+  BUILD_DIR=/tmp/sf2000-build \
+  LINUX_SRC=/tmp/sf2000-linux-7.1.4 \
+  BUILDROOT_WORK=/tmp/sf2000-buildroot \
+  FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
+  FROG_TOOLCHAIN_ARCHIVE=/tmp/sf2000-cache/frog-toolchain.tar.xz \
+  toolchain
+make \
+  BUILD_DIR=/tmp/sf2000-build \
+  BUILDROOT_WORK=/tmp/sf2000-buildroot \
+  FROG_TOOLCHAIN_WORK=/tmp/sf2000-frog-toolchain \
+  ROOTFS=buildroot linux-buildroot-test-asd
+```
+
+`JOBS` and `KERNEL_JOBS` default to the host CPU count, and ccache is enabled
+by default in `.cache/ccache`; set `CCACHE_DIR` to share a cache between
+worktrees or `USE_CCACHE=0` to disable it.
 
 Normal device boot enters the native browser as soon as input, display, and
 the SD mount are ready. The retained-RAM loader log and `log.txt` recovery path
@@ -87,8 +114,8 @@ support matrix, and application-porting constraints are documented in
 The log78/log89 stale-display-artifact incident and its reproducibility rules
 are documented in
 [`docs/DISPLAY-INCIDENT-LOG78-LOG89.md`](docs/DISPLAY-INCIDENT-LOG78-LOG89.md).
-The disposable build layout and the reason the no-MMU static-ELF Buildroot
-toolchain is required are documented in
+The disposable build layout, external toolchain verification, and the reason
+the no-MMU static-ELF toolchain is required are documented in
 [`docs/BUILD-LAYOUT.md`](docs/BUILD-LAYOUT.md).
 The vendor archive classification, measured acceleration priorities, and
 module rules are documented in

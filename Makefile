@@ -3,7 +3,7 @@
 QEMU_DIR ?= $(abspath ../sf2000_qemu)
 QEMU_ORACLE_DIR ?= $(abspath $(QEMU_DIR))
 HCLINUX_DIR := external/hclinux/2024.02.y.2
-BUILD_DIR := build
+BUILD_DIR ?= build
 INITRAMFS := $(BUILD_DIR)/initramfs.cpio
 INITRAMFS_LIST := $(BUILD_DIR)/initramfs.list
 INIT_BIN := $(BUILD_DIR)/initramfs-init
@@ -25,6 +25,15 @@ QEMU_ROM_CPU_ARGS := $(if $(QEMU_ROM_CPU),-cpu $(QEMU_ROM_CPU),)
 QEMU_DEBUG ?= guest_errors,unimp
 QEMU_SD_ARGS ?=
 HOSTCC ?= cc
+EXTERNAL_TOOLCHAIN ?= 1
+USE_CCACHE ?= 1
+CCACHE ?= $(if $(filter 1,$(USE_CCACHE)),$(shell command -v ccache 2>/dev/null),)
+CCACHE_COMPILE := $(if $(strip $(CCACHE)),$(CCACHE) ,)
+# Keep the cache outside disposable build outputs so `make clean`, alternate
+# BUILD_DIR values, and separate kernel/rootfs builds can reuse it.
+CCACHE_DIR ?= $(abspath .cache/ccache)
+CCACHE_COMPILERCHECK ?= content
+export CCACHE_DIR CCACHE_COMPILERCHECK
 AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
 AUDIO_AVSYNC_TEST := $(BUILD_DIR)/hc15xx-avsync-test
 AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
@@ -35,10 +44,34 @@ EFUSE_TEST := $(BUILD_DIR)/hc15xx-efuse-test
 VDEC_TEST := $(BUILD_DIR)/hc15xx-vdec-test
 VDEC_CODEC_TEST := $(BUILD_DIR)/hc15xx-vdec-codec-test
 DSC_TEST := $(BUILD_DIR)/hc15xx-dsc-test
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+FROG_TOOLCHAIN_VERSION ?= 1.3.2
+FROG_TOOLCHAIN_GCC_VERSION ?= 16.2.0
+FROG_TOOLCHAIN_BINUTILS_VERSION ?= 2.47
+FROG_TOOLCHAIN_UCLIBC_VERSION ?= 1.0.59
+FROG_TOOLCHAIN_HOST_ARCH ?= $(shell uname -m)
+FROG_TOOLCHAIN_ARCH := $(if $(filter x86_64 amd64,$(FROG_TOOLCHAIN_HOST_ARCH)),x86_64,$(if $(filter aarch64 arm64,$(FROG_TOOLCHAIN_HOST_ARCH)),arm64,))
+ifeq ($(strip $(FROG_TOOLCHAIN_ARCH)),)
+$(error unsupported host architecture '$(FROG_TOOLCHAIN_HOST_ARCH)'; set FROG_TOOLCHAIN_HOST_ARCH to x86_64 or arm64)
+endif
+FROG_TOOLCHAIN_NAME := toolchain-uclibc-static-$(FROG_TOOLCHAIN_ARCH)-gcc$(FROG_TOOLCHAIN_GCC_VERSION)-binutils$(FROG_TOOLCHAIN_BINUTILS_VERSION)-uclibc-ng$(FROG_TOOLCHAIN_UCLIBC_VERSION).tar.xz
+FROG_TOOLCHAIN_URL ?= https://github.com/axgdev/frog-toolchain/releases/download/v$(FROG_TOOLCHAIN_VERSION)/$(FROG_TOOLCHAIN_NAME)
+FROG_TOOLCHAIN_SHA256_arm64 := ff7e9742a9b6fbbfcf58394b92c0805c4a0a7bdf21592a546fb665e24ee60fc4
+FROG_TOOLCHAIN_SHA256_x86_64 := 8d4599a27ec2493ba56cc3940025973f86947569eeaed7e95836957649f4d88b
+FROG_TOOLCHAIN_SHA256 := $(FROG_TOOLCHAIN_SHA256_$(FROG_TOOLCHAIN_ARCH))
+FROG_TOOLCHAIN_ARCHIVE ?= .cache/$(FROG_TOOLCHAIN_NAME)
+FROG_TOOLCHAIN_WORK ?= /tmp/sf2000-linux-frog-toolchain-v$(FROG_TOOLCHAIN_VERSION)-$(FROG_TOOLCHAIN_ARCH)
+FROG_TOOLCHAIN_PREFIX ?= $(FROG_TOOLCHAIN_WORK)/mipsel-unknown-linux-uclibc
+TOOLCHAIN_DIR ?= $(FROG_TOOLCHAIN_PREFIX)
+BUILDROOT_TARGET_TUPLE ?= mipsel-unknown-linux-uclibc
+else
 TOOLCHAIN_DIR ?= $(BUILDROOT_OUT)/host
 BUILDROOT_TARGET_TUPLE ?= mipsel-buildroot-linux-uclibc
+endif
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-
 CC_MIPS = $(CROSS_COMPILE)gcc
+CC_MIPS_RUN = $(CCACHE_COMPILE)$(CC_MIPS)
+KERNEL_CC = $(CCACHE_COMPILE)$(CROSS_COMPILE)gcc
 LD_MIPS = $(CROSS_COMPILE)ld
 OBJCOPY_MIPS = $(CROSS_COMPILE)objcopy
 STRIP_MIPS = $(CROSS_COMPILE)strip
@@ -46,10 +79,10 @@ OBJDUMP_MIPS = $(CROSS_COMPILE)objdump
 READELF_MIPS = $(CROSS_COMPILE)readelf
 NM_MIPS = $(CROSS_COMPILE)nm
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
-# Kernel asm-offset generation is not safe with the isolated nested job budget
-# on this NOMMU port; keep the kernel build deterministic. Other host stages
-# may still use JOBS in their own isolated make invocations.
-KERNEL_JOBS ?= 1
+# The kernel make is isolated from the outer jobserver, so it can safely use
+# the same parallelism as the other build stages. Override this independently
+# on constrained hosts, for example KERNEL_JOBS=1.
+KERNEL_JOBS ?= $(JOBS)
 ROOTFS ?= tiny
 LINUX_VERSION := 7.1.4
 LINUX_TARBALL := linux-$(LINUX_VERSION).tar.xz
@@ -66,6 +99,7 @@ BUILDROOT_BUSYBOX_CONFIG := buildroot/sf2000_busybox.config
 BUILDROOT_OVERLAY := buildroot/sf2000-rootfs-overlay
 BUILDROOT_GENERATED_OVERLAY := $(BUILD_DIR)/buildroot-generated-overlay
 BUILDROOT_GENERATED_OVERLAY_STAMP := $(BUILD_DIR)/.stamp-buildroot-generated-overlay
+BUILDROOT_CONFIG_INPUTS := $(BUILD_DIR)/.stamp-buildroot-config-inputs
 BUILDROOT_INIT_SRC := buildroot/sf2000-init.c
 BUILDROOT_INIT_CLONE := buildroot/sf2000-init-clone.S
 BUILDROOT_INIT := $(BUILDROOT_GENERATED_OVERLAY)/init
@@ -121,38 +155,69 @@ BUILDROOT_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
 PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
 
-# Prebuilt external toolchain support.  Set EXTERNAL_TOOLCHAIN=1 and point
-# TOOLCHAIN_DIR at the extracted toolchain prefix and BUILDROOT_TARGET_TUPLE at
-# its tuple to skip the Buildroot toolchain build entirely (a large time and
-# disk saving).  The toolchain must be a mipsel uClibc toolchain that provides
-# the static-PIE startup (rcrt1.o) and PIC crt objects, exactly as the
-# Buildroot toolchain does; the toolchain stamp then only verifies those
-# pieces instead of building them.
-EXTERNAL_TOOLCHAIN ?= 0
+# The prebuilt frog-toolchain is the normal userspace/compiler ABI.  Set
+# EXTERNAL_TOOLCHAIN=0 only for an explicit legacy Buildroot-toolchain build.
 ifeq ($(EXTERNAL_TOOLCHAIN),1)
-# The prebuilt crosstool-ng toolchain uses its own tuple; default to it so the
-# common invocation is just `make EXTERNAL_TOOLCHAIN=1 TOOLCHAIN_DIR=<prefix>`.
-ifeq ($(BUILDROOT_TARGET_TUPLE),mipsel-buildroot-linux-uclibc)
-BUILDROOT_TARGET_TUPLE := mipsel-unknown-linux-uclibc
-endif
 BUILDROOT_TOOLCHAIN_STAMP := $(BUILD_DIR)/external-toolchain/.stamp-verified
 BUILDROOT_CC := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
+BUILDROOT_CXX := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-g++
 BUILDROOT_STRIP := $(TOOLCHAIN_DIR)/bin/$(BUILDROOT_TARGET_TUPLE)-strip
 PIE_SYSROOT := $(TOOLCHAIN_DIR)/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
+BUILDROOT_CC_RUN = $(CCACHE_COMPILE)$(BUILDROOT_CC)
 # The crosstool-ng gcc startfile spec lists -static before -static-pie, so
 # `-static -static-pie` (which Buildroot packages such as BusyBox emit) selects
 # the non-PIC crt1.o and the MIPS static-PIE link fails with R_MIPS_HI16
 # against _gp.  Generate a specs override that lets -static-pie win and hand it
 # to every package link through BR2_TARGET_LDFLAGS.
 EXTERNAL_SPECS := $(BUILD_DIR)/external-toolchain/static-pie.specs
+FROG_TOOLCHAIN_ARCHIVE_CHECK := $(FROG_TOOLCHAIN_ARCHIVE).verified
+FROG_TOOLCHAIN_SETUP_STAMP := $(BUILD_DIR)/external-toolchain/.stamp-frog-toolchain
 else
 BUILDROOT_TOOLCHAIN_STAMP := $(BUILDROOT_OUT)/.stamp-toolchain
 BUILDROOT_CC := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
+BUILDROOT_CXX := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-g++
 BUILDROOT_STRIP := $(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-strip
 PIE_SYSROOT := $(BUILDROOT_OUT)/host/$(BUILDROOT_TARGET_TUPLE)/sysroot/usr/lib
+BUILDROOT_CC_RUN = $(CCACHE_COMPILE)$(BUILDROOT_CC)
 endif
 
 ifeq ($(EXTERNAL_TOOLCHAIN),1)
+# Fetch the pinned host-appropriate frog-toolchain only when the default
+# prefix is being used.  An explicitly supplied TOOLCHAIN_DIR is treated as
+# an already managed installation and is verified below without overwriting
+# it.  The release digest comes from the GitHub asset metadata.
+ifeq ($(abspath $(TOOLCHAIN_DIR)),$(abspath $(FROG_TOOLCHAIN_PREFIX)))
+$(FROG_TOOLCHAIN_ARCHIVE):
+	mkdir -p '$(dir $@)'
+	tmp='$@.tmp'; \
+	curl -L --fail --retry 3 --retry-delay 2 -o "$$tmp" '$(FROG_TOOLCHAIN_URL)'; \
+	mv "$$tmp" '$@'
+
+$(FROG_TOOLCHAIN_ARCHIVE_CHECK): $(FROG_TOOLCHAIN_ARCHIVE) Makefile
+	test "$$(sha256sum '$<' | awk '{print $$1}')" = '$(FROG_TOOLCHAIN_SHA256)'
+	printf 'sha256=%s\narchive=%s\n' '$(FROG_TOOLCHAIN_SHA256)' '$(abspath $(FROG_TOOLCHAIN_ARCHIVE))' > '$@.tmp'
+	mv '$@.tmp' '$@'
+
+$(FROG_TOOLCHAIN_SETUP_STAMP): FORCE $(FROG_TOOLCHAIN_ARCHIVE_CHECK) Makefile
+	mkdir -p '$(FROG_TOOLCHAIN_WORK)' '$(dir $@)'
+	if test ! -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc'; then \
+		tar -xJf '$(FROG_TOOLCHAIN_ARCHIVE)' -C '$(FROG_TOOLCHAIN_WORK)'; \
+	fi
+	test -x '$(FROG_TOOLCHAIN_PREFIX)/bin/$(BUILDROOT_TARGET_TUPLE)-gcc'
+	printf 'prefix=%s\narchive=%s\nsha256=%s\n' \
+		'$(abspath $(FROG_TOOLCHAIN_PREFIX))' \
+		'$(abspath $(FROG_TOOLCHAIN_ARCHIVE))' \
+		'$(FROG_TOOLCHAIN_SHA256)' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+else
+$(FROG_TOOLCHAIN_SETUP_STAMP): FORCE Makefile
+	mkdir -p '$(dir $@)'
+	test -x '$(BUILDROOT_CC)'
+	printf 'prefix=%s\ncompiler=%s\n' \
+		'$(abspath $(TOOLCHAIN_DIR))' '$(abspath $(BUILDROOT_CC))' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
+endif
+
 # Regenerate the specs override from the toolchain's own -dumpspecs output so
 # it stays in sync with that toolchain's startfile spec.
 $(EXTERNAL_SPECS): $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
@@ -177,18 +242,37 @@ BUILDROOT_INIT_SOURCE ?= $(INIT_BIN)
 INIT_CFLAGS ?=
 BUILDROOT_HOST_CFLAGS := -O2 -std=gnu17 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 BUILDROOT_HOST_CXXFLAGS := -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+BUILDROOT_TARGET_CC := $(CCACHE_COMPILE)$(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-gcc
+BUILDROOT_TARGET_CXX := $(CCACHE_COMPILE)$(BUILDROOT_OUT)/host/bin/$(BUILDROOT_TARGET_TUPLE)-g++
+BUILDROOT_TARGET_COMPILER_ARGS := TARGET_CC='$(BUILDROOT_TARGET_CC)' TARGET_GCC='$(BUILDROOT_TARGET_CC)' TARGET_CXX='$(BUILDROOT_TARGET_CXX)'
+else
+BUILDROOT_TARGET_COMPILER_ARGS :=
+endif
 ifeq ($(ENABLE_EXPERIMENTAL_DEVTESTS),1)
 BUILDROOT_EXPERIMENTAL_DEVTESTS := $(BUILDROOT_DEVTEST) \
 	$(BUILDROOT_EFUSE_DEVICE) $(BUILDROOT_VDEC_DEVICE) \
 	$(BUILDROOT_DSC_DEVICE)
 BUILDROOT_POWERD_CPPFLAGS := -DSF2000_EXPERIMENTAL_DEVTESTS
 endif
-BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))'
+BUILDROOT_MAKE = env -u MAKEFLAGS -u MFLAGS -u ROOTFS $(MAKE) -C '$(BUILDROOT_SRC)' O='$(abspath $(BUILDROOT_OUT))' $(BUILDROOT_TARGET_COMPILER_ARGS)
+BUILDROOT_INTERNAL_CCACHE ?= 0
+ifeq ($(BUILDROOT_INTERNAL_CCACHE),1)
+ifneq ($(strip $(CCACHE)),)
+BUILDROOT_CCACHE_OPTIONS := --enable BR2_CCACHE --set-str BR2_CCACHE_DIR '$(abspath $(CCACHE_DIR))' --enable BR2_CCACHE_USE_BASEDIR
+else
+BUILDROOT_CCACHE_OPTIONS := --disable BR2_CCACHE
+endif
+else
+BUILDROOT_CCACHE_OPTIONS := --disable BR2_CCACHE
+endif
 # Frontend Makefiles nest further into libretro core trees.  Inheriting the
 # outer jobserver (make buildroot -jN) deadlocks when several cores rebuild in
 # parallel and each child waits for tokens the parent still holds.  Drop the
 # jobserver and give each frontend invocation its own -j budget.
-FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' -C '$(FRONTEND_PROJECT)'
+FRONTEND_MAKE = env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(JOBS)' \
+	-C '$(FRONTEND_PROJECT)' \
+	SF2000_LINUX_DIR='$(abspath .)' CCACHE='$(CCACHE)'
 # The kernel build, the frontend core-packages (20 nested libretro core
 # makes), and the linux-buildroot/physical-linux-asd wrappers all recurse into
 # make trees of their own.  They must not inherit the outer jobserver either:
@@ -389,7 +473,7 @@ GE_VENDOR_CAPTURE := $(BUILD_DIR)/hcge-vendor-capture
 GE_SOURCE_CAPTURE := $(BUILD_DIR)/hcge-source-capture
 GE_VENDOR_CAPTURE_GOLDEN := ge/hcge_vendor_capture.golden
 GE_SOURCE_CAPTURE_GOLDEN := ge/hcge_source_capture.golden
-GE_ELF_CC := $(BUILDROOT_CC)
+GE_ELF_CC := $(BUILDROOT_CC_RUN)
 
 FFMPEG_VERSION ?= 8.1.2
 FFMPEG_URL := https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
@@ -493,7 +577,9 @@ help:
 	@printf '%s\n' \
 		'make check                 fast host-side regression suite' \
 		'make check-vendor          source/vendor GE parity tests' \
-		'make EXTERNAL_TOOLCHAIN=1 TOOLCHAIN_DIR=<prefix> [BUILDROOT_TARGET_TUPLE=<tuple>] linux-buildroot-asd  use a prebuilt uClibc toolchain instead of building one' \
+		'make toolchain              download, verify, and unpack the pinned frog-toolchain' \
+		'make EXTERNAL_TOOLCHAIN=0 toolchain  explicitly build the legacy Buildroot toolchain' \
+		'make TOOLCHAIN_DIR=<prefix> linux-buildroot-asd  use an already installed uClibc toolchain' \
 		'make linux-buildroot-asd   build the physical-device artifact' \
 		'make physical-linux-asd    explicit alias for the physical buildroot ASD' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
@@ -533,7 +619,10 @@ status:
 	@printf '  qemu:    %s\n' '$(QEMU_DIR)'
 	@printf '  hclinux: %s\n' '$(HCLINUX_DIR)'
 	@printf '  host cc: %s\n' '$(HOSTCC)'
+	@printf '  toolchain mode: %s\n' '$(if $(filter 1,$(EXTERNAL_TOOLCHAIN)),prebuilt frog-toolchain,legacy Buildroot)'
 	@printf '  toolchain: %s\n' '$(CROSS_COMPILE)'
+	@printf '  ccache:  %s\n' '$(if $(strip $(CCACHE)),$(CCACHE),disabled)'
+	@printf '  ccache dir: %s\n' '$(abspath $(CCACHE_DIR))'
 	@printf '  rootfs:  %s\n' '$(ROOTFS)'
 	@printf '  buildroot out: %s\n' '$(BUILDROOT_OUT)'
 	@printf '  jobs:    %s\n' '$(JOBS)'
@@ -578,7 +667,7 @@ $(GE_UTILS_TEST): ge/hcge_utils.c ge/hcge_utils_test.c ge/ge_api.h
 
 $(GE_VENDOR_UTILS_TEST): ge/hcge_utils_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_utils_test.c '$(GE_VENDOR_ARCHIVE)'
 
 test-ge-utils: $(GE_UTILS_TEST) $(GE_VENDOR_UTILS_TEST)
@@ -587,12 +676,12 @@ test-ge-utils: $(GE_UTILS_TEST) $(GE_VENDOR_UTILS_TEST)
 
 $(GE_MATRIX_TEST): ge/hcge_matrix.c ge/hcge_matrix_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_matrix.c ge/hcge_matrix_test.c -lm
 
 $(GE_VENDOR_MATRIX_TEST): ge/hcge_matrix_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_matrix_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
 test-ge-matrix: $(GE_MATRIX_TEST) $(GE_VENDOR_MATRIX_TEST)
@@ -601,13 +690,13 @@ test-ge-matrix: $(GE_MATRIX_TEST) $(GE_VENDOR_MATRIX_TEST)
 
 $(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_queue_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -ffunction-sections \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -ffunction-sections \
 		-Wl,--gc-sections -o '$@' ge/hcge_linux.c ge/hcge_node.c \
 		ge/hcge_queue_test.c
 
 $(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_queue_test.c '$(GE_VENDOR_ARCHIVE)'
 
 test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
@@ -616,7 +705,7 @@ test-ge-queue: $(GE_QUEUE_TEST) $(GE_VENDOR_QUEUE_TEST)
 
 $(GE_BATCH_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_batch_test.c \
 		ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -ffunction-sections \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -ffunction-sections \
 		-Wl,--gc-sections -Wl,--wrap=ioctl -o '$@' ge/hcge_linux.c \
 		ge/hcge_node.c ge/hcge_batch_test.c
 
@@ -626,12 +715,12 @@ test-ge-batch: $(GE_BATCH_TEST)
 
 $(GE_FILTER_TEST): ge/hcge_filter.c ge/hcge_filter_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_filter.c ge/hcge_filter_test.c -lm
 
 $(GE_VENDOR_FILTER_TEST): ge/hcge_filter_test.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_filter_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
 test-ge-filter-extract: $(GE_FILTER_TEST) $(GE_VENDOR_FILTER_TEST)
@@ -660,7 +749,7 @@ test-ge-symbol-coverage: reverse-ge
 
 $(GE_VENDOR_NODE_TEST): ge/hcge_node.c ge/hcge_node.h \
 		ge/hcge_vendor_compare.c $(BUILDROOT_TOOLCHAIN_STAMP) reverse-ge
-	'$(GE_ELF_CC)' -std=c99 -O2 -ffunction-sections -fdata-sections \
+	$(GE_ELF_CC) -std=c99 -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -static -Ige -o '$@' ge/hcge_node.c \
 		ge/hcge_vendor_compare.c '$(GE_REVERSE_DIR)'/hcge_node_ctx.c.o
 
@@ -669,11 +758,11 @@ test-ge-node-vendor: $(GE_VENDOR_NODE_TEST)
 
 $(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
+	$(BUILDROOT_CC_RUN) -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
 
 $(GE_VENDOR_CAPTURE): ge/hcge_vendor_capture.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -o '$@' '$<' \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' '$<' \
 		'$(GE_VENDOR_ARCHIVE)' -lm -Wl,--wrap=open -Wl,--wrap=close \
 		-Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap \
 		-Wl,--wrap=usleep
@@ -686,7 +775,7 @@ test-ge-vendor-capture: $(GE_VENDOR_CAPTURE) $(GE_VENDOR_CAPTURE_GOLDEN)
 
 $(GE_SOURCE_CAPTURE): ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c ge/ge_api.h \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(GE_ELF_CC)' -std=c99 -O2 -static -Ige -DHCGE_SOURCE_CAPTURE \
+	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -DHCGE_SOURCE_CAPTURE \
 		-o '$@' ge/hcge_vendor_capture.c ge/hcge_linux.c ge/hcge_node.c \
 		-Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl \
 		-Wl,--wrap=mmap -Wl,--wrap=munmap -Wl,--wrap=usleep
@@ -801,12 +890,13 @@ toolchain: $(BUILDROOT_TOOLCHAIN_STAMP)
 buildroot: $(BUILDROOT_CPIO)
 
 buildroot-reconfigure:
+	$(BUILDROOT_MAKE) clean
 	rm -f '$(BUILDROOT_OUT)/.config'
 	$(MAKE) ROOTFS='$(ROOTFS)' buildroot
 
 $(INIT_BIN): init/sf2000-init.S $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
+	$(CC_MIPS_RUN) $(INIT_CFLAGS) -Os -nostdlib -ffreestanding \
 		-march=mips32 -mabi=32 -msoft-float -mabicalls \
 		-fPIE -pie -mno-gpopt -G 0 \
 		-Wl,--no-dynamic-linker -Wl,-e,_start \
@@ -859,8 +949,35 @@ $(BUILDROOT_SRC)/.patched: $(BUILDROOT_SRC)/Makefile $(BUILDROOT_CORE_PATCHES)
 	done
 	touch '$@'
 
-$(BUILDROOT_OUT)/.config: Makefile $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
+$(BUILDROOT_CONFIG_INPUTS): FORCE Makefile
+	mkdir -p '$(dir $@)'
+	@set -eu; \
+	tmp='$@.tmp'; \
+	{ \
+		printf 'EXTERNAL_TOOLCHAIN=%s\n' '$(EXTERNAL_TOOLCHAIN)'; \
+		printf 'TOOLCHAIN_DIR=%s\n' '$(abspath $(TOOLCHAIN_DIR))'; \
+		printf 'BUILDROOT_TARGET_TUPLE=%s\n' '$(BUILDROOT_TARGET_TUPLE)'; \
+		printf 'CCACHE=%s\n' '$(CCACHE)'; \
+		printf 'CCACHE_DIR=%s\n' '$(abspath $(CCACHE_DIR))'; \
+		printf 'BUILDROOT_INTERNAL_CCACHE=%s\n' '$(BUILDROOT_INTERNAL_CCACHE)'; \
+		printf 'BUILDROOT_TARGET_CC=%s\n' '$(BUILDROOT_TARGET_CC)'; \
+		printf 'BUILDROOT_TARGET_CXX=%s\n' '$(BUILDROOT_TARGET_CXX)'; \
+		printf 'BUILDROOT_CCACHE_OPTIONS=%s\n' '$(BUILDROOT_CCACHE_OPTIONS)'; \
+	} > "$$tmp"; \
+	if cmp -s "$$tmp" '$@' 2>/dev/null; then rm -f "$$tmp"; else mv "$$tmp" '$@'; fi
+
+$(BUILDROOT_OUT)/.config: Makefile $(BUILDROOT_CONFIG_INPUTS) $(BUILDROOT_SRC)/.patched $(BUILDROOT_DEFCONFIG) $(BUILDROOT_BUSYBOX_CONFIG) $(BUILDROOT_DEVICE_TABLE) $(BUILDROOT_PATCH_FILES) | $(BUILDROOT_GENERATED_OVERLAY_STAMP)
 	mkdir -p '$(BUILDROOT_OUT)'
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+	@if test -x '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper'; then \
+		strings '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper' | \
+			grep -Fq '$(abspath $(TOOLCHAIN_DIR))/bin/' || { \
+			printf 'Buildroot output is tied to a different external toolchain: %s\n' '$(BUILDROOT_OUT)' >&2; \
+			printf 'use a fresh BUILDROOT_OUT or run make buildroot-reconfigure\n' >&2; \
+			exit 1; \
+		}; \
+	fi
+endif
 	$(BUILDROOT_MAKE) BR2_DEFCONFIG='$(abspath $(BUILDROOT_DEFCONFIG))' defconfig
 	'$(BUILDROOT_SRC)'/utils/config --file '$@' \
 		--set-str GLOBAL_PATCH_DIR '$(abspath $(BUILDROOT_PATCHES))' \
@@ -891,27 +1008,34 @@ ifeq ($(EXTERNAL_TOOLCHAIN),1)
 		--enable BR2_TOOLCHAIN_EXTERNAL_HAS_SSP_STRONG \
 		--enable BR2_TOOLCHAIN_EXTERNAL_CXX \
 		--disable BR2_TOOLCHAIN_EXTERNAL_FORTRAN \
-		--disable BR2_TOOLCHAIN_EXTERNAL_OPENMP \
-		--set-str BR2_TOOLCHAIN_GCC_AT_LEAST 16 \
-		--enable BR2_SSP_NONE \
+			--disable BR2_TOOLCHAIN_EXTERNAL_OPENMP \
+			--set-str BR2_TOOLCHAIN_GCC_AT_LEAST 16 \
+			--disable BR2_TARGET_ROOTFS_CPIO \
+			--enable BR2_SSP_NONE \
 		--disable BR2_SSP_REGULAR \
 		--disable BR2_SSP_STRONG \
-		--disable BR2_SSP_ALL \
-		--set-str BR2_TARGET_LDFLAGS "-static-pie -specs=$(abspath $(EXTERNAL_SPECS))"
+			--disable BR2_SSP_ALL \
+			--set-str BR2_TARGET_LDFLAGS "-static-pie -specs=$(abspath $(EXTERNAL_SPECS))" \
+			$(BUILDROOT_CCACHE_OPTIONS)
 endif
 	$(BUILDROOT_MAKE) olddefconfig
 
 ifeq ($(EXTERNAL_TOOLCHAIN),1)
 # With a prebuilt toolchain the stamp is a verification gate, not a build.
-$(BUILDROOT_TOOLCHAIN_STAMP): Makefile
+$(BUILDROOT_TOOLCHAIN_STAMP): $(FROG_TOOLCHAIN_SETUP_STAMP) Makefile
 	mkdir -p '$(dir $@)'
 	test -x '$(BUILDROOT_CC)'
+	test -x '$(BUILDROOT_CXX)'
+	test "$$( $(BUILDROOT_CC) -dumpmachine )" = '$(BUILDROOT_TARGET_TUPLE)'
 	test -f '$(PIE_SYSROOT)/rcrt1.o'
 	test -f '$(PIE_SYSROOT)/crti.o'
 	test -f '$(PIE_SYSROOT)/crtn.o'
 	test -f '$(PIE_SYSROOT)/libc.a'
 	test -f "$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o)"
-	touch '$@'
+	printf 'compiler=%s\ntuple=%s\nsysroot=%s\n' \
+		'$(abspath $(BUILDROOT_CC))' '$(BUILDROOT_TARGET_TUPLE)' \
+		'$(abspath $(PIE_SYSROOT))' > '$@.tmp'
+	if cmp -s '$@.tmp' '$@' 2>/dev/null; then rm -f '$@.tmp'; else mv '$@.tmp' '$@'; fi
 else
 $(BUILDROOT_TOOLCHAIN_STAMP): $(BUILDROOT_OUT)/.config
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' toolchain \
@@ -940,7 +1064,7 @@ $(BUILDROOT_INIT): FORCE $(BUILDROOT_INIT_SOURCE) Makefile
 
 $(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_CLONE) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_SUPERVISOR_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_SUPERVISOR_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_INIT_CLONE)' '$(BUILDROOT_INIT_SRC)' \
@@ -949,7 +1073,7 @@ $(BUILDROOT_SUPERVISOR): $(BUILDROOT_INIT_SRC) $(BUILDROOT_INIT_CLONE) $(PIE_STA
 
 $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_PAD_SRC)' \
@@ -958,7 +1082,7 @@ $(BUILDROOT_PAD): $(BUILDROOT_PAD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
 
 $(BUILDROOT_POWERD): $(BUILDROOT_POWERD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		$(BUILDROOT_POWERD_CPPFLAGS) '$<' \
@@ -987,7 +1111,7 @@ $(BUILDROOT_JS2300): $(shell find '$(FRONTEND_PROJECT)'/src \
 
 $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_AUDIO_SRC)' \
@@ -996,7 +1120,7 @@ $(BUILDROOT_AUDIO): $(BUILDROOT_AUDIO_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_ST
 
 $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
@@ -1005,7 +1129,7 @@ $(BUILDROOT_HEARTBEAT): $(BUILDROOT_HEARTBEAT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOL
 
 $(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
@@ -1014,7 +1138,7 @@ $(BUILDROOT_LOGD): $(BUILDROOT_LOGD_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAM
 
 $(BUILDROOT_MOUNT): $(BUILDROOT_MOUNT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
@@ -1034,7 +1158,7 @@ $(BUILDROOT_SCREEN_SOURCE_STAMP): FORCE $(BUILDROOT_SCREEN_SRC) \
 
 $(BUILDROOT_SCREEN): $(BUILDROOT_SCREEN_SOURCE_STAMP) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	SOURCE_DATE_EPOCH=0 '$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
+	SOURCE_DATE_EPOCH=0 $(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_SCREEN_CFLAGS) \
 		-Ige $(BUILDROOT_PIE_LDFLAGS) -o '$@' \
 		'$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
@@ -1050,7 +1174,7 @@ $(BUILDROOT_PANEL_PROBE_LINK): $(BUILDROOT_PANEL_FASTPROBE) Makefile
 
 $(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_PANEL_INIT_SRC)' \
@@ -1059,7 +1183,7 @@ $(BUILDROOT_PANEL_INIT): $(BUILDROOT_PANEL_INIT_SRC) $(PIE_STAMP) $(BUILDROOT_TO
 
 $(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_PANEL_FASTPROBE_SRC)' \
@@ -1068,7 +1192,7 @@ $(BUILDROOT_PANEL_FASTPROBE): $(BUILDROOT_PANEL_FASTPROBE_SRC) $(PIE_STAMP) $(BU
 
 $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) -ffreestanding -fno-builtin \
 		$(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
@@ -1078,7 +1202,7 @@ $(BUILDROOT_STORAGE_PROBE): $(BUILDROOT_STORAGE_PROBE_SRC) $(PIE_STAMP) $(BUILDR
 
 $(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_STORAGE_FASTPROBE_SRC)' \
@@ -1087,7 +1211,7 @@ $(BUILDROOT_STORAGE_FASTPROBE): $(BUILDROOT_STORAGE_FASTPROBE_SRC) $(PIE_STAMP) 
 
 $(BUILDROOT_RESET_FASTPROBE): $(BUILDROOT_RESET_FASTPROBE_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$(BUILDROOT_RESET_FASTPROBE_SRC)' \
@@ -1098,6 +1222,10 @@ $(BUILDROOT_TARGET_STAMP): $(BUILDROOT_OUT)/.config $(BUILDROOT_TOOLCHAIN_STAMP)
 	FORCE_UNSAFE_CONFIGURE=1 $(BUILDROOT_MAKE) -j'$(JOBS)' \
 		HOST_CFLAGS='$(BUILDROOT_HOST_CFLAGS)' \
 		HOST_CXXFLAGS='$(BUILDROOT_HOST_CXXFLAGS)'
+ifeq ($(EXTERNAL_TOOLCHAIN),1)
+	strings '$(BUILDROOT_OUT)/host/bin/toolchain-wrapper' | \
+		grep -Fq '$(abspath $(TOOLCHAIN_DIR))/bin/'
+endif
 	touch '$@'
 
 
@@ -1329,19 +1457,19 @@ DEVICE_TESTS := $(BUILD_DIR)/test_efuse_device $(BUILD_DIR)/test_vdec_device \
 
 $(BUILD_DIR)/test_efuse_device: tests/test_efuse_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
 		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
 $(BUILD_DIR)/test_vdec_device: tests/test_vdec_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
 		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
 $(BUILD_DIR)/test_dsc_device: tests/test_dsc_device.c $(BUILDROOT_TOOLCHAIN_STAMP)
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' -Os -Wall -Wextra \
+	$(BUILDROOT_CC_RUN) -Os -Wall -Wextra \
 		-march=mips32 -mabi=32 -msoft-float \
 		$(BUILDROOT_ELF_LDFLAGS) -o '$@' '$<'
 
@@ -1400,7 +1528,7 @@ ffmpeg: $(FFMPEG_STAMP)
 
 $(BUILDROOT_DEVTEST): $(BUILDROOT_DEVTEST_SRC) $(PIE_STAMP) $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		'$<' \
@@ -1422,7 +1550,7 @@ $(BUILDROOT_DSC_DEVICE): $(BUILD_DIR)/test_dsc_device
 $(BUILDROOT_PLAYER): player/sf2000-player.c $(PIE_STAMP) \
 		$(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(BUILDROOT_CC)' $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
+	$(BUILDROOT_CC_RUN) $(BUILDROOT_PIE_CFLAGS) $(BUILDROOT_PIE_LDFLAGS) \
 		-o '$@' '$(PIE_SYSROOT)'/rcrt1.o '$(PIE_SYSROOT)'/crti.o \
 		$$('$(BUILDROOT_CC)' -print-file-name=crtbeginS.o) \
 		player/sf2000-player.c \
@@ -1505,7 +1633,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		Makefile $(LINUX_CMDLINE_STAMP) $(LINUX_MODE_STAMP) | $(LINUX_SRC)/.patched
 	mkdir -p '$(LINUX_OUT)'
 	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
-		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' '$(LINUX_DEFCONFIG)'
+		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' CC='$(KERNEL_CC)' '$(LINUX_DEFCONFIG)'
 	# NOMMU static PIE executables occupy one contiguous allocation.  The
 	# largest packaged core has a roughly 20 MiB load image, so order 13 is the
 	# smallest general ceiling that can load it with its stack. This changes the
@@ -1763,7 +1891,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 		--enable FB_PROVIDE_GET_FB_UNMAPPED_AREA \
 		--enable FB_SIMPLE
 	$(ISOLATED_MAKE) -C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
-		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' olddefconfig
+		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' CC='$(KERNEL_CC)' olddefconfig
 	# The HC15xx core has 128-byte L1 lines and a board cache-ops table.
 	# MIPS_SF2000 selects both in the kernel Kconfig; assert the regenerated
 	# config kept them so future defconfig/scripts/config drift cannot
@@ -1779,7 +1907,7 @@ $(LINUX_CONFIG_STAMP): $(LINUX_SRC)/Makefile $(BUILDROOT_TOOLCHAIN_STAMP) \
 $(LINUX_VMLINUX): $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP) $(ROOTFS_CPIO)
 	env -u MAKEFLAGS -u MFLAGS $(MAKE) -j'$(KERNEL_JOBS)' \
 		-C '$(LINUX_SRC)' O='$(abspath $(LINUX_OUT))' \
-		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' vmlinux
+		ARCH=mips CROSS_COMPILE='$(CROSS_COMPILE)' CC='$(KERNEL_CC)' vmlinux
 	# The loader consumes only allocated ELF sections.  Keeping DWARF in the
 	# embedded image wastes most of RAM and makes relocation overlap needlessly
 	# large; the kernel build's vmlinux.unstripped remains available for symbols.
@@ -1804,11 +1932,11 @@ $(ASDPACK): tools/asdpack.c Makefile
 $(LINUX_LOADER_ENTRY_OBJ): boot/linux-loader-entry.S $(BUILDROOT_TOOLCHAIN_STAMP) \
 		Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
 $(LINUX_LOADER_OBJ): boot/linux-loader.c $(BUILDROOT_TOOLCHAIN_STAMP) Makefile
 	mkdir -p '$(dir $@)'
-	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
 $(LINUX_LOADER_BLOBS_S): $(LINUX_VMLINUX) $(SF2000_DTB) Makefile
 	mkdir -p '$(dir $@)'
@@ -1831,7 +1959,7 @@ $(LINUX_LOADER_BLOBS_S): $(LINUX_VMLINUX) $(SF2000_DTB) Makefile
 
 $(LINUX_LOADER_BLOBS_OBJ): $(LINUX_LOADER_BLOBS_S) \
 		$(BUILDROOT_TOOLCHAIN_STAMP)
-	'$(CC_MIPS)' $(LOADER_CFLAGS) -c -o '$@' '$<'
+	$(CC_MIPS_RUN) $(LOADER_CFLAGS) -c -o '$@' '$<'
 
 $(LINUX_LOADER_ELF): $(LINUX_LOADER_ENTRY_OBJ) $(LINUX_LOADER_OBJ) \
 		$(LINUX_LOADER_BLOBS_OBJ) boot/linux-loader.ld
