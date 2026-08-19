@@ -24,12 +24,33 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Verify shared Linux/frontend ref
+        env:
+          FRONTEND_REPOSITORY: https://github.com/axgdev/frog2k-linux-frontend.git
+        run: |
+          set -eu
+          case "$GITHUB_REF" in
+            refs/heads/*) shared_ref="refs/heads/$GITHUB_REF_NAME" ;;
+            refs/tags/*) shared_ref="refs/tags/$GITHUB_REF_NAME" ;;
+            *)
+              printf 'unsupported workflow ref: %s\n' "$GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
+          if ! git ls-remote --exit-code --refs "$FRONTEND_REPOSITORY" "$shared_ref" >/dev/null; then
+            printf 'frontend repository is missing the shared ref %s\n' "$shared_ref" >&2
+            printf 'Create the same branch or tag in frog2k-linux-frontend before building.\n' >&2
+            exit 1
+          fi
+          printf 'shared_ref=%s\n' "$GITHUB_REF_NAME"
+
       - name: Check out Linux frontend
         uses: actions/checkout@v4
         with:
           repository: axgdev/frog2k-linux-frontend
-          # Update this pin deliberately when integrating a new frontend release.
-          ref: 43f809097ceefe6b2cd9ac85a1e3ca12eca6e05f
+          # Linux branches and release tags deliberately select the same
+          # branch or tag in the frontend repository.
+          ref: ${{ github.ref_name }}
           path: sf2000_linux_frontend
           fetch-depth: 1
 

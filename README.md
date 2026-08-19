@@ -381,3 +381,8 @@ places the Linux image at
 with an SD card prepared by `sf2000_bootloader`. Set `SDCARD_RELEASE_ID` to
 override the label; otherwise an exact Git tag is used, falling back to the
 short commit ID.
+
+The GitHub SD-card workflow selects the frontend using the same branch or tag
+as Linux. It checks that the matching ref exists in both public repositories
+before checkout, so development branches and release tags must be created in
+both repositories before starting a build.
