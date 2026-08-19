@@ -310,8 +310,8 @@ static void set_scpu_clock_918(void)
 	progress_mark("loader-scpu-before-380", 0x42, reg380);
 
 	/*
-	 * This is the HC1512 sequence used by the vendor HCRTOS clock hook and
-	 * mufrog-commandc.  Establish it before Linux starts so CP0 Count has a
+	 * This is the HC1512 sequence used by the vendor HCRTOS clock hook.
+	 * Establish it before Linux starts so CP0 Count has a
 	 * single, stable 459 MHz rate for the entire kernel lifetime.
 	 */
 	reg380 = (reg380 & 0x0000ffffu) | (SCPU_PLL_MCTRL2 << 16);

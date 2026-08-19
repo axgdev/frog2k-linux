@@ -24,7 +24,12 @@ behave differently.
 - `external/hclinux/2024.02.y.2`: optional Hichip driver/platform reference;
   it is not part of the direct build graph.
 - `/root/host-frogdev/universal/sf2000_hcrtos`: HC15xx HCRTOS/AVP board data.
-- `/root/host-frogdev/universal/unifrog`: working FreeRTOS-derived open stack.
+- `../UniFrog`: UniFrog firmware and frontend checkout used by the QEMU smoke.
+- `../unifrog-hcrtos-sdk`: standalone vendor SDK; its `lib/vendor` archives
+  are the source for optional GE ABI tests. If that sibling checkout is
+  absent, `make hcrtos-sdk` clones the pinned public `260819_1` branch into
+  `.deps/unifrog-hcrtos-sdk` and verifies the exact commit before use. Set
+  `HCRTOS_SDK_DIR` to an existing checkout when keeping the SDK elsewhere.
 
 ## Current Strategy
 
@@ -88,6 +93,21 @@ make \
 `JOBS` and `KERNEL_JOBS` default to the host CPU count, and ccache is enabled
 by default in `.cache/ccache`; set `CCACHE_DIR` to share a cache between
 worktrees or `USE_CCACHE=0` to disable it.
+
+The optional vendor ABI tests do not require a manually installed SDK:
+
+```sh
+make hcrtos-sdk
+make check-vendor
+```
+
+For a completely separate dependency location, set both variables to the
+same empty directory and the first command will populate it:
+
+```sh
+make HCRTOS_SDK_CACHE=/tmp/sf2000-hcrtos-sdk \
+  HCRTOS_SDK_DIR=/tmp/sf2000-hcrtos-sdk hcrtos-sdk
+```
 
 Normal device boot enters the native browser as soon as input, display, and
 the SD mount are ready. The retained-RAM loader log and `log.txt` recovery path
@@ -162,9 +182,7 @@ make ROOTFS=full smoke-linux-full-display
 make ROOTFS=full smoke-linux-full-fb-test
 make smoke-linux-full-audio
 make smoke-qemu-unifrog
-make smoke-qemu-mufrog
 make smoke-qemu-unifrog-display
-make smoke-qemu-mufrog-display
 make status
 ```
 
@@ -305,14 +323,11 @@ physical USB keyboard or mouse produces tick-stamped `source=input` records in
 The on-screen console also refreshes all sixteen event nodes after hotplug,
 reports each input device name, and displays key presses.
 
-`smoke-qemu-unifrog` and `smoke-qemu-mufrog` consume the existing, read-only
-frontend build artifacts, construct disposable FAT images under `build/`, and
-follow their persistent boot-trace ABI through module initialization, storage
-completion, JavaScript/frontend startup, and boot-logo presentation.  Override
-`UNIFROG_DIR` or `MUFROG_DIR` when those sibling checkouts live elsewhere.
-The MuFrog fixture adds an empty `ROMS` directory because MuFrog intentionally
-rejects package-only update media; this represents a blank user card while
-still requiring a successful VFAT mount and storage-readiness result.
+`smoke-qemu-unifrog` consumes the existing, read-only UniFrog build artifacts,
+constructs a disposable FAT image under `build/`, and follows the persistent
+boot-trace ABI through module initialization, storage completion,
+JavaScript/frontend startup, and boot-logo presentation. Override
+`UNIFROG_DIR` when that sibling checkout lives elsewhere.
 The corresponding `*-display` targets capture QEMU's 320x240 panel after
 frontend startup and reject an all-black pixel payload, covering continuous
 GMA scanout of the framebuffer after its descriptor has been installed. They

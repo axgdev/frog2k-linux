@@ -26,7 +26,6 @@ pinned [frog2k-javascript repository](https://github.com/axgdev/frog2k-javascrip
 The frontend supplies the JS2300 host callbacks locally: process allocation
 uses the JS2300 calloc heap, script/bytecode loading uses the file callback
 pair, and directory enumeration uses POSIX `opendir`/`readdir`. A fresh
-frontend checkout obtains the runtime with `make setup`; it does not clone a
-JS tree from `mufrog-commandc` or apply frontend-owned MQuickJS patches.
-`MUFROG_ROOT` and the pinned core source trees remain inputs for the separate
-Mufrog-family emulator cores, but they do not own JS2300.
+frontend checkout obtains the runtime with `make setup`; the JS2300 source is
+independent of the emulator-core source cache and carries its own pinned public
+revision.

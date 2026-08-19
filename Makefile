@@ -424,14 +424,17 @@ JS2300_UI_SMOKE_SCRIPT := $(FRONTEND_PROJECT)/tests/js2300-ui-smoke.js
 BOOTROM_BUGFIX ?= /root/host-frogdev/universal/orig_firmware/UpdateFirmware/SF2000_XMC_XM25QH40B_4mbit_bugfix.bin
 STOCK_ASD ?= /root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd
 QEMU_ORACLE_ARGS = QEMU_JOBS='$(JOBS)' FIRMWARE_BUGFIX='$(BOOTROM_BUGFIX)' ASD='$(STOCK_ASD)'
-UNIFROG_DIR ?= $(abspath ../unifrog)
-MUFROG_DIR ?= $(if $(wildcard $(abspath ../mufrog-commandc)),$(abspath ../mufrog-commandc),$(abspath ../mufrog))
+UNIFROG_DIR ?= $(abspath ../UniFrog)
+HCRTOS_SDK_URL ?= https://github.com/axgdev/unifrog-hcrtos-sdk.git
+HCRTOS_SDK_BRANCH ?= 260819_1
+HCRTOS_SDK_COMMIT ?= d319f166f5910752d11bea14bb49d0a81b98ab66
+HCRTOS_SDK_CACHE ?= $(abspath .deps/unifrog-hcrtos-sdk)
+HCRTOS_SDK_DEFAULT_DIR := $(if $(wildcard ../unifrog-hcrtos-sdk/lib/vendor/libge.a),$(abspath ../unifrog-hcrtos-sdk),$(HCRTOS_SDK_CACHE))
+HCRTOS_SDK_DIR ?= $(HCRTOS_SDK_DEFAULT_DIR)
+HCRTOS_SDK_STAMP := $(BUILD_DIR)/.hcrtos-sdk-$(HCRTOS_SDK_BRANCH)-$(HCRTOS_SDK_COMMIT)
 UNIFROG_ASD ?= $(UNIFROG_DIR)/bisrv.asd
-MUFROG_ASD ?= $(MUFROG_DIR)/bisrv.asd
 UNIFROG_SD_ROOT ?= $(UNIFROG_DIR)/output/sdcard
-MUFROG_SD_ROOT ?= $(MUFROG_DIR)/output/sdcard
 UNIFROG_QEMU_SD := $(BUILD_DIR)/unifrog-qemu.sd.img
-MUFROG_QEMU_SD := $(BUILD_DIR)/mufrog-qemu.sd.img
 QEMU_BOOT_TIMEOUT ?= 90s
 QEMU_PANEL_PROBE_TIMEOUT ?= 10s
 METRICS_LOG ?= /root/host-frogdev/universal/latest_log/sf2000_linux/loglinux0027.txt
@@ -440,7 +443,7 @@ QEMU_CONTRACT_LOG ?= $(BUILD_DIR)/logs/linux-full-display.log
 QEMU_BENCH_SECONDS ?= 15
 QEMU_DISPLAY_ARGS ?=
 QEMU_FIDELITY_ARGS ?= -icount shift=1,sleep=on,align=on
-GE_VENDOR_ARCHIVE ?= /root/host-frogdev/universal/temp/mufrog-commandc/unifrog-hcrtos-sdk/lib/vendor/libge.a
+GE_VENDOR_ARCHIVE ?= $(HCRTOS_SDK_DIR)/lib/vendor/libge.a
 GE_REVERSE_DIR := $(BUILD_DIR)/reverse-ge
 GE_NODE_TEST := $(BUILD_DIR)/hcge-node-test
 GE_VENDOR_NODE_TEST := $(BUILD_DIR)/hcge-vendor-node-test
@@ -474,7 +477,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor elf-audit status qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
+.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
 	linux-full-asd linux-full-test-asd sdcard-linux sdcard-full linux-rom-sd \
 	linux-full-rom-sd run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-full-asd \
@@ -521,9 +524,8 @@ run-qemu-stock-fatfs-writeback smoke-qemu-stock-fatfs-writeback \
 	run-linux-full-audio smoke-linux-full-audio \
 	run-linux-full-audio-gb300 smoke-linux-full-audio-44100 \
 	smoke-linux-full-audio-gb300 \
-	run-qemu-unifrog smoke-qemu-unifrog run-qemu-mufrog smoke-qemu-mufrog \
+	run-qemu-unifrog smoke-qemu-unifrog \
 	run-qemu-unifrog-display smoke-qemu-unifrog-display \
-	run-qemu-mufrog-display smoke-qemu-mufrog-display \
 	smoke-linux-full-reset-snapshot run-linux-full-reset-restore \
 	smoke-linux-full-reset-restore reverse-ge test-ge-node \
 	test-ge-node-vendor capture-ge-vendor test-ge-vendor-capture \
@@ -553,6 +555,7 @@ help:
 	@printf '%s\n' \
 		'make check                 fast host-side regression suite' \
 		'make check-vendor          source/vendor GE parity tests' \
+		'make hcrtos-sdk            verify or fetch the pinned public HCRTOS SDK' \
 		'make toolchain              download, verify, and unpack the pinned frog-toolchain' \
 		'make TOOLCHAIN_DIR=<prefix> linux-full-asd  use an already installed frog-toolchain' \
 		'make linux-full-asd        build the physical-device artifact' \
@@ -587,7 +590,56 @@ check-linux-cacheflush: $(LINUX_SRC)/.patched $(LINUX_CONFIG_STAMP)
 	grep -Fq 'dma_cache_wback_inv(addr, bytes);' '$(LINUX_SRC)/arch/mips/mm/cache.c'
 	grep -Fq 'if (cache & ICACHE)' '$(LINUX_SRC)/arch/mips/mm/cache.c'
 
-check-vendor: check test-ge-utils test-ge-matrix test-ge-queue
+check-vendor: check $(GE_VENDOR_ARCHIVE) test-ge-utils test-ge-matrix test-ge-queue
+
+hcrtos-sdk: $(HCRTOS_SDK_STAMP)
+
+$(HCRTOS_SDK_STAMP):
+	@set -eu; \
+		sdk='$(HCRTOS_SDK_DIR)'; \
+		cache='$(HCRTOS_SDK_CACHE)'; \
+		if test -f "$$sdk/lib/vendor/libge.a"; then \
+			test -e "$$sdk/.git" || { \
+				printf 'HCRTOS_SDK_DIR must be a git checkout: %s\n' "$$sdk" >&2; \
+				exit 1; \
+			}; \
+			actual="$$(git -C "$$sdk" rev-parse HEAD)"; \
+			test "$$actual" = '$(HCRTOS_SDK_COMMIT)' || { \
+				printf 'HCRTOS SDK at %s is %s; expected %s\n' \
+					"$$sdk" "$$actual" '$(HCRTOS_SDK_COMMIT)' >&2; \
+				printf 'use HCRTOS_SDK_DIR for a different SDK only when its ABI is intentional\n' >&2; \
+				exit 1; \
+			}; \
+		else \
+			test "$$sdk" = "$$cache" || { \
+				printf 'HCRTOS SDK is missing from %s; refusing to clone into an explicit HCRTOS_SDK_DIR\n' "$$sdk" >&2; \
+				exit 1; \
+			}; \
+			if test -e "$$sdk/.git"; then \
+				git -C "$$sdk" remote set-url origin '$(HCRTOS_SDK_URL)'; \
+			else \
+				test ! -e "$$sdk" || { \
+					printf 'HCRTOS SDK cache exists but is not a git checkout: %s\n' "$$sdk" >&2; \
+					exit 1; \
+				}; \
+				mkdir -p "$$(dirname "$$sdk")"; \
+				git clone --filter=blob:none --no-checkout '$(HCRTOS_SDK_URL)' "$$sdk"; \
+			fi; \
+			git -C "$$sdk" remote set-url origin '$(HCRTOS_SDK_URL)'; \
+			git -C "$$sdk" fetch --depth=1 origin 'refs/heads/$(HCRTOS_SDK_BRANCH)'; \
+			git -C "$$sdk" checkout --detach '$(HCRTOS_SDK_COMMIT)'; \
+			test "$$(git -C "$$sdk" rev-parse HEAD)" = '$(HCRTOS_SDK_COMMIT)'; \
+			test "$$(git -C "$$sdk" rev-parse FETCH_HEAD)" = '$(HCRTOS_SDK_COMMIT)'; \
+		fi; \
+		test -f "$$sdk/lib/vendor/libge.a"; \
+		mkdir -p '$(dir $@)'; \
+		{ \
+			printf 'url=%s\n' '$(HCRTOS_SDK_URL)'; \
+			printf 'branch=%s\n' '$(HCRTOS_SDK_BRANCH)'; \
+			printf 'commit=%s\n' '$(HCRTOS_SDK_COMMIT)'; \
+			printf 'path=%s\n' "$$sdk"; \
+		} > '$@.tmp'; \
+		mv '$@.tmp' '$@'
 
 status:
 	@printf 'sf2000_linux workspace\n'
@@ -598,6 +650,9 @@ status:
 	@printf '  toolchain: %s\n' '$(CROSS_COMPILE)'
 	@printf '  ccache:  %s\n' '$(if $(strip $(CCACHE)),$(CCACHE),disabled)'
 	@printf '  ccache dir: %s\n' '$(abspath $(CCACHE_DIR))'
+	@printf '  hcrtos sdk: %s\n' '$(HCRTOS_SDK_DIR)'
+	@printf '  hcrtos sdk exists: '
+	@test -f '$(GE_VENDOR_ARCHIVE)' && printf 'yes\n' || printf 'no\n'
 	@printf '  rootfs:  %s\n' '$(ROOTFS)'
 	@printf '  rootfs build: %s\n' '$(ROOTFS_FULL_CPIO)'
 	@printf '  jobs:    %s\n' '$(JOBS)'
@@ -616,8 +671,10 @@ status:
 	@printf '  bugfix ROM exists: '
 	@test -f '$(BOOTROM_BUGFIX)' && printf 'yes\n' || printf 'no\n'
 
-reverse-ge:
-	test -f '$(GE_VENDOR_ARCHIVE)'
+$(GE_VENDOR_ARCHIVE): $(HCRTOS_SDK_STAMP)
+	@test -f '$@'
+
+reverse-ge: $(GE_VENDOR_ARCHIVE)
 	rm -rf '$(GE_REVERSE_DIR)'
 	mkdir -p '$(GE_REVERSE_DIR)'
 	cd '$(GE_REVERSE_DIR)' && ar x '$(GE_VENDOR_ARCHIVE)'
@@ -641,7 +698,7 @@ $(GE_UTILS_TEST): ge/hcge_utils.c ge/hcge_utils_test.c ge/ge_api.h
 		-o '$@' ge/hcge_utils.c ge/hcge_utils_test.c
 
 $(GE_VENDOR_UTILS_TEST): ge/hcge_utils_test.c ge/ge_api.h \
-		$(TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP) $(GE_VENDOR_ARCHIVE)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_utils_test.c '$(GE_VENDOR_ARCHIVE)'
 
@@ -655,7 +712,7 @@ $(GE_MATRIX_TEST): ge/hcge_matrix.c ge/hcge_matrix_test.c ge/ge_api.h \
 		ge/hcge_matrix.c ge/hcge_matrix_test.c -lm
 
 $(GE_VENDOR_MATRIX_TEST): ge/hcge_matrix_test.c ge/ge_api.h \
-		$(TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP) $(GE_VENDOR_ARCHIVE)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_matrix_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
@@ -670,7 +727,7 @@ $(GE_QUEUE_TEST): ge/hcge_linux.c ge/hcge_node.c ge/hcge_queue_test.c ge/ge_api.
 		ge/hcge_queue_test.c
 
 $(GE_VENDOR_QUEUE_TEST): ge/hcge_queue_test.c ge/ge_api.h \
-		$(TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP) $(GE_VENDOR_ARCHIVE)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_queue_test.c '$(GE_VENDOR_ARCHIVE)'
 
@@ -694,7 +751,7 @@ $(GE_FILTER_TEST): ge/hcge_filter.c ge/hcge_filter_test.c ge/ge_api.h \
 		ge/hcge_filter.c ge/hcge_filter_test.c -lm
 
 $(GE_VENDOR_FILTER_TEST): ge/hcge_filter_test.c ge/ge_api.h \
-		$(TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP) $(GE_VENDOR_ARCHIVE)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' \
 		ge/hcge_filter_test.c '$(GE_VENDOR_ARCHIVE)' -lm
 
@@ -736,7 +793,7 @@ $(GE_LINUX_OBJ): ge/hcge_linux.c ge/ge_api.h $(TOOLCHAIN_STAMP)
 	$(TARGET_CC_RUN) -std=c99 -Os -Wall -Wextra -Werror -Ige -c -o '$@' '$<'
 
 $(GE_VENDOR_CAPTURE): ge/hcge_vendor_capture.c ge/ge_api.h \
-		$(TOOLCHAIN_STAMP)
+		$(TOOLCHAIN_STAMP) $(GE_VENDOR_ARCHIVE)
 	$(GE_ELF_CC) -std=c99 -O2 -static -Ige -o '$@' '$<' \
 		'$(GE_VENDOR_ARCHIVE)' -lm -Wl,--wrap=open -Wl,--wrap=close \
 		-Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap \
@@ -3782,17 +3839,6 @@ $(UNIFROG_QEMU_SD): $(UNIFROG_ASD) $(UNIFROG_SD_ROOT) Makefile
 	mkfs.vfat -F 32 -n UNIFROG '$@' >/dev/null
 	mcopy -i '$@' -s '$(UNIFROG_SD_ROOT)'/* ::/
 
-$(MUFROG_QEMU_SD): $(MUFROG_ASD) $(MUFROG_SD_ROOT) Makefile
-	test -d '$(MUFROG_SD_ROOT)'
-	mkdir -p '$(dir $@)'
-	truncate -s 128M '$@'
-	mkfs.vfat -F 32 -n MUFROG '$@' >/dev/null
-	mcopy -i '$@' -s '$(MUFROG_SD_ROOT)'/* ::/
-	# MuFrog deliberately rejects a package-only template as a user SD card.
-	# A normal card has at least one user directory; keep the fixture empty but
-	# representative so this smoke test exercises the mounted block device.
-	mmd -i '$@' ::/ROMS
-
 run-qemu-unifrog: qemu $(UNIFROG_QEMU_SD)
 	test -f '$(UNIFROG_ASD)'
 	mkdir -p '$(BUILD_DIR)'/logs
@@ -3831,46 +3877,6 @@ smoke-qemu-unifrog-display: run-qemu-unifrog-display
 	test -s '$(BUILD_DIR)'/screenshots/qemu-unifrog-after-input.ppm
 	! cmp -s '$(BUILD_DIR)'/screenshots/qemu-unifrog.ppm \
 		'$(BUILD_DIR)'/screenshots/qemu-unifrog-after-input.ppm
-
-run-qemu-mufrog: qemu $(MUFROG_QEMU_SD)
-	test -f '$(MUFROG_ASD)'
-	mkdir -p '$(BUILD_DIR)'/logs
-	timeout 20s '$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
-		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
-		-display none -serial none -monitor none -d guest_errors,unimp \
-		-D '$(BUILD_DIR)'/logs/qemu-mufrog.log \
-		> '$(BUILD_DIR)'/logs/qemu-mufrog.console 2>&1 || test $$? -eq 124
-
-smoke-qemu-mufrog: run-qemu-mufrog
-	grep -q 'name=unifrog.module_init.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
-	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog.log
-	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog.log
-	grep -q 'name=unifrog.boot_logo.done' '$(BUILD_DIR)'/logs/qemu-mufrog.log
-
-run-qemu-mufrog-display: qemu $(MUFROG_QEMU_SD)
-	test -f '$(MUFROG_ASD)'
-	mkdir -p '$(BUILD_DIR)'/logs '$(BUILD_DIR)'/screenshots
-	rm -f '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm \
-		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
-	(sleep 9; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog.ppm\nsendkey down 1000\n'; \
-		sleep 2; printf 'screendump $(BUILD_DIR)/screenshots/qemu-mufrog-after-input.ppm\nquit\n') | \
-		'$(QEMU_BIN)' -M sf2000 -kernel '$(MUFROG_ASD)' \
-		-drive if=none,id=sd0,file='$(MUFROG_QEMU_SD)',format=raw \
-		-display none -serial none -monitor stdio -d guest_errors,unimp \
-		-D '$(BUILD_DIR)'/logs/qemu-mufrog-display.log \
-		> '$(BUILD_DIR)'/logs/qemu-mufrog-display.console 2>&1
-
-smoke-qemu-mufrog-display: run-qemu-mufrog-display
-	grep -q 'name=unifrog.storage.done .*arg2=0x00000000' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
-	grep -q 'name=unifrog.js.begin' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
-	! grep -q 'GMA scanout with panel sync/DE disconnected' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
-	! grep -q 'VOU raster disconnected from PRGB' '$(BUILD_DIR)'/logs/qemu-mufrog-display.log
-	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm
-	od -An -tu1 -j 15 '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm | \
-		awk '{ for (i = 1; i <= NF; i++) if ($$i) { found = 1; exit } } END { exit !found }'
-	test -s '$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
-	! cmp -s '$(BUILD_DIR)'/screenshots/qemu-mufrog.ppm \
-		'$(BUILD_DIR)'/screenshots/qemu-mufrog-after-input.ppm
 
 run-linux-full-panel: qemu
 	$(MAKE) ROOTFS=full full-panel-probe-link \
