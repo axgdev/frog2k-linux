@@ -1478,10 +1478,13 @@ $(LINUX_SLIM_ARCHIVE): scripts/kernel-slim.sh
 	case '$(LINUX_SOURCE_METHOD)' in \
 	git) \
 		git clone --filter=blob:none --no-tags --no-checkout --depth=1 \
-			--branch '$(LINUX_GIT_TAG)' '$(LINUX_GIT_URL)' "$$work"; \
+			'$(LINUX_GIT_URL)' "$$work"; \
+		git -C "$$work" fetch --depth=1 origin \
+			'refs/tags/$(LINUX_GIT_TAG):refs/tags/$(LINUX_GIT_TAG)'; \
 		'$(abspath scripts/kernel-slim.sh)' --sparse-patterns | \
 			git -C "$$work" sparse-checkout set --no-cone --stdin; \
-		git -C "$$work" checkout --detach --force '$(LINUX_GIT_TAG)';; \
+		git -C "$$work" checkout --detach --force \
+			'$(LINUX_GIT_TAG)^{commit}';; \
 	archive) \
 		$(MAKE) '$(LINUX_ARCHIVE_CHECK)'; \
 		tar -xf '$(LINUX_ARCHIVE)' -C "$$work" --strip-components=1;; \
