@@ -1,0 +1,41 @@
+[PATCH] sf2000: use vendor-default volume instead of raw maximum
+
+The SF2000 speaker overdrives (clipping, harsh treble, crackle) when the
+SND0 FADE volume byte is pinned at the raw maximum 0xff while game samples
+are near full scale.  The vendor libauddrv maps a 0-100 volume through a
+non-linear curve onto this byte; UniFrog defaults to 65 on SF2000 and 75
+on GB300, which land at 0x61 and 0x8f on that curve.  Use those values so
+the Linux audio chain matches the reference firmware level.
+
+Signed-off-by: SF2000 Linux project <noreply@example.com>
+---
+diff --git a/sound/drivers/sf2000-pcm.c b/sound/drivers/sf2000-pcm.c
+index 1111111..2222222 100644
+@@ -64,7 +64,16 @@
+ #define SF2000_SYS_I2S_DIV_CTL	0x470
+ #define SF2000_SYS_I2S_DIV_CTL2	0x474
+ #define SF2000_I2S_DIV_CTL_BITS	(BIT(16) | BIT(21))
+-#define SF2000_VOLUME_90		0xff
++/*
++ * Default SND0+0x92 FADE volume bytes, taken from the vendor libauddrv
++ * volume curve (extracted from the UniFrog firmware).  The vendor maps a
++ * 0-100 user volume through a non-linear table onto this byte, 100 -> 0xff;
++ * UniFrog's defaults are 65 on SF2000 (-> 0x61) and 75 on GB300 (-> 0x8f).
++ * Writing the raw maximum (0xff) with full-scale game samples overdrives
++ * the small analog speaker: audible clipping, harsh treble and crackle.
++ */
++#define SF2000_VOLUME_SF2000	0x61
++#define SF2000_VOLUME_GB300	0x8f
+ #define SF2000_RATE_MIN		8000
+ #define SF2000_RATE_MAX		48000
+ #define SF2000_RING_GUARD	64
+@@ -632,7 +641,8 @@
+ 		BIT(0) | BIT(8), BIT(0) | BIT(8));
+ 	writel(SF2000_I2S_BASE | (chip->gb300 ? 0 : SF2000_I2S_UNDERRUN_FADE),
+ 		chip->snd + SF2000_SND_I2S_CTL);
+-	writeb(SF2000_VOLUME_90, chip->snd + SF2000_SND_FADE + 2);
++	writeb(chip->gb300 ? SF2000_VOLUME_GB300 : SF2000_VOLUME_SF2000,
++		chip->snd + SF2000_SND_FADE + 2);
+ 	writel(lower_32_bits(runtime->dma_addr),
+ 		chip->snd + SF2000_SND_DMA_BASE);
+ 	sf2000_update_bits(chip->snd + SF2000_SND_DMA_SIZE,
