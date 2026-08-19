@@ -22,7 +22,7 @@ HCRTOS SDK:
   user script automatically.
 
 The interpreter and MQuickJS are ordinary Linux static objects built from the
-pinned [frog2k-javascript repository](https://github.com/axgdev/frog2k-javascript-private).
+pinned [frog2k-javascript repository](https://github.com/axgdev/frog2k-javascript).
 The frontend supplies the JS2300 host callbacks locally: process allocation
 uses the JS2300 calloc heap, script/bytecode loading uses the file callback
 pair, and directory enumeration uses POSIX `opendir`/`readdir`. A fresh
