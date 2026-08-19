@@ -271,8 +271,13 @@ static void append_profile_file(const char *source, const char *path)
 
 static void import_performance_metrics(void)
 {
-	char input[512];
-	char line[512];
+	/* Line buffer must hold the longest frontend metric record (currently
+	 * ~520 bytes for the audio metric line).  A too-small buffer truncates
+	 * the line and, because the truncated write swallowed the newline,
+	 * silently drops whatever the frontend appended after it (mode-event
+	 * records). */
+	char input[768];
+	char line[768];
 	size_t line_used = 0;
 	int fd = open(PERFORMANCE_METRICS_PATH, O_RDONLY | O_CLOEXEC);
 	ssize_t got;
