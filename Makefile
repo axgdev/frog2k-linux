@@ -138,6 +138,7 @@ FB_TEST_APP_STAMP := $(FB_TEST_APP_OUT)/.stamp-built
 ENABLE_EXPERIMENTAL_DEVTESTS ?= 0
 FIXED_ET_EXEC ?= 0
 FRONTEND_PROJECT ?= ../sf2000_linux_frontend
+CI_FRESH_TARGET ?= ci-fresh-js2300
 USERSPACE_GENERATED_OVERLAY := $(ROOTFS_GENERATED_OVERLAY)
 USERSPACE_INIT_SRC := userspace/sf2000-init.c
 USERSPACE_INIT_CLONE := userspace/sf2000-init-clone.S
@@ -507,7 +508,7 @@ LOADER_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib \
 	-march=mips32 -mabi=32 -msoft-float -mno-abicalls -fno-pic -mno-gpopt -G 0 \
 	-Wall -Wextra
 
-.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status build-info qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
+.PHONY: all help check check-linux-early-handoff check-linux-cacheflush memory-layout-audit check-vendor hcrtos-sdk elf-audit status build-info ci-fresh ci-fresh-js2300 qemu rootfs full full-reconfigure toolchain audio-test linux linux-reextract linux-reconfigure linux-asd linux-full physical-linux-asd \
 	linux-full-asd linux-full-test-asd sdcard-linux sdcard-full linux-rom-sd \
 	linux-full-rom-sd sdcard-zips run-linux smoke-linux run-linux-asd \
 	smoke-linux-asd run-linux-rom smoke-linux-rom run-linux-full-asd \
@@ -591,12 +592,40 @@ help:
 		'make linux-full-asd        build the physical-device artifact' \
 		'make physical-linux-asd    explicit alias for the physical full-rootfs ASD' \
 		'make sdcard-zips           create standalone and bootloader SD-card ZIPs' \
+		'make ci-fresh              test a fresh Linux/frontend checkout' \
+		'make CI_FRESH_TARGET=sdcard-zips ci-fresh  test a fresh full package graph' \
 		'make elf-audit             reject bFLT/dynamic ELF in the rootfs' \
 		'make METRICS_LOG=loglinux.txt metrics-frontend  summarize emulator sessions' \
 		'make smoke-linux-full-asd  boot the full-rootfs artifact in QEMU' \
 		'make smoke-linux-full-ge-no-irq  boot with the GE completion IRQ suppressed' \
 		'make smoke-linux-full-stale-ram  boot with stale garbage prefill in RAM' \
 		'make ROOTFS=full qpsx-no-menu-physical  stage a temporary direct-game QPSX SD diagnostic'
+
+ci-fresh:
+	@set -eu; \
+	work="$$(mktemp -d "$${TMPDIR:-/tmp}/sf2000-linux-ci.XXXXXX")"; \
+	trap 'status=$$?; rm -rf "$$work"; exit $$status' EXIT HUP INT TERM; \
+	linux="$$work/linux"; frontend="$$work/frontend"; \
+	git clone --no-local --quiet '$(abspath .)' "$$linux"; \
+	git clone --no-local --quiet '$(abspath $(FRONTEND_PROJECT))' "$$frontend"; \
+	$(MAKE) -C "$$linux" '$(CI_FRESH_TARGET)' \
+		BUILD_DIR="$$work/build" \
+		FRONTEND_PROJECT="$$frontend" \
+		FROG_TOOLCHAIN_ARCHIVE='$(abspath $(FROG_TOOLCHAIN_ARCHIVE))' \
+		FROG_TOOLCHAIN_WORK="$$work/toolchain" \
+		LINUX_SRC="$$work/kernel" \
+		LINUX_SLIM_ARCHIVE='$(abspath $(LINUX_SLIM_ARCHIVE))' \
+		BUSYBOX_WORK="$$work/busybox" \
+		BUSYBOX_ARCHIVE='$(abspath $(BUSYBOX_ARCHIVE))' \
+		FB_TEST_APP_WORK="$$work/fb-test-app" \
+		FB_TEST_APP_ARCHIVE='$(abspath $(FB_TEST_APP_ARCHIVE))' \
+		CCACHE='$(CCACHE)' \
+		CCACHE_DIR='$(abspath $(CCACHE_DIR))' \
+		JOBS='$(JOBS)' SDCARD_RELEASE_ID=ci-fresh; \
+	printf 'fresh CI target passed: %s\n' '$(CI_FRESH_TARGET)'
+
+ci-fresh-js2300: $(USERSPACE_JS2300)
+	@printf 'fresh JS2300 userspace target passed: %s\n' '$(USERSPACE_JS2300)'
 
 check: audio-test efuse-test vdec-test vdec-codec-test dsc-test test-ge-node \
 	memory-layout-audit check-linux-early-handoff check-linux-cacheflush

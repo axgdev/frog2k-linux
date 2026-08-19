@@ -391,3 +391,11 @@ The GitHub SD-card workflow selects the frontend using the same branch or tag
 as Linux. It checks that the matching ref exists in both public repositories
 before checkout, so development branches and release tags must be created in
 both repositories before starting a build.
+
+`make ci-fresh` clones the current committed Linux and frontend trees into a
+temporary directory and builds the JS2300 userspace path with empty dependency
+checkouts. This catches fresh-clone dependency-graph errors locally. To run
+the complete package graph the same way, use
+`make CI_FRESH_TARGET=sdcard-zips ci-fresh`; downloads and ccache remain in
+the normal `.cache/` directory while build outputs and toolchains stay in the
+temporary directory.
