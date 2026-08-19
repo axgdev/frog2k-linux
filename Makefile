@@ -41,16 +41,17 @@ AUDIO_TEST := $(BUILD_DIR)/hc15xx-audio-test
 AUDIO_AVSYNC_TEST := $(BUILD_DIR)/hc15xx-avsync-test
 AUDIO_RESAMPLER_TEST := $(BUILD_DIR)/hc15xx-resampler-test
 RETAINED_TEST := $(BUILD_DIR)/hc15xx-retained-test
-RETAINED_SRC := platform/hc15xx_retained.c
-RETAINED_HEADER := include/hc15xx_retained.h
 EFUSE_TEST := $(BUILD_DIR)/hc15xx-efuse-test
 VDEC_TEST := $(BUILD_DIR)/hc15xx-vdec-test
 VDEC_CODEC_TEST := $(BUILD_DIR)/hc15xx-vdec-codec-test
 DSC_TEST := $(BUILD_DIR)/hc15xx-dsc-test
-FROG_TOOLCHAIN_VERSION ?= 1.3.2
-FROG_TOOLCHAIN_GCC_VERSION ?= 16.2.0
-FROG_TOOLCHAIN_BINUTILS_VERSION ?= 2.47
-FROG_TOOLCHAIN_UCLIBC_VERSION ?= 1.0.59
+# These values identify the downloaded release and are tied to the checksums
+# below.  Alternate mirrors may override FROG_TOOLCHAIN_URL, but changing the
+# release components without updating the pinned artifact is unsupported.
+FROG_TOOLCHAIN_VERSION := 1.3.2
+FROG_TOOLCHAIN_GCC_VERSION := 16.2.0
+FROG_TOOLCHAIN_BINUTILS_VERSION := 2.47
+FROG_TOOLCHAIN_UCLIBC_VERSION := 1.0.59
 FROG_TOOLCHAIN_HOST_ARCH ?= $(shell uname -m)
 FROG_TOOLCHAIN_ARCH := $(if $(filter x86_64 amd64,$(FROG_TOOLCHAIN_HOST_ARCH)),x86_64,$(if $(filter aarch64 arm64,$(FROG_TOOLCHAIN_HOST_ARCH)),arm64,))
 ifeq ($(strip $(FROG_TOOLCHAIN_ARCH)),)
@@ -65,7 +66,7 @@ FROG_TOOLCHAIN_ARCHIVE ?= .cache/$(FROG_TOOLCHAIN_NAME)
 FROG_TOOLCHAIN_WORK ?= /tmp/sf2000-linux-frog-toolchain-v$(FROG_TOOLCHAIN_VERSION)-$(FROG_TOOLCHAIN_ARCH)
 FROG_TOOLCHAIN_PREFIX ?= $(FROG_TOOLCHAIN_WORK)/mipsel-unknown-linux-uclibc
 TOOLCHAIN_DIR ?= $(FROG_TOOLCHAIN_PREFIX)
-TOOLCHAIN_TUPLE ?= mipsel-unknown-linux-uclibc
+TOOLCHAIN_TUPLE := mipsel-unknown-linux-uclibc
 CROSS_COMPILE ?= $(TOOLCHAIN_DIR)/bin/$(TOOLCHAIN_TUPLE)-
 CC_MIPS = $(CROSS_COMPILE)gcc
 CC_MIPS_RUN = $(CCACHE_COMPILE)$(CC_MIPS)
@@ -167,7 +168,6 @@ USERSPACE_RESET_RESTORE_STATE := $(BUILD_DIR)/state/sf2000-reset-fastprobe.migra
 USERSPACE_RESET_RESTORE_SOCKET := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe.qmp
 USERSPACE_RESET_RESTORE_SOCKET_DEST := $(BUILD_DIR)/qmp/sf2000-reset-fastprobe-restore.qmp
 USERSPACE_RESET_RESTORE_PREFIX := $(BUILD_DIR)/logs/linux-full-reset-restore
-USERSPACE_CPIO := $(ROOTFS_FULL_CPIO)
 USERSPACE_ELF_LDFLAGS := -static -Wl,-Ttext-segment=0x85000000 \
 	-Wl,--no-check-sections -Wl,--gc-sections
 PIE_STAMP := $(BUILD_DIR)/uclibc-pie/.stamp-built
@@ -390,7 +390,6 @@ SDCARD_FRONTEND_CORES := sf2000-gambatte sf2000-gpsp sf2000-fceumm
 SDCARD_FRONTEND_LICENSES := gambatte-COPYING gpsp-COPYING fceumm-Copying
 SDCARD_CHECKSUMS := $(BUILD_DIR)/sdcard/SHA256SUMS
 LINUX_ROM_SD_IMAGE := $(BUILD_DIR)/sf2000-linux$(ROOTFS_SUFFIX)-rom.sd.img
-LINUX_ROM_SD_IMAGE_OFFSET := 1048576
 BROWSER_TEST_SD := $(BUILD_DIR)/browser-test.sd.img
 BROWSER_TEST_ROM := $(BUILD_DIR)/browser-test.gb
 BROWSER_TEST_ROM_TOOL := $(BUILD_DIR)/mkgbtest
